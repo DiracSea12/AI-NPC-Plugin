@@ -17,7 +17,7 @@
 | **A-MEM** (2502.12110) | Zettelkasten式记忆间显式链接，动态知识网络 | ★★★★☆ |
 | **Memory Retrieval改进** | Stanford公式消融实验，分段衰减优于指数衰减（⚠️原引用arxiv号有误，已删除） | ★★★★☆ |
 | **MACLA** (2512.18950) | 层级化程序性记忆，贝叶斯可靠性跟踪 | ★★★☆☆ |
-| **Agent Memory评测** (2507.05257，ICML 2025 Workshop LCFM) | 四项核心能力基准，发现"选择性遗忘"普遍薄弱 | ★★★☆☆ |
+| **Agent Memory评测** (2507.05257，ICML 2025 Workshop LCFM；后被 ICLR 2026 接收为 Poster) | 四项核心能力基准，发现"选择性遗忘"普遍薄弱 | ★★★☆☆ |
 | **Memory综述** (2512.13564) | forms×functions×dynamics三维度分类，完整生命周期模型 | ★★★☆☆ |
 
 ### 1.2 关键发现
@@ -25,7 +25,7 @@
 **Stanford Generative Agents（奠基之作）**
 
 我们的设计已高度对齐，但有三个细节差异：
-- 原论文 `decay_factor=0.995` 按小时计算，游戏时间与现实时间的换算需要单独配置项
+- 原论文 `decay_factor=0.995` 实际是**按事件序号衰减**（`0.995^i`，i=记忆在时间排序列表中的位置索引），不是按时间差。我们改为按游戏时间衰减是有意的设计变更，需在配置中明确标注
 - 反思阈值：`importance_trigger_max=150`，当累积重要性耗尽时触发（⚠️原报告称"针对100条滑动窗口"无法确认，窗口机制需查阅原始PDF核实）
 - 原论文的洞察（Insight）指向支撑它的源记忆（Evidence pointers），对调试和可解释性有价值
 
@@ -41,7 +41,7 @@
 
 **Memory Retrieval改进（参数调优指导）**
 
-消融实验结论：分段衰减效果优于纯指数衰减：
+消融实验结论：分段衰减效果优于纯指数衰减（以下参数为自定义设计值，非论文原文）：
 ```
 Δt < 1小时:  Recency = 1.0（近期不衰减）
 Δt < 1天:   Recency = 0.8
@@ -49,7 +49,7 @@
 Δt > 1周:   Recency = exp(-λ × Δt)
 ```
 
-**ICML 2025 Workshop (LCFM) 评测论文**（⚠️原写"ICLR 2025"，LobsterAI建议改"ICLR 2026"，经OpenReview核实实为ICML 2025 Workshop on Long-Context Foundation Models，arxiv 2507.05257）
+**ICML 2025 Workshop (LCFM) / ICLR 2026 Poster 评测论文**（⚠️原写"ICLR 2025"，经OpenReview核实：先被ICML 2025 Workshop LCFM接收，后被ICLR 2026接收为Poster，arxiv 2507.05257）
 
 最重要的提醒：我们缺少**主动遗忘机制**。目前只有写入阈值，没有主动删除。情景记忆200条上限到达时，应用综合分数淘汰而非FIFO。
 
@@ -107,7 +107,7 @@ FNpcMemoryEntry 增加 `LinkedMemoryIds: TArray<int64>`，写入时异步分析�
 | **Chain-Of-Emotion** (2309.05076) | 评价理论驱动的链式情感推理，4维评价→情感推导 | ★★★★★ |
 | **Personality-Driven Agents** (2402.14879) | OCEAN五维人格数值化注入LLM，数值比文字描述更稳定 | ★★★★☆ |
 | **Dynamic Personality** (ACL 2025) | 人格随交互动态演化，人格惯性防止剧烈波动 | ★★★★☆ |
-| **Fixed-Persona SLMs** (2511.10277，⚠️原引用2404.18784有误) | SLM微调固化人设，减少人设漂移 | ★★★★☆ |
+| **Fixed-Persona SLMs** (2511.10277，⚠️原引用2404.18784有误) | SLM微调固化人设 + 运行时可热插拔记忆模块（无需重训即可切换角色），减少人设漂移 | ★★★★☆ |
 | **Tricking NPCs** (2508.19288) | 3类提示注入攻击分类（直接提示/社会工程/指令覆盖），防御策略研究 | ★★★★★ |
 | **OmniCharacter** (2505.20277) | 语音-语言人格统一框架，多模态人格一致性 | ★★★☆☆ |
 | **Believable NPCs** (CHI Play 2024) | 可信度排名：行为一致性 > 情感真实性 > 记忆连贯性 | ★★★★☆ |
@@ -321,10 +321,10 @@ ConceptNode 数据结构的关键字段：
 
 **Mem0源码（生产级记忆管理）**
 
-三层记忆模型直接对应我们的架构：
+三层记忆模型近似对应我们的架构（非精确等价，Mem0 官方文档现为 Conversation/Session/User 三层，以下为概念映射）：
 - User Memory（跨会话持久化）→ 长期记忆
 - Session Memory（当前对话上下文）→ 工作记忆
-- Agent Memory（程序性记忆）→ 情景记忆
+- Conversation Memory（单轮即时上下文）→ 情景记忆的工作缓冲
 
 核心机制：LLM自动判断 ADD/UPDATE/DELETE/NONE，90%更低token消耗（只注入相关记忆而非全量上下文）。
 
@@ -489,13 +489,13 @@ ConceptNode 数据结构的关键字段：
 
 ```
 # 记忆系统
-decay_factor = 0.995              # Stanford原论文，按游戏小时计算（需配置game_time_ratio，如1现实秒=1游戏分钟则ratio=60）
+decay_factor = 0.995              # Stanford原论文，原实现为按事件序号衰减（0.995^i），我们改为按游戏时间衰减是有意的设计变更
 reflection_threshold = 150        # 近期事件importance累积超过此值时触发反思
 importance_range = [1, 10]        # Stanford poignancy评分范围
 max_episodic_memories = 200       # 情景记忆上限
 memory_link_hops = 1              # A-MEM检索时沿链接扩展跳数
 
-# 分段时间衰减（替换纯指数）
+# 分段时间衰减（自定义参数，非论文原文；原引用arxiv号经核实为无关数学论文已删除）
 recency_1h = 1.0                  # Δt < 1小时：不衰减
 recency_1d = 0.8                  # Δt < 1天
 recency_1w = 0.5                  # Δt < 1周

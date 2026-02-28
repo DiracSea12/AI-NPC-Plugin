@@ -267,6 +267,7 @@ Score = α × Recency(时间衰减) + β × Importance(重要性) + γ × Releva
 FNpcEmotionState {
   float Valence;     // [-1, 1] 正面/负面
   float Arousal;     // [0, 1]  激动程度
+  float Dominance;   // [0, 1]  支配感（高=自信掌控，低=顺从无力）
   FGameplayTagContainer ActiveEmotions; // "Angry", "Happy", "Fearful"
 }
 ```
@@ -576,10 +577,10 @@ Plugins/AINpc/
 - [Memory in the Age of AI Agents](https://arxiv.org/abs/2512.13564) - Agent记忆综述
 - [Learning Hierarchical Procedural Memory (MACLA)](https://arxiv.org/abs/2512.18950) - 层级程序性记忆框架
 - [Dynamic Personality in LLM Agents](https://aclanthology.org/2025.findings-acl.1185/) - ACL 2025, 人格动态演化
-- [Fixed-Persona SLMs for Game NPCs](https://arxiv.org/abs/2404.18784) - 小语言模型固定人格NPC
+- [Fixed-Persona SLMs for Game NPCs](https://arxiv.org/abs/2511.10277) - 小语言模型固定人格NPC + 运行时可热插拔记忆模块
 - [Memory Retrieval in Generative Agents](https://arxiv.org/abs/2401.10069) - 记忆检索机制改进
 - [Believable NPCs in Open-World Games (CHI Play 2024)](https://dl.acm.org/doi/10.1145/3665463.3678830) - 开放世界可信NPC玩家研究
-- [Evaluating LLM Agent Memory (ICLR 2025)](https://arxiv.org/abs/2504.01068) - Agent记忆评测框架
+- [Evaluating LLM Agent Memory (ICML 2025 Workshop LCFM / ICLR 2026 Poster)](https://arxiv.org/abs/2507.05257) - Agent记忆评测框架
 - [Tricking LLM-Powered NPCs (arXiv 2025)](https://arxiv.org/abs/2508.19288) - LLM NPC提示注入攻击研究
 - [OmniCharacter: Towards Unified Character Generation (arXiv 2025)](https://arxiv.org/abs/2505.20277) - 统一角色生成框架
 - [Open-Theatre: Multi-Agent NPC Interaction (EMNLP 2025)](https://aclanthology.org/2025.emnlp-main.open-theatre) - 多Agent NPC交互框架
