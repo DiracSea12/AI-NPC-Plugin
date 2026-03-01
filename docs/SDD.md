@@ -1,7 +1,7 @@
 ﻿# AINpc 插件系统设计文档（SDD）
 
 > 来源：docs/PRD.md v1.4
-> 版本：1.4
+> 版本：1.5
 > 日期：2026-03-01
 
 ---
@@ -1362,6 +1362,282 @@ private:
 单机模式：ShouldSkipNetwork() = true → 直接调用本地逻辑
 ```
 
+### 4.9 沉浸感增强（Phase 6，FR-42/43/44/45/46）
+
+#### 4.9.1 自主行为循环（FR-42）
+
+NPC 非对话时不再 Idle 站桩，而是根据日程表自主执行日常行为。
+
+```cpp
+// ---- NpcScheduleDataAsset.h ----
+
+USTRUCT(BlueprintType)
+struct FScheduleEntry
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    float StartHour;    // 游戏内小时 [0, 24)
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    float EndHour;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    FGameplayTag BehaviorTag;   // "Schedule.Work" / "Schedule.Patrol" / "Schedule.Rest"
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    FGameplayTag SmartObjectTag; // 可选，指定交互目标类型
+};
+
+UCLASS(BlueprintType)
+class UNpcScheduleDataAsset : public UDataAsset
+{
+    GENERATED_BODY()
+public:
+    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    TArray<FScheduleEntry> DailySchedule;
+
+    // 根据当前游戏时间返回应执行的行为标签
+    FGameplayTag GetCurrentBehavior(float GameHour) const;
+};
+```
+
+**StateTree 集成方式：**
+
+```
+ST_AINpcDefault（扩展后）:
+  Root
+  ├── [高优先级] DialogueSubtree     ← 玩家发起对话时激活（已有）
+  ├── [高优先级] ReactiveSubtree     ← 被攻击/收礼等事件（已有）
+  ├── [中优先级] ProactiveSubtree    ← 主动交互（4.9.2，Phase 6 新增）
+  └── [低优先级] ScheduleSubtree     ← 日程行为（Phase 6 新增）
+       ├── FStateTreeTask_ScheduleRouter  ← 读取日程表，输出当前 BehaviorTag
+       ├── [BehaviorTag == Schedule.Work]  → FindSlot + ClaimSlot + UseSlot
+       ├── [BehaviorTag == Schedule.Patrol] → MoveTo 巡逻点序列
+       └── [BehaviorTag == Schedule.Rest]  → FindSlot(Chair/Bed) + UseSlot
+```
+
+- 高优先级子树激活时自动打断日程行为（StateTree 原生优先级机制）
+- 事件结束后 StateTree 自动回落到 ScheduleSubtree 恢复日程
+- 无日程表配置时降级为原有 Idle 行为，零破坏性
+
+#### 4.9.2 主动交互触发（FR-43）
+
+NPC 不再只被动等待玩家，而是基于内部状态主动发起交互。
+
+```cpp
+// ---- ProactiveInteractionEvaluator.h ----
+
+USTRUCT(BlueprintType)
+struct FProactiveCondition
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere)
+    FGameplayTag TriggerTag;    // "Proactive.Greet" / "Proactive.Warn" / "Proactive.ShareInsight"
+
+    UPROPERTY(EditAnywhere)
+    float AffinityThreshold = 60.f;     // 好感度门槛（0=不检查）
+
+    UPROPERTY(EditAnywhere)
+    float ArousalThreshold = 0.8f;      // 情感激动度门槛（0=不检查）
+
+    UPROPERTY(EditAnywhere)
+    bool bRequireUnsharedInsight = false; // 是否需要持有未分享的洞察
+
+    UPROPERTY(EditAnywhere)
+    float CooldownSeconds = 300.f;       // 同类触发冷却时间
+};
+```
+
+**评估流程（定时轮询，默认 30s）：**
+
+```
+FStateTreeEvaluator_ProactiveCheck（StateTree Evaluator，每 30s Tick 一次）
+  │
+  ├─ 检查玩家是否在感知范围内（AIPerception 或距离检测）
+  ├─ 遍历 NpcPersonaDataAsset 中配置的 TArray<FProactiveCondition>
+  │   ├─ 检查 Affinity >= AffinityThreshold
+  │   ├─ 检查 Arousal >= ArousalThreshold
+  │   ├─ 检查 bRequireUnsharedInsight → 查询记忆系统是否有未标记"已分享"的洞察
+  │   └─ 检查冷却计时器
+  │
+  ├─ 命中 → 向 NpcEventSubsystem 广播 ProactiveInteraction 事件
+  │         StateTree ProactiveSubtree 消费：
+  │         ├─ Greet → 转向玩家 + 播放招手动画 + 发起 LLM 对话（Prompt 注入触发原因）
+  │         ├─ Warn → 移动到玩家附近 + 播放警告动画 + 发起对话
+  │         └─ ShareInsight → 发起对话（Prompt 注入洞察内容）
+  │
+  └─ 未命中 → 继续日程行为
+```
+
+- 主动交互优先级高于日程、低于玩家主动对话
+- 冷却机制防止 NPC 反复骚扰玩家
+- 未配置任何 FProactiveCondition 时此功能静默关闭
+
+#### 4.9.3 NPC 间社交协议（FR-44）
+
+NPC↔NPC 对话通过轻量路径驱动，避免占用玩家对话的 LLM 配额。
+
+**对话驱动策略（按优先级降级）：**
+
+| 策略 | 条件 | 延迟 | Token 消耗 |
+|------|------|------|-----------|
+| LocalProvider 小模型 | 已配置 LocalProvider | ~200ms | 本地，零成本 |
+| 云端 LLM（低优先级） | 无 LocalProvider，云端可用 | ~1-3s | 计入 NFR-3 配额 |
+| 预设对话模板 | 以上均不可用 | ~0ms | 零 |
+
+**对话模板结构：**
+
+```cpp
+USTRUCT(BlueprintType)
+struct FNpcSocialTemplate
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditAnywhere)
+    FGameplayTag SocialContext;    // "Social.Greeting" / "Social.Gossip" / "Social.Trade"
+
+    UPROPERTY(EditAnywhere)
+    TArray<FString> InitiatorLines;  // 发起方台词池（随机选取）
+
+    UPROPERTY(EditAnywhere)
+    TArray<FString> ResponderLines;  // 回应方台词池
+};
+```
+
+**社交流程：**
+
+```
+NPC_A 的 ScheduleSubtree 进入 "Schedule.Socialize" 时段
+  │
+  ├─ NpcScheduler 检查：当前社交 NPC 数量 < MaxConcurrentSocial（默认 2 对）
+  ├─ 选择社交对象：附近 NPC 中 Familiarity 最高者
+  │
+  ├─ 发起对话（按策略降级）
+  │   ├─ LLM 路径：精简 Prompt（仅人格层+关系数值+社交上下文，不含完整记忆层）
+  │   └─ 模板路径：从 FNpcSocialTemplate 池随机选取
+  │
+  ├─ 对话结果处理
+  │   ├─ 双方记忆系统写入（异步，重要性默认 3-5）
+  │   ├─ 双方关系数值微调（Familiarity +1~3）
+  │   └─ 通过 NpcEventSubsystem 广播 NpcSocialEvent（玩家可旁观）
+  │
+  └─ 社交频率受 NpcScheduler 管控，优先级低于玩家对话
+```
+
+- 社交对话的 LLM 请求优先级为 `ESocialLow`，队列满时直接降级为模板
+- 玩家发起对话时立即打断社交，NPC 转入对话状态
+- 社交结果广播后，UI 层可选择性显示旁观气泡（默认不显示，蓝图可开启）
+
+#### 4.9.4 流式首 Token 优化（FR-45）
+
+基于 Phase 2 已有的 SSE 流式能力，优化首个可见字符的到达时间。
+
+**关键修改点：SSE Parser 增加首 Token 委托**
+
+```cpp
+// FSSEParser 新增委托（Phase 2 已有 OnPartialResponse，此处增加更早的触发点）
+DECLARE_DELEGATE_OneParam(FOnFirstTokenReceived, const FString& /* FirstChunk */);
+
+// SSE Parser 处理流程
+void FSSEParser::ProcessChunk(const TArray<uint8>& Data)
+{
+    // ... 现有 SSE 解析逻辑（data: 前缀剥离、跨包拼接）...
+
+    if (!bFirstTokenFired && ParsedContent.Len() > 0)
+    {
+        bFirstTokenFired = true;
+        OnFirstTokenReceived.ExecuteIfBound(ParsedContent);
+        // UAINpcComponent 收到后立即触发 StateTree 进入 Speaking 状态
+        // 对话气泡开始显示，无需等待完整响应
+    }
+
+    OnPartialResponse.ExecuteIfBound(ParsedContent);  // 后续 chunk 继续走已有路径
+}
+```
+
+**时序优化对比：**
+
+```
+非流式（Phase 1）：
+  请求发出 ──────────── 完整响应到达 ──── 显示
+  |<────── 2-4s 空白等待 ────────>|
+
+流式（Phase 2）：
+  请求发出 ── 首chunk到达 ── 后续chunk ── 完成
+  |<── ~500ms ──>|<── 逐字显示 ──>|
+
+首Token优化（Phase 6）：
+  请求发出 ── 首Token ── Speaking状态 ── 逐字显示 ── 完成
+  |<─ <500ms ─>|  ← OnFirstTokenReceived 触发
+                   StateTree 立即切换，气泡立即出现
+```
+
+- 目标：首 Token 延迟 P50 < 500ms（网络延迟 + Provider 首包时间）
+- 非流式模式下此优化不生效，行为与 Phase 1 一致
+- `OnFirstTokenReceived` 为蓝图可绑定委托，项目方可自定义首 Token 响应行为
+
+#### 4.9.5 情感外化接口（FR-46）
+
+将 VAD 情感状态映射为动画蓝图可消费的参数结构，插件只提供数据接口，不提供动画资产。
+
+**数据结构：**
+
+```cpp
+USTRUCT(BlueprintType)
+struct AINPCRUNTIME_API FEmotionAnimParams
+{
+    GENERATED_BODY()
+
+    // VAD 归一化值（直接透传，动画蓝图可直接用作 BlendSpace 参数）
+    UPROPERTY(BlueprintReadOnly)
+    float Valence = 0.f;     // [-1, 1]
+
+    UPROPERTY(BlueprintReadOnly)
+    float Arousal = 0.f;     // [0, 1]
+
+    UPROPERTY(BlueprintReadOnly)
+    float Dominance = 0.5f;  // [0, 1]
+
+    // 主情感标签（ActiveEmotions 中 Arousal 最高的一个）
+    UPROPERTY(BlueprintReadOnly)
+    FGameplayTag PrimaryEmotion;
+
+    // 情感强度（Arousal × |Valence|，用于控制表情幅度）
+    UPROPERTY(BlueprintReadOnly)
+    float Intensity = 0.f;
+};
+```
+
+**UAINpcComponent 接口：**
+
+```cpp
+// 蓝图可调用，每帧或按需获取
+UFUNCTION(BlueprintCallable, Category = "AINpc|Emotion")
+FEmotionAnimParams GetEmotionAnimParams() const;
+
+// 情感变化时广播（蓝图可绑定，避免轮询）
+UPROPERTY(BlueprintAssignable, Category = "AINpc|Emotion")
+FOnEmotionAnimParamsChanged OnEmotionAnimParamsChanged;
+```
+
+**项目方绑定示例（动画蓝图）：**
+
+```
+EventGraph:
+  OnEmotionAnimParamsChanged → Set Valence/Arousal/Dominance 变量
+
+AnimGraph:
+  BlendSpace2D (X=Valence, Y=Arousal) → 表情混合
+  Dominance → 姿态权重（高=挺胸抬头，低=缩肩低头）
+  Intensity → 动画播放速率缩放（高强度=动作更快/幅度更大）
+```
+
+- 插件不提供动画资产，示例项目中提供占位动画演示绑定方式
+- 多人模式下 `FEmotionAnimParams` 通过 `UAINpcNetworkComponent` 的 Multicast RPC 同步到客户端
+- 未启用情感系统（Phase 1-3）时，`GetEmotionAnimParams()` 返回默认中性值
+
 ---
 
 ## 五、关键时序图
@@ -1623,3 +1899,14 @@ CREATE TABLE IF NOT EXISTS relationships (
 | 测试框架 | 交互回放 + 人设一致性评分 | US-7 |
 | 示例项目 | 3 个不同人设 NPC 演示场景 | US-7 |
 | 网络同步完善 | 多人排队策略、带宽优化、断线重连 | FR-38 |
+
+### Phase 6 — 沉浸感增强
+
+| 类/文件 | 实现内容 | 对应 FR |
+|---------|---------|---------|
+| UNpcScheduleDataAsset | 日程表配置（时间段→行为标签） | FR-42 |
+| FStateTreeTask_ScheduleRouter | 根据游戏时间选择日程行为 | FR-42 |
+| UProactiveInteractionEvaluator | 主动交互条件评估（30s 轮询） | FR-43 |
+| NPC 间社交管线 | 轻量 LLM/模板对话 + 双方记忆写入 | FR-44 |
+| SSE 首 Token 优化 | OnFirstTokenReceived 委托 + UI 即时显示 | FR-45 |
+| FEmotionAnimParams | VAD→动画蓝图参数映射 | FR-46 |
