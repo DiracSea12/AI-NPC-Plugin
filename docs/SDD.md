@@ -857,7 +857,7 @@ UAINpcComponent 订阅 UNpcEventSubsystem，按标签过滤后依次执行：
 │  持久化: 共用 memories 表（memory_type=1） │
 │  加载: BeginPlay 时按 NpcId+memory_type  │
 │        从 SQLite 加载回 TArray            │
-│  写回: EndPlay 时批量写入 SQLite          │
+│  写回: EndPlay + 定时刷盘（同关系数据） │
 ├─────────────────────────────────────────┤
 │         长期记忆（Long-term Memory）      │
 │  SQLite, 无上限                          │
@@ -1128,7 +1128,10 @@ UAINpcComponent::UpdateRelationship(PlayerId, Delta)
   │   UMemorySubsystem 按 NpcId 从 relationships 表加载已有数据填充 TMap
   ├─ 运行时：LLM 响应 Delta 更新 + Tick 自然衰减
   ├─ 写回（EndPlay）：UAINpcComponent 注销时将 TMap 回写 UMemorySubsystem
-  └─ 批量刷盘：关卡切换/存档时 UMemorySubsystem 遍历注册表统一写入 SQLite
+  └─ 批量刷盘（三种触发源，任一即写入）：
+       ├─ 关卡切换/手动存档（单机/关卡制游戏）
+       ├─ 定时自动刷盘（默认 300s，UAINpcSettings 可配置，常驻世界网游依赖此路径）
+       └─ Dirty 标记优化：仅写入自上次刷盘后有变更的 NPC，避免无效 IO
 ```
 
 ### 4.6 Prompt 工程（FR-36/37）
