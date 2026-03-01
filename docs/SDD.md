@@ -1,7 +1,7 @@
 ﻿# AINpc 插件系统设计文档（SDD）
 
 > 来源：docs/PRD.md v1.4
-> 版本：1.1
+> 版本：1.2
 > 日期：2026-03-01
 
 ---
@@ -49,6 +49,7 @@
 | AINpcEditor | Editor | PersonaEditor, MemoryDebugger | AINpcRuntime, UnrealEd | 5 |
 
 > AINpcUI 与 Runtime 隔离，Dedicated Server 编译时排除 UMG/Slate 依赖（NFR-6）。
+> 最低引擎版本：UE5.4+（NFR-7，StateTree WeakExecutionContext 依赖），`.uplugin` 中设置 `"EngineVersion": "5.4.0"`。
 
 ### 1.3 核心对象关系图
 
@@ -299,6 +300,9 @@ struct FVADState
 
     UPROPERTY(BlueprintReadWrite)
     float Dominance = 0.5f; // [0, 1] 支配感
+
+    UPROPERTY(BlueprintReadOnly)
+    FGameplayTagContainer EmotionTags; // 由评价链根据 VAD 映射生成（如 Emotion.Angry）
 };
 
 USTRUCT(BlueprintType)
@@ -409,6 +413,9 @@ public:
     // ---- Phase 1 ----
     UPROPERTY(EditAnywhere, Category="LLM")
     FString ApiKey;
+
+    UPROPERTY(EditAnywhere, Category="LLM")
+    TArray<FString> FallbackResponses;  // 降级模板响应池（FR-5），随机选取
 
     UPROPERTY(EditAnywhere, Category="Persona")
     FString PersonaName;
@@ -526,6 +533,12 @@ DECLARE_DELEGATE_OneParam(FOnLLMPartialResponse, const FString& /*PartialContent
 // 蓝图动态多播
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLLMResponseBP, FLLMResponse, Response);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLLMPartialResponseBP, const FString&, Partial);
+
+// UAINpcComponent 蓝图委托（FR-7）
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnDialogueReceived, const FString&, Dialogue, const TArray<FNpcAction>&, Actions);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnEmotionChanged, FVADState, NewState);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnRelationshipChanged, const FString&, PlayerId, FRelationshipData, NewData);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLLMFallback, const FString&, FallbackText);
 ```
 
 #### 4.1.2 LLMRequestSubsystem（并发限流）
@@ -646,6 +659,7 @@ struct FStateTreeTask_LLMQuery : public FStateTreeTaskBase
 
 private:
     // EnterState 时：构建 Prompt → 提交 LLMRequestSubsystem
+    // 同时播放延迟掩盖动画：NpcPersonaDataAsset::DelayMaskingMontages[EDelayStrategy::Thinking]
     // Tick 时：检查响应是否到达，到达则解析并切换状态
 };
 ```
@@ -785,7 +799,34 @@ UAINpcComponent 订阅 UNpcEventSubsystem，按标签过滤后依次执行：
 └─────────────────────────────────────────┘
 ```
 
-#### 4.4.2 检索算法（FR-10/11）
+#### 4.4.2 记忆写入转换（FR-12）
+
+两条写入路径的 FMemoryEntry 构建规则：
+
+```
+路径 A：对话后写入（UAINpcComponent::WriteDialogueMemory）
+  │
+  ├─ Content = "玩家说：{PlayerInput}，NPC回复：{Dialogue}"
+  ├─ MemoryType = Experiential
+  ├─ Importance = |EmotionDelta.Valence| × 10（情感变化越大越重要）
+  │   Clamp[0, 10]，最低保底 = 2（确保对话至少有基础记录）
+  └─ Timestamp = FDateTime::Now()
+
+路径 B：事件触发写入（UAINpcComponent 事件消费步骤③）
+  │
+  ├─ Content = 事件描述（由 FInstancedStruct 载荷的 ToString() 或蓝图辅助函数格式化）
+  ├─ MemoryType = Experiential
+  ├─ Importance = |FinalGoalRelevance| × 10（评价链步骤②的输出直接喂入）
+  │   Clamp[0, 10]
+  └─ Timestamp = FDateTime::Now()
+
+反思产出的洞察：
+  ├─ MemoryType = Factual
+  ├─ Importance = 8（洞察默认高重要性）
+  └─ SourceMemoryIds = 源记忆 ID 列表
+```
+
+#### 4.4.3 检索算法（FR-10/11）
 
 ```cpp
 // ---- IRelevanceScorer.h ----
@@ -844,7 +885,7 @@ public:
 // 无 Embedding Provider 时，MemorySubsystem 降级为 SQLite FTS5 BM25 检索
 ```
 
-#### 4.4.3 记忆冲突解决（FR-13）
+#### 4.4.4 记忆冲突解决（FR-13）
 
 ```
 写入新记忆 Entry_new
@@ -891,7 +932,7 @@ private:
 };
 ```
 
-#### 4.4.4 反思机制（FR-15）
+#### 4.4.5 反思机制（FR-15）
 
 ```
 累积重要性计数器（UAINpcComponent 持有）
@@ -915,7 +956,7 @@ private:
       └─ Counter 重置为 0
 ```
 
-#### 4.4.5 主动遗忘（FR-14）
+#### 4.4.6 主动遗忘（FR-14）
 
 ```
 情景记忆数量 ≥ 200
@@ -992,7 +1033,7 @@ public:
 #### 4.5.3 关系更新（FR-22）
 
 ```
-LLM 响应解析后得到 FRelationshipData Delta
+LLM 响应解析后得到 FRelationshipDelta
   │
   ▼
 UAINpcComponent::UpdateRelationship(PlayerId, Delta)
@@ -1008,7 +1049,8 @@ UAINpcComponent::UpdateRelationship(PlayerId, Delta)
 
 关系数据存储：
   TMap<FString /*PlayerId*/, FRelationshipData> Relationships;
-  持久化随情景记忆一起写入 SQLite
+  独立持久化到 SQLite relationships 表（6.4 节）
+  持久化时机：关卡切换/存档时由 UMemorySubsystem 统一写入
 ```
 
 ### 4.6 Prompt 工程（FR-36/37）
@@ -1040,6 +1082,12 @@ UAINpcComponent::UpdateRelationship(PlayerId, Delta)
 Token 超限截断优先级（从低到高）：
   情境层 → 记忆层 → 人格层
   系统层和输出约束层永不截断
+
+情境层 Prompt 注入格式示例（FR-25）：
+  "[当前状态]
+   情绪：愉悦度 0.6，激活度 0.3，支配感 0.7（整体偏积极放松）
+   与对方关系：好感度 45/100，信任度 70/100，熟悉度 30/100
+   周围可交互对象：chair_01(坐下), bookshelf_02(查看), door_03(开门)"
 ```
 
 #### 4.6.2 PromptBuilder
@@ -1070,6 +1118,7 @@ private:
     void TruncateToFit(TArray<FLLMMessage>& Messages, int32 Budget) const;
 
     // 检查 DataAsset 是否有覆盖模板
+    // 注意：System 和 Output 层硬编码忽略覆盖，即使 TMap 中存在也不生效
     FString GetLayerContent(EPromptLayer Layer,
         const UNpcPersonaDataAsset* Persona,
         const FString& DefaultContent) const;
@@ -1254,6 +1303,8 @@ Player          UAINpcComponent    PromptBuilder    LLMRequestSub    ILLMProvide
   │                   │◄──FParsedLLMResponse─────────────│────────────────│────────────────│
   │                   │                 │                │                │                │
   │                   │─[OutputValidator.Validate()]     │                │                │
+  │                   │  ├─ 通过 → 继续                  │                │                │
+  │                   │  └─ 拒绝 → 重试 1 次（Prompt 追加约束），仍拒绝 → 降级 FallbackResponses
   │                   │─[UpdateEmotion(Delta)]           │                │                │
   │                   │─[UpdateRelationship(Delta)]      │                │                │
   │                   │─[WriteMemory(异步)]              │                │                │
@@ -1353,6 +1404,13 @@ CREATE TABLE IF NOT EXISTS memory_links (
 );
 ```
 
+> **link_type 与 FMemoryEntry 字段映射**：
+> - `related` → `FMemoryEntry::LinkedMemoryIds`（FR-19，检索时沿链接扩展 1 跳）
+> - `source_of` → `FMemoryEntry::SourceMemoryIds`（FR-15，反思洞察的证据指针）
+> - `contradicts` → `FMemoryEntry::bContradicted = true`（FR-13，COEXIST 标记）
+>
+> 读取 FMemoryEntry 时从 memory_links 表反查填充对应 TArray 字段。
+
 ### 6.3 全文搜索（FTS5 降级方案）
 
 ```sql
@@ -1416,6 +1474,7 @@ CREATE TABLE IF NOT EXISTS relationships (
 |---------|---------|---------|
 | UNpcEventSubsystem | 全局事件广播 + FInstancedStruct 载荷 | FR-34, FR-35 |
 | FLLMResponseParser | 三级降级解析（严格/宽松/纯文本） | FR-27 |
+| EmotionTypes.h / FRelationshipDelta | 结构体定义占位（FVADState + FRelationshipDelta），Phase 4 实现行为逻辑 | FR-20 |
 | FStateTreeTask_ExecuteSmartObject | 动作执行 + 内联白名单校验 | FR-29, FR-32 |
 | USmartObjectBridge | 槽位查找/占用/释放/位置获取 | FR-31 |
 | FSSEParser | SSE 流式解析器 | FR-4 |
