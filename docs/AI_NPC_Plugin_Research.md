@@ -57,14 +57,14 @@
 
 | 方案 | 核心能力 | 部署方式 | 参考价值 |
 |------|---------|---------|---------|
-| **Inworld AI** | 多模型编排 → 2025年扩展为通用Agent Runtime平台 | 云端API + SDK | ★★★★★ 架构标杆 |
+| **Inworld AI** | 多模型编排 → 2025年Agent Runtime → 2026年转型通用语音AI平台 | 云端API + SDK | ★★★★☆ 架构参考（已淡出游戏NPC赛道） |
 | **NVIDIA ACE** | 自主角色（感知→规划→行动）+ 本地SLM | 本地RTX + 云端 | ★★★★★ 本地推理方向 |
 | **Convai** | 对话 + 环境感知 + 行动执行 | 云端API + UE5 SDK | ★★★★ 感知+行动集成 |
 | **Personica AI** | Cognitive NPC Brain 插件（Fab商城） | UE5插件 | ★★★ 即插即用竞品参考 |
 
 **关键洞察：**
-- Inworld：2025年从游戏NPC Character Engine扩展为通用Agent Runtime平台（2025.08.13 正式发布 Inworld Runtime，定位"首个面向消费级应用的 AI Runtime"），记忆/情感/多模态编排架构仍为业界标杆；已发布 Unreal AI Runtime SDK（Fab商城+GitHub开源）；新增 Multi-Agent 功能（2-5 角色群组对话 + Director Layer 编排对话轮次）和 Dynamic Relationships（关系阶段：陌生→熟人→朋友→密友，阶段升级触发事件）
-- NVIDIA ACE：已发布 ACE Unreal Plugin 2.5 + NVIGI SDK（本地推理），开源 Audio2Face-3D 动画模型，支持本地 SLM 推理，RTX 40系列+ 可本地运行推理管线
+- Inworld：2025年从游戏NPC Character Engine扩展为Agent Runtime平台，2026年进一步转型为通用语音AI平台（淡出游戏NPC专项）。其记忆/情感/多模态编排架构仍有参考价值，但已不再是游戏NPC赛道的活跃竞品；Unreal AI Runtime SDK 已发布（Fab商城+GitHub开源）；Multi-Agent 功能（2-5 角色群组对话 + Director Layer）和 Dynamic Relationships 的设计思路仍可借鉴
+- NVIDIA ACE：已发布 ACE Unreal Plugin 2.5 + NVIGI SDK（本地推理），开源 Audio2Face-3D 动画模型，支持本地 SLM 推理，RTX 40系列+ 可本地运行推理管线；新增 Nemotron 3 Nano（31.6B 参数 / 3.6B 激活的 Mamba-MoE 混合架构，需 24GB VRAM，吞吐量 4x 于前代），为本地 NPC 推理提供高性能选择
 - Convai：开源UE5 SDK（GitHub），感知环境并执行游戏内动作，路线图包含流式视觉感知
 - Personica AI：Fab 商城上架的 Cognitive NPC Brain 插件，定位与本插件相似，可作为竞品参考
 - NVIDIA ACE 商业合作：已宣布与 PUBG、Naraka: Bladepoint 等游戏的 ACE 集成计划（截至2026年初仍在测试阶段，尚未正式上线）
@@ -74,6 +74,7 @@
 - NVIGI SDK（In-Game Inference）：GPU优化的本地推理管理器，支持 ASR/LLM/Embedding 等 AI 插件
 - Audio2Face-3D：开源面部动画模型（2025.09.24 发布于 HuggingFace，Apache 2.0），音频驱动面部混合形状
 - 本地 SLM 推理：支持多种开源小语言模型，RTX 40系列+ 可本地运行
+- Nemotron 3 Nano：31.6B 参数 / 3.6B 激活（Mamba-MoE 混合架构），需 24GB VRAM，吞吐量 4x 于前代，Apache 2.0 许可
 - PersonaPlex：2026.01 发布的 7B 全双工语音对话模型（MIT许可），整合 STT→LLM→TTS 管线
 - 商业合作：KRAFTON 于 CES 2025 展示基于 ACE 的 Co-Playable Character (CPC) 技术，计划应用于 PUBG IP
 - GitHub 开源：https://github.com/NVIDIA/ACE（Apache 2.0，含微服务示例和参考工作流）
@@ -88,6 +89,7 @@
 | **GladeCore** | 本地AI NPC完整管线 | LLM + STT + TTS 单机设备部署 |
 | **Sovahero/UnrealAiConnector** | 极简API集成框架 | 蓝图+C++双支持 (Claude/GPT/Gemini) |
 | **life-exe/UnrealOpenAIPlugin** | OpenAI全功能UE5封装 | Chat/Image/Audio/Embedding等全API，蓝图+C++双支持，UE 5.2-5.7 |
+| **Gemma3NPC** | NPC专用微调SLM | 基于Gemma3n-E4B微调的NPC对话模型，支持多模态输入，Ollama本地部署 |
 | **LLM_Connect** | 纯蓝图LLM集成 | 零代码门槛 |
 
 ### 3.3 相关开源项目
@@ -118,6 +120,8 @@
 - Where Winds Meet 是截至2026年初最大规模的 LLM NPC 商业部署案例，但也暴露了提示注入的现实风险
 - 除此之外的案例均为独立游戏/小型工作室，说明该技术仍处于早期采用阶段
 - 业界趋势：从纯云端API向本地+云端混合迁移（Vaudeville从Inworld转向自研离线引擎）
+- Inworld AI 于 2026 年转型通用语音 AI 平台，淡出游戏 NPC 专项赛道，验证了自建插件方案的战略正确性——依赖单一 SaaS 供应商的风险已被证实
+- NPC 专用微调 SLM 出现：Gemma3NPC 基于 Gemma3n-E4B 针对游戏 NPC 角色扮演微调，支持 Ollama 部署，为 LocalProvider 提供了比通用模型更优的选择
 
 ---
 
@@ -200,7 +204,7 @@ ILLMProvider
 
 | 能力 | OpenAI | Anthropic | DeepSeek | Local(Ollama) |
 |------|--------|-----------|----------|---------------|
-| Function Calling | ✅ | ✅ | ✅ | ⚠️ 部分模型 |
+| Function Calling / Tool Use | ✅ 首选结构化输出方式 | ✅ Tool Use | ✅ | ⚠️ 部分模型 |
 | JSON Mode | ✅ | ✅ | ✅ | ⚠️ 部分模型 |
 | 流式响应 | ✅ SSE（插件自建解析层） | ✅ SSE（插件自建解析层） | ✅ SSE（插件自建解析层） | ✅ |
 | 上下文窗口 | 以当期模型版本为准 | 以当期模型版本为准 | 以当期模型版本为准 | 模型依赖 |
@@ -224,7 +228,7 @@ ILLMProvider
 | 情景记忆 | TArray + 重要性排序 | 游戏Session | ~200条/NPC |
 | 长期记忆 | SQLiteCore(引擎内置插件，需启用) + 内存点积余弦相似度 | 存档持久化 | 无限 |
 
-**Embedding 生成**：通过可替换的 `IEmbeddingProvider` 接口（云端API / 本地模型均可）；无 Embedding 时降级为 SQLite FTS5 全文搜索（引擎内置 sqlite 3.47.1 原生支持，BM25 排序）。注意：FTS5 需要 `SQLITE_ENABLE_FTS5` 编译标志，引擎内置 SQLiteCore 不一定默认启用，插件初始化时应通过 `PRAGMA compile_options` 运行时检测，不可用时降级为 LIKE 模糊匹配。
+**Embedding 生成**：通过可替换的 `IEmbeddingProvider` 接口（云端API / 本地模型均可）；无 Embedding 时降级为 SQLite FTS5 全文搜索（引擎内置 sqlite 3.47.1 原生支持，BM25 排序）。注意：经引擎源码验证（`SQLiteCore/Build.cs`），`SQLITE_ENABLE_FTS5` 编译标志在 UE5.4+ 中**默认启用**（与 FTS4、JSON1、RTREE 一同硬编码开启），无需运行时检测，可直接使用 FTS5 功能。
 
 **记忆条目结构：**
 ```
@@ -304,9 +308,10 @@ FNpcRelationship {
 ```
 
 **输出解析降级策略（`LLMResponseParser` 多级容错）：**
-1. 严格 JSON Schema 校验（首选，支持 Function Calling / Tool Use 的 Provider 优先使用）
-2. 宽松 JSON 提取（正则匹配 `{...}` 块，容忍多余文本包裹）
-3. 纯文本降级（仅提取对话文本，行为使用默认模板，情感/关系不变）
+1. Function Calling / Tool Use（首选，Provider 支持时优先使用，结构化程度最高，无需正则提取）
+2. 严格 JSON Schema 校验（JSON Mode，Provider 不支持 Function Calling 时使用）
+3. 宽松 JSON 提取（正则匹配 `{...}` 块，容忍多余文本包裹）
+4. 纯文本降级（仅提取对话文本，行为使用默认模板，情感/关系不变）
 
 **StateTree 集成：**
 - 自定义 StateTree Task 节点 (`FStateTreeTask_LLMQuery`, `FStateTreeTask_ExecuteSmartObject`)（注：StateTree 节点全部是 USTRUCT/F前缀，非 UCLASS）
@@ -320,14 +325,14 @@ FNpcRelationship {
 
 ## 五、UE5引擎集成点
 
-### 5.1 插件仅依赖引擎模块（零项目依赖）
+### 5.1 插件依赖边界（零项目代码依赖）
 
 ```
 模块依赖：
   Core, CoreUObject, Engine,
   GameplayStateTreeModule,  // AI专用StateTree组件（含UStateTreeAIComponent + AIComponentSchema）
   StateTreeModule,      // 现代化状态机/行为编排（被GameplayStateTree自动拉入）
-  SmartObjectsModule,    // 复杂环境交互目标处理（注意：隐式拉入GameplayAbilities + WorldConditions；需在项目.uproject中启用SmartObjects插件）
+  SmartObjectsModule,    // 复杂环境交互目标处理（注意：传递依赖会拉入 GameplayAbilities/TargetingSystem/MassEntity/WorldConditions；需在项目.uproject中启用SmartObjects插件）
   AIModule,              // AIController底层支持
   HTTP,                  // HTTP请求 + SSE流式响应（主要传输方式）
   WebSockets,            // WebSocket通信（可选，用于Realtime类接口）
@@ -338,6 +343,10 @@ FNpcRelationship {
 AINpcUI 可选模块额外依赖（与 Runtime 隔离，保证 Dedicated Server 可编译）：
   UMG, Slate             // 对话气泡等UI（客户端专用）
 ```
+
+依赖声明应拆成两层：
+- 直接依赖（插件 Build.cs 显式声明）
+- 传递依赖（由 SmartObjects/StateTree 等模块隐式拉入）
 
 ### 5.2 关键扩展点利用
 
@@ -427,7 +436,7 @@ Plugins/AINpc/
 | StateTree扩展 | FStateTreeTaskBase 继承（USTRUCT） | ★★ | 引擎现代化状态机扩展方式 |
 | 感知系统解耦 | UGameInstanceSubsystem | ★ | 引擎内置，通过全局 Multicast Delegate 解耦发包，开销极低 |
 | 复杂环境交互 | SmartObjects | ★★★ | 需要预先在地图上配置 |
-| 记忆持久化 | SQLiteCore引擎插件 | ★★ | 引擎内置（需启用），无第三方服务依赖 |
+| 记忆持久化 | SQLiteCore引擎插件 | ★★ | 引擎内置（需启用），FTS5 默认开启，无第三方服务依赖 |
 | 情感数值系统 | GameplayTags | ★★ | 纯逻辑，无技术障碍 |
 | 对话UI | UMG Widget | ★★ | 标准UI开发 |
 | 插件化封装 | .uplugin标准 | ★★ | 引擎标准流程 |
@@ -438,9 +447,9 @@ Plugins/AINpc/
 |------|------|---------|
 | LLM延迟影响游戏体验 | 🔴 高 | 异步调用+预生成+本地SLM降级+过渡状态动画（被击硬直/思考待机）掩盖延迟（见下方延迟掩盖策略表） |
 | LLM幻觉（说出不合理的话） | 🟡 中 | 严格prompt约束+输出校验+白名单行为 |
-| 云端API成本 | 🟡 中 | 支持本地模型+缓存常见回复+限制调用频率 |
+| 云端API成本 | 🟡 中 | Budget Governor（三层预算：per-player/per-npc/per-shard）+ 本地模型 + 缓存常见回复 + 调用频率限制 |
 | 记忆膨胀 | 🟢 低 | 重要性衰减+定期清理+容量上限 |
-| 多NPC并发性能 | 🟡 中 | NpcScheduler：优先级队列+并发上限+批量合并+冷却间隔；屏幕外/远距NPC降级为本地模板响应 |
+| 多NPC并发性能 | 🟡 中 | NpcScheduler + 双池调度（对话池/维护池）+ 并发上限 + 批量合并 + 冷却间隔；屏幕外/远距NPC降级为本地模板响应 |
 | 跨引擎版本兼容 | 🟢 低 | StateTree/SmartObjects API自5.4起趋于成熟（VersionName仍为0.1，EnabledByDefault: false）；已去除实验版GameplayInteractions依赖，自建桥接层完全可控 |
 | GPU资源争用（本地SLM与渲染） | 🟡 中 | SLM推理限制GPU占用比例+CPU fallback+帧率优先策略 |
 | 模型/SDK许可证合规 | 🟡 中 | 单列分发限制矩阵+仅集成宽松许可模型 |
@@ -505,47 +514,47 @@ Plugins/AINpc/
 
 ---
 
-## 八、实现路线图
+## 八、实现路线图（Foundation + Immersion Pack 双轨）
 
-### Phase 1：核心管线（MVP）
+### Foundation / Phase 1：核心管线（MVP）
 - LLM通信层（OpenAI Provider + 异步HTTP）
 - 基础对话组件（文本输入→LLM→文本输出）
 - NPC人设DataAsset（名字、性格、背景故事）
 - 最简 StateTree（对话流转状态）
 - 对话气泡UI
 
-### Phase 2：感知与行为
+### Foundation / Phase 2：感知与行为
 - 独立感知系统 (基于 `UGameInstanceSubsystem` 的全局事件总线)
 - 行为执行层（LLM输出包含意图→引入 SmartObject 执行）
 - 多Provider支持（Anthropic、本地Ollama）
 - 流式响应（逐字显示对话）
 
-### Phase 3a：记忆存储与检索
+### Foundation / Phase 3a：记忆存储与检索
 - 三层记忆架构实现
 - 记忆检索算法（加权求和：时间衰减+重要性+相关性）
 - 选择性写入策略（重要性门槛过滤）
 - 记忆持久化（SQLite存档集成）
 
-### Phase 3b：反思与压缩
+### Foundation / Phase 3b：反思与压缩
 - 反思机制（累积重要性触发高层洞察）
 - 记忆压缩（低价值记忆合并/归档）
 - 长期记忆语义检索（可选：嵌入向量）
 
-### Phase 4：情感与关系
+### Foundation / Phase 4：情感与关系
 - 情感状态机（数值驱动）
 - 关系系统（好感度/信任度/熟悉度）
 - 情感注入LLM prompt
 - 情感影响 StateTree 流转树杈选择
 - 可选增强：认知评估中间层（情感数值+情境→LLM/规则引擎评估→行为选择，如同样愤怒值面对强敌→退缩、面对弱敌→反击）
 
-### Phase 5：打磨与工具
+### Foundation / Phase 5：打磨与工具
 - 编辑器人设编辑面板
 - 记忆调试器（可视化记忆流）
 - 性能优化（请求队列、缓存、批处理）
 - 测试框架：交互回放系统（固定seed/mock响应）+ NPC行为基线测试（预定义场景自动化验证）+ 人设一致性评分 + 性能基准（LLM延迟P50/P95/P99、记忆检索耗时）
 - 示例项目和文档
 
-### Phase 6：沉浸感增强
+### Immersion Pack / Phase 6：沉浸感增强（可独立开关）
 - 自主行为循环：NPC 拥有日程表（StateTree 扩展），非对话时自主执行日常行为（巡逻/工作/休息/社交）
 - 主动交互触发：基于关系/记忆/情感状态，NPC 主动向玩家发起对话或动作（招手/警告/赠礼）
 - NPC 间社交协议：轻量 NPC↔NPC 对话（小模型或模板驱动），通过 NpcEventSubsystem 广播
@@ -569,7 +578,7 @@ Plugins/AINpc/
 1. **技术栈已就绪**：UE5 的 StateTree、SmartObjects、GameInstanceSubsystem 等模块解决了行为解耦的核心痛点。
 2. **业界已验证**：Inworld AI、NVIDIA ACE 已证明 LLM + 状态机 + 记忆 的混合架构可行。
 3. **开源生态丰富**：Llama-Unreal、PhiloAgents 等项目提供了大量可参考的实现。
-4. **通用插件可行**：仅依赖引擎标准插件体系（StateTree/SmartObjects），利用 GameInstanceSubsystem 实现与项目零耦合。
+4. **通用插件可行**：仅依赖引擎标准插件体系（StateTree/SmartObjects），利用 GameInstanceSubsystem 实现与项目零代码耦合；但需显式管理传递依赖并支持能力包开关。
 
 ### 核心架构决策
 
@@ -582,6 +591,8 @@ Plugins/AINpc/
 | 情感方案 | 数值驱动（非LLM自管理） | 可控+可调试+高性能 |
 | 持久化 | SQLiteCore(引擎内置插件，需启用) | 无第三方服务依赖 |
 | 集成方式 | UE5插件(.uplugin) | 即插即用 |
+| 调度策略 | 双池调度（对话池+维护池） | 高负载下优先保障对话连续性，避免记忆链路长期饥饿 |
+| 成本治理 | Budget Governor（三层预算） | 先控上线成本与排队体验，再追求能力扩张 |
 
 ### 与纯 BT/RL 方案的本质区别
 
