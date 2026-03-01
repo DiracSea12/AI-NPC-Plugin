@@ -1,7 +1,7 @@
 ﻿# AINpc 插件系统设计文档（SDD）
 
 > 来源：docs/PRD.md v1.4
-> 版本：1.0
+> 版本：1.1
 > 日期：2026-03-01
 
 ---
@@ -57,7 +57,13 @@ AActor (NPC)
  ├── UAINpcComponent ◄─── 核心入口，持有工作记忆+情景记忆+情感状态+关系数据
  │    ├── 订阅 NpcEventSubsystem 事件
  │    ├── 持有 UNpcPersonaDataAsset* 引用
- │    └── 提供 LLM 上下文给 StateTree Task
+ │    ├── 提供 LLM 上下文给 StateTree Task
+ │    └── 蓝图委托：OnDialogueReceived / OnEmotionChanged / OnRelationshipChanged / OnLLMFallback
+ │
+ ├── UAINpcNetworkComponent ◄─── 网络同步（可选）
+ │    ├── ServerRPC：客户端对话请求 → Server 执行 LLM
+ │    ├── MulticastRPC：Server → 全客户端广播结果
+ │    └── 单机模式：ShouldSkipNetwork() 直连 UAINpcComponent
  │
  └── AAINpcController (AIController)
       ├── 持有并 Tick StateTree（AIComponentSchema）
@@ -310,6 +316,22 @@ struct FRelationshipData
     float Familiarity = 0.f;    // [0, 100]
 };
 
+// LLM 返回的关系变化量（默认值全 0，区别于 FRelationshipData 的状态值）
+USTRUCT(BlueprintType)
+struct FRelationshipDelta
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadWrite)
+    float Affinity = 0.f;
+
+    UPROPERTY(BlueprintReadWrite)
+    float Trust = 0.f;
+
+    UPROPERTY(BlueprintReadWrite)
+    float Familiarity = 0.f;
+};
+
 USTRUCT(BlueprintType)
 struct FNpcOceanPersonality
 {
@@ -451,7 +473,7 @@ struct FParsedLLMResponse
     FVADState EmotionDelta;
 
     UPROPERTY(BlueprintReadOnly)
-    FRelationshipData RelationshipDelta;
+    FRelationshipDelta RelationshipDelta;
 
     UPROPERTY(BlueprintReadOnly)
     bool bParsedAsJson = false;     // true=严格/宽松JSON, false=纯文本降级
@@ -502,7 +524,7 @@ public:
 DECLARE_DELEGATE_OneParam(FOnLLMResponseComplete, const FLLMResponse&);
 DECLARE_DELEGATE_OneParam(FOnLLMPartialResponse, const FString& /*PartialContent*/);
 // 蓝图动态多播
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLLMResponseBP, const FLLMResponse&, Response);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLLMResponseBP, FLLMResponse, Response);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLLMPartialResponseBP, const FString&, Partial);
 ```
 
@@ -542,6 +564,7 @@ private:
     TMap<FName, TUniquePtr<ILLMProvider>> ProviderPool;
 
     void TryDispatchNext();
+    // 所有回调保证在 GameThread 触发（HTTP 模块回调 → AsyncTask(GameThread) 转发）
     void OnRequestComplete(int32 RequestId, const FLLMResponse& Response);
 };
 ```
@@ -796,6 +819,29 @@ public:
 //
 // α/β/γ 从 NpcPersonaDataAsset::RetrievalWeights 读取
 // 检索时沿 LinkedMemoryIds 扩展 1 跳（FR-19）
+```
+
+```cpp
+// ---- IEmbeddingProvider.h ----（FR-17）
+
+class IEmbeddingProvider
+{
+public:
+    virtual ~IEmbeddingProvider() = default;
+
+    // 文本向量化（异步）
+    virtual void Embed(const FString& Text,
+        TFunction<void(const TArray<float>& /*Vector*/)> OnComplete) = 0;
+
+    // 批量向量化
+    virtual void EmbedBatch(const TArray<FString>& Texts,
+        TFunction<void(const TArray<TArray<float>>& /*Vectors*/)> OnComplete) = 0;
+
+    // 向量维度（模型决定，如 1536 for text-embedding-3-small）
+    virtual int32 GetDimension() const = 0;
+};
+
+// 无 Embedding Provider 时，MemorySubsystem 降级为 SQLite FTS5 BM25 检索
 ```
 
 #### 4.4.3 记忆冲突解决（FR-13）
@@ -1190,6 +1236,7 @@ private:
 Player          UAINpcComponent    PromptBuilder    LLMRequestSub    ILLMProvider    LLMResponseParser
   │                   │                 │                │                │                │
   │──RequestDialogue─►│                 │                │                │                │
+  │                   │─[InputSanitizer.Sanitize() — Phase 4 启用，Phase 1-3 直接透传]
   │                   │──Build()───────►│                │                │                │
   │                   │                 │─[5层拼接+截断]─►│                │                │
   │                   │◄──Messages──────│                │                │                │
@@ -1358,9 +1405,10 @@ CREATE TABLE IF NOT EXISTS relationships (
 | FLLMRequest/Response | 通信数据结构 | FR-2 |
 | ULLMRequestSubsystem | 并发限流（简单计数器） | FR-3, NFR-3 |
 | ST_AINpcDefault | 默认 StateTree 资产 | FR-28 |
-| FStateTreeTask_LLMQuery | LLM 查询 Task | FR-29 |
+| FStateTreeTask_LLMQuery | LLM 查询 Task（Phase 1 直接取 FLLMResponse.Content 作为对话文本，Phase 2 切换为 LLMResponseParser 结构化解析） | FR-29 |
 | UPromptBuilder | 系统层 + 人格层 + 输出约束 | FR-36 |
 | 对话气泡 UI（AINpcUI） | 文本显示 + OnPartialResponse 预留 | US-1 |
+| UAINpcNetworkComponent | 基础权威边界（HasAuthority 检查 + ServerRPC/Multicast 骨架），单机模式直连 | FR-38, NFR-10 |
 
 ### Phase 2 — 感知与行为
 
@@ -1422,4 +1470,4 @@ CREATE TABLE IF NOT EXISTS relationships (
 | UNpcScheduler | 优先级队列调度 + LOD 降频 | NFR-3 |
 | 测试框架 | 交互回放 + 人设一致性评分 | US-7 |
 | 示例项目 | 3 个不同人设 NPC 演示场景 | US-7 |
-| UAINpcNetworkComponent | 多人游戏网络同步 | FR-38 |
+| 网络同步完善 | 多人排队策略、带宽优化、断线重连 | FR-38 |
