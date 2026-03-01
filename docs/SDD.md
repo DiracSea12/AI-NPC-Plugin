@@ -1,7 +1,7 @@
 ﻿# AINpc 插件系统设计文档（SDD）
 
 > 来源：docs/PRD.md v1.4
-> 版本：1.3
+> 版本：1.4
 > 日期：2026-03-01
 
 ---
@@ -117,8 +117,8 @@ AINpcRuntime/
 │   │   └── EmotionDecayProcessor.h      // 情感衰减
 │   ├── Behavior/
 │   │   ├── StateTree/
-│   │   │   ├── STTask_LLMQuery.h        // FStateTreeTask_LLMQuery
-│   │   │   └── STTask_ExecuteSmartObject.h
+│   │   │   ├── StateTreeTask_LLMQuery.h        // FStateTreeTask_LLMQuery
+│   │   │   └── StateTreeTask_ExecuteSmartObject.h
 │   │   ├── SmartObjectBridge.h          // SmartObject 桥接
 │   │   ├── LLMResponseParser.h          // 三级降级解析
 │   │   └── ActionValidator.h            // IActionValidator 接口
@@ -336,6 +336,22 @@ struct FRelationshipDelta
     float Familiarity = 0.f;
 };
 
+// LLM 返回的情感变化量（默认值全 0，区别于 FVADState 的状态值，与 FRelationshipDelta 对称设计）
+USTRUCT(BlueprintType)
+struct FVADDelta
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadWrite)
+    float Valence = 0.f;
+
+    UPROPERTY(BlueprintReadWrite)
+    float Arousal = 0.f;
+
+    UPROPERTY(BlueprintReadWrite)
+    float Dominance = 0.f;    // 注意：默认 0 而非 FVADState 的 0.5
+};
+
 USTRUCT(BlueprintType)
 struct FNpcOceanPersonality
 {
@@ -477,7 +493,7 @@ struct FParsedLLMResponse
     TArray<FNpcAction> Actions;
 
     UPROPERTY(BlueprintReadOnly)
-    FVADState EmotionDelta;
+    FVADDelta EmotionDelta;
 
     UPROPERTY(BlueprintReadOnly)
     FRelationshipDelta RelationshipDelta;
@@ -808,12 +824,12 @@ public:
 
 UAINpcComponent 订阅 UNpcEventSubsystem，按标签过滤后依次执行：
 
-| 步骤 | 消费者 | 同步/异步 | 说明 |
-|------|--------|-----------|------|
-| ① | 延迟掩盖动画（FR-33） | 同步即时 | 受击等不等 StateTree Tick |
-| ② | 情感评价链（FR-21） | 同步计算 | 本地规则，零 LLM 调用 |
-| ③ | 记忆写入（FR-12） | 异步入队 | 重要性评估后决定是否写入 |
-| ④ | Prompt 情境更新（FR-36） | 标记脏位 | 下次 LLM 调用时生效 |
+| 步骤 | 消费者 | 同步/异步 | 说明 | Phase |
+|------|--------|-----------|------|-------|
+| ① | 延迟掩盖动画（FR-33） | 同步即时 | 受击等不等 StateTree Tick | 2 |
+| ② | 情感评价链（FR-21） | 同步计算 | 本地规则，零 LLM 调用（Phase 2-3 跳过此步） | 4 |
+| ③ | 记忆写入（FR-12） | 异步入队 | 重要性评估后决定是否写入 | 3a |
+| ④ | Prompt 情境更新（FR-36） | 标记脏位 | 下次 LLM 调用时生效 | 2 |
 
 ### 4.4 记忆系统
 
@@ -826,12 +842,22 @@ UAINpcComponent 订阅 UNpcEventSubsystem，按标签过滤后依次执行：
 │  宿主: UAINpcComponent                   │
 │  生命周期: 对话 Session                   │
 │  用途: LLM 上下文窗口                     │
+│  Session 定义：                           │
+│    开始 = 首次 RequestDialogue 调用       │
+│    结束 = 超时 5min 无交互 / 玩家离开     │
+│           感知范围 / 显式 EndDialogue()   │
+│    结束时：摘要写入情景记忆（Phase 3a+）   │
+│    多玩家：每 PlayerId 独立 Session       │
 ├─────────────────────────────────────────┤
 │         情景记忆（Episodic Memory）       │
 │  TArray<FMemoryEntry>, ~200 条上限       │
 │  宿主: UAINpcComponent                   │
 │  生命周期: NPC 实例（关卡切换时持久化）     │
 │  写入门槛: Importance ≥ 3                │
+│  持久化: 共用 memories 表（memory_type=1） │
+│  加载: BeginPlay 时按 NpcId+memory_type  │
+│        从 SQLite 加载回 TArray            │
+│  写回: EndPlay 时批量写入 SQLite          │
 ├─────────────────────────────────────────┤
 │         长期记忆（Long-term Memory）      │
 │  SQLite, 无上限                          │
@@ -858,7 +884,9 @@ UAINpcComponent 订阅 UNpcEventSubsystem，按标签过滤后依次执行：
   │
   ├─ Content = 事件描述（由 FInstancedStruct 载荷的 ToString() 或蓝图辅助函数格式化）
   ├─ MemoryType = Experiential
-  ├─ Importance = |FinalGoalRelevance| × 10（评价链步骤②的输出直接喂入）
+  ├─ Importance：
+  │   Phase 4+：|FinalGoalRelevance| × 10（评价链步骤②的输出直接喂入）
+  │   Phase 3a（评价链未启用）：按事件标签预设映射（攻击=7, 赠礼=5, 对话=3, 其他=4）
   │   Clamp[0, 10]
   └─ Timestamp = FDateTime::Now()
 
@@ -1072,6 +1100,8 @@ public:
 };
 ```
 
+> **设计决策：FVADState 不持久化**。情感状态为纯运行时数据，NPC 重生/关卡切换后重置为默认值（Valence=0, Arousal=0, Dominance=0.5）。理由：情感是短期状态，自然衰减机制已保证趋向基线；长期情感印象通过记忆系统间接体现（如"上次被攻击"的记忆会在下次对话时通过 Prompt 影响 LLM 输出）。
+
 #### 4.5.3 关系更新（FR-22）
 
 ```
@@ -1089,10 +1119,16 @@ UAINpcComponent::UpdateRelationship(PlayerId, Delta)
   Trust      → 向 50 衰减（速率 0.005/s）
   Familiarity → 不衰减（只增不减）
 
-关系数据存储：
+关系数据存储与生命周期：
   TMap<FString /*PlayerId*/, FRelationshipData> Relationships;
   独立持久化到 SQLite relationships 表（6.4 节）
-  持久化时机：关卡切换/存档时由 UMemorySubsystem 统一写入
+
+  生命周期：
+  ├─ 加载（BeginPlay）：UAINpcComponent 向 UMemorySubsystem 注册，
+  │   UMemorySubsystem 按 NpcId 从 relationships 表加载已有数据填充 TMap
+  ├─ 运行时：LLM 响应 Delta 更新 + Tick 自然衰减
+  ├─ 写回（EndPlay）：UAINpcComponent 注销时将 TMap 回写 UMemorySubsystem
+  └─ 批量刷盘：关卡切换/存档时 UMemorySubsystem 遍历注册表统一写入 SQLite
 ```
 
 ### 4.6 Prompt 工程（FR-36/37）
@@ -1118,7 +1154,8 @@ UAINpcComponent::UpdateRelationship(PlayerId, Delta)
 │  Phase 4 启用                             │
 ├─────────────────────────────────────────┤
 │  ⑤ 输出约束（Output）— 不可覆盖/不可截断   │
-│  JSON Schema + 语言约束 + 动作格式要求      │
+│  Phase 1：纯自然语言回复 + 语言约束         │
+│  Phase 2+：JSON Schema + 动作格式要求       │
 └─────────────────────────────────────────┘
 
 Token 超限截断优先级（从低到高）：
@@ -1215,8 +1252,11 @@ private:
         const FString& NpcId);                                  // 角色扮演正则 + 信任计数器
     bool DetectInstructionOverride(const FString& Input) const; // 指令覆盖模式
 
-    // 每个 NPC 的渐进式信任计数器（社会工程检测用）
-    TMap<FString, int32> TrustEscalationCounters;
+    // 渐进式信任计数器（社会工程检测用）
+    // Key = PlayerId（按攻击者维度追踪，同一玩家对不同 NPC 的试探累计计数）
+    // 衰减：每 10min 无新触发 → 计数器 -1，最低归零
+    // 阈值：计数器 ≥ 3 → ThreatScore 提升，≥ 5 → 直接拒绝
+    TMap<FString /*PlayerId*/, int32> TrustEscalationCounters;
 };
 ```
 
@@ -1278,6 +1318,8 @@ private:
 
 ### 4.8 网络同步（FR-38）
 
+> **Phase 依赖说明**：`FParsedLLMResponse` 结构体在 Phase 1 即定义（仅数据容器），Phase 1 手动填充 `Dialogue` 字段；Phase 2 引入 `LLMResponseParser` 后自动填充全部字段。
+
 ```cpp
 // ---- AINpcNetworkComponent.h ----
 
@@ -1327,6 +1369,7 @@ private:
 Player          UAINpcComponent    PromptBuilder    LLMRequestSub    ILLMProvider    LLMResponseParser
   │                   │                 │                │                │                │
   │──RequestDialogue─►│                 │                │                │                │
+  │                   │─[多人模式：以下全部步骤在 Server 端执行（HasAuthority），见 4.8 节权威边界]
   │                   │─[InputSanitizer.Sanitize() — Phase 4 启用，Phase 1-3 直接透传]
   │                   │──Build()───────►│                │                │                │
   │                   │                 │─[5层拼接+截断]─►│                │                │
@@ -1348,17 +1391,22 @@ Player          UAINpcComponent    PromptBuilder    LLMRequestSub    ILLMProvide
   │                   │  ├─ 通过 → 继续                  │                │                │
   │                   │  └─ 拒绝 → 重试 1 次（Prompt 追加约束），仍拒绝 → 降级 FallbackResponses
   │                   │─[UpdateEmotion(Delta)]           │                │                │
+  │                   │  └─ Phase 4 启用后生效，Phase 1-3 跳过
   │                   │─[UpdateRelationship(Delta)]      │                │                │
+  │                   │  └─ Phase 4 启用后生效，Phase 1-3 跳过
   │                   │─[WriteMemory(异步)]              │                │                │
+  │                   │  └─ Phase 3a 启用后生效，Phase 1-2 跳过
   │                   │                 │                │                │                │
+  │                   │─[多人模式：Server 通过 MulticastDialogueResponse 广播结果]
   │◄──Dialogue Text───│  [StateTree: Speaking]           │                │                │
+  │                   │  [客户端仅负责 UI 显示+动画播放，不执行状态更新]
   │                   │                 │                │                │                │
 ```
 
 ### 5.2 事件处理流程
 
 ```
-HostGame           NpcEventSubsystem      UAINpcComponent        AppraisalEngine    MemorySubsystem
+HostGame           NpcEventSubsystem      UAINpcComponent        UAppraisalEngine   UMemorySubsystem
   │                      │                      │                      │                │
   │──BroadcastEvent─────►│                      │                      │                │
   │  (Tag + Payload)     │──OnNpcEvent──────────►│                      │                │
@@ -1529,7 +1577,7 @@ CREATE TABLE IF NOT EXISTS relationships (
 
 | 类/文件 | 实现内容 | 对应 FR |
 |---------|---------|---------|
-| UMemorySubsystem | SQLite 连接管理，按 NpcId 分表 | FR-9, FR-16 |
+| UMemorySubsystem | SQLite 连接管理，单表按 NpcId 索引 | FR-9, FR-16 |
 | IRelevanceScorer | 检索评分接口 + 默认实现 | FR-10 |
 | IEmbeddingProvider | 向量化接口（无实现时降级 FTS5） | FR-17 |
 | UMemoryConflictResolver | 冲突解决（5 种操作 + LLM 判断） | FR-13 |
