@@ -1,7 +1,7 @@
 ﻿# AINpc 插件产品需求文档（PRD）
 
 > 来源：AI_NPC_Plugin_Research.md + AI_NPC_Reference_Analysis.md
-> 版本：1.2
+> 版本：1.3
 > 日期：2026-03-01
 
 ---
@@ -76,8 +76,8 @@ UE5 即插即用的 AI NPC 插件，通过 LLM 驱动 NPC 的对话、情感、�
 - [ ] α/β/γ 可在 DataAsset 中配置（不同 NPC 类型不同预设）
 - [ ] 选择性写入：重要性 < 3 不入情景记忆，< 5 不入长期记忆
 - [ ] 记忆持久化到 SQLite，支持存档/读档
-- [ ] 记忆冲突解决（P0）：写入前检索相似记忆，异步 LLM 判断五种操作——ADD（无冲突新增）/ UPDATE（新信息覆盖旧信息）/ MERGE（合并为更完整记忆）/ COEXIST（矛盾记忆并存）/ SUPERSEDE（完全取代）
-- [ ] 主动遗忘（P0）：情景记忆满 200 条时按 EvictionScore 淘汰
+- [ ] 记忆冲突解决（P0，Phase 3a 内最高优先级）：写入前检索相似记忆，异步 LLM 判断五种操作——ADD（无冲突新增）/ UPDATE（新信息覆盖旧信息）/ MERGE（合并为更完整记忆）/ COEXIST（矛盾记忆并存）/ SUPERSEDE（完全取代）
+- [ ] 主动遗忘（P0，Phase 3a 内最高优先级）：情景记忆满 200 条时按 EvictionScore 淘汰
 
 ### US-4：反思与压缩（Phase 3b）
 **作为**游戏开发者，**我希望**NPC 能从经历中总结出高层洞察，**以便**NPC 表现出"成长"和"理解"。
@@ -133,7 +133,7 @@ UE5 即插即用的 AI NPC 插件，通过 LLM 驱动 NPC 的对话、情感、�
 - FR-2：统一 Request/Response 结构，Provider 能力自动探测与降级（无 JSON Mode 时用 prompt 约束）
 - FR-3：异步非阻塞调用，GameThread 零等待
 - FR-4：自建 SSE Parser 处理流式响应（`data:` 前缀、`[DONE]` 终止、跨包拼接、连接中断重连、心跳 `:` 注释行、`error` 事件处理）
-- FR-5：自动重试（指数退避）+ 超时 + 降级（云端超时→本地 fallback）
+- FR-5：自动重试（指数退避）+ 超时 + 降级（Phase 1 降级到预设模板响应；Phase 2+ 降级到本地 SLM fallback）
 - FR-6：API Key 通过项目设置（`AINpcSettings`）或 DataAsset 配置
 - FR-7：C++/蓝图双通道：静态委托（C++）+ 动态多播委托（蓝图）
 - FR-8：提供 `AAINpcController` 基类（继承 AAIController）和 `UAINpcComponent` 双入口
@@ -143,17 +143,17 @@ UE5 即插即用的 AI NPC 插件，通过 LLM 驱动 NPC 的对话、情感、�
 - FR-10：Stanford 检索公式 Score = α×Recency + β×Importance + γ×Relevance，α/β/γ 可配置；各分量通过 `IRelevanceScorer` 接口计算，项目方可替换默认实现
 - FR-11：分段时间衰减：Δt<1h 不衰减 / Δt<1d=0.8 / Δt<1w=0.5 / 超过 1w 指数衰减（替换纯指数衰减）
 - FR-12：选择性写入：重要性 < 3 不入情景记忆，< 5 不入长期记忆
-- FR-13：记忆冲突解决：写入前检索相似记忆（有 Embedding 用向量检索，无 Embedding 降级为 FTS5 BM25 相似度），Top-K=5 候选，相似度阈值默认 0.75（可配置），异步 LLM 判断 ADD/UPDATE/MERGE/COEXIST/SUPERSEDE；LLM 判断失败时降级为 ADD；COEXIST 的矛盾记忆检索时全部返回并标记 `Contradicted` 标签，由 Prompt 层呈现矛盾供 LLM 自行判断
+- FR-13：记忆冲突解决：写入前检索相似记忆（有 Embedding 用向量检索，无 Embedding 降级为 FTS5 BM25 相似度），Top-K=5 候选，相似度阈值默认 0.75（可配置），异步 LLM 判断 ADD/UPDATE/MERGE/COEXIST/SUPERSEDE（此 LLM 调用计入 NFR-3 并发配额，与对话请求共享限流池）；LLM 判断失败时降级为 ADD；COEXIST 的矛盾记忆检索时全部返回并标记 `Contradicted` 标签，由 Prompt 层呈现矛盾供 LLM 自行判断
 - FR-14：主动遗忘：EvictionScore = w1×(1-Recency) + w2×(1-Importance) + w3×(1-AccessFrequency)
 - FR-15：反思机制：累积重要性 > 150 触发，LLM 提取洞察写回记忆流，洞察带 Evidence Pointers（轻量实现：洞察条目存储 `SourceMemoryIds: TArray<int64>` 指向源记忆，无需额外存储层）
 - FR-16：记忆持久化到 SQLite，支持存档/读档，条目带 SchemaVersion 支持迁移
-- FR-17：`IEmbeddingProvider` 接口（Phase 3a 随记忆系统引入），无 Embedding 时降级为 SQLite FTS5 全文搜索
+- FR-17：`IEmbeddingProvider` 接口（Phase 3a 随记忆系统引入，FR-13 向量检索的前置依赖），无 Embedding 时降级为 SQLite FTS5 全文搜索
 - FR-18：记忆条目 MemoryType 字段：Factual / Experiential / Working，检索时可按类型过滤
 - FR-19：记忆间显式链接 `LinkedMemoryIds`，写入时异步分析链接关系，检索时沿链接扩展 1 跳
 
 ### 情感与关系系统
 - FR-20：VAD 三维情感状态（Valence/Arousal/Dominance）+ `FGameplayTagContainer` 情感标签
-- FR-21：评价链前置（本地规则计算）：事件类型 + NPC 人格参数 → 4 维评价（Goal Relevance/Certainty/Agency/Coping Potential）→ 情感推导；规则表通过 `NpcPersonaDataAsset` 中的 `TMap<FGameplayTag, FAppraisalRule>` 配置，插件提供常见事件类型的默认规则集
+- FR-21：评价链前置（本地规则计算）：事件类型 + NPC 人格参数 → 4 维评价（Goal Relevance/Certainty/Agency/Coping Potential）→ 情感推导；规则表通过 `NpcPersonaDataAsset` 中的 `TMap<FGameplayTag, FAppraisalRule>` 配置，插件提供常见事件类型的默认规则集（攻击/被攻击/收礼/赠礼/对话/交易/威胁/赞美，共 8 类）
 - FR-22：关系模型 Affinity/Trust/Familiarity，事件触发数值变化，随时间自然衰减
 - FR-23：OCEAN 五维人格参数，Prompt 注入时同时传数值和描述
 - FR-24：人格惯性系数，情感衰减速率 = BaseDecayRate × (1 - Neuroticism × 0.5)（高神经质→衰减慢→情绪持续更久）
@@ -162,27 +162,28 @@ UE5 即插即用的 AI NPC 插件，通过 LLM 驱动 NPC 的对话、情感、�
 ### 行为执行层
 - FR-26：LLM 输出结构化 JSON（dialogue + actions + emotion_delta + relationship_delta）
 - FR-27：`LLMResponseParser` 三级降级：严格 JSON → 宽松提取 → 纯文本
-- FR-28：自定义 StateTree Task（`FStateTreeTask_LLMQuery`、`FStateTreeTask_ExecuteSmartObject`）
-- FR-29：SmartObject 动态注入：构建 Prompt 前查询 NPC 周围可交互对象，注入合法动作列表
-- FR-30：自建 SmartObjectBridge 模块：槽位查找/占用/释放/位置获取
-- FR-31："裁判"架构：LLM 只建议，StateTree 验证合法性后才执行；Phase 2 起即内置基础动作白名单（仅允许 SmartObject 动态注入列表中的动作），Phase 4 OutputValidator 扩展为完整校验
-- FR-32：延迟掩盖机制（插件只提供触发框架，不提供动画资产）：StateTree 状态切换时自动触发 `UAnimMontage` 插槽 + `OnDelayMaskingStart/End` 蓝图事件 + `NpcPersonaDataAsset` 中按策略类型（思考/受击/端详/超时）配置 Montage 引用；示例项目提供占位动画演示
+- FR-28：核心 StateTree 状态定义：Idle → WaitingForLLM → Speaking → Cooldown → Idle，超时（默认 4s，可配置）自动回退 Idle；插件提供默认 StateTree 资产，项目方可替换
+- FR-29：自定义 StateTree Task（`FStateTreeTask_LLMQuery`、`FStateTreeTask_ExecuteSmartObject`）
+- FR-30：SmartObject 动态注入：构建 Prompt 前查询 NPC 周围可交互对象，注入合法动作列表
+- FR-31：自建 SmartObjectBridge 模块：槽位查找/占用/释放/位置获取
+- FR-32："裁判"架构：LLM 只建议，StateTree 验证合法性后才执行；Phase 2 起 `FStateTreeTask_ExecuteSmartObject` 内联基础白名单校验（仅允许 SmartObject 动态注入列表中的动作），Phase 4 抽出 `IActionValidator` 接口由 OutputValidator 实现完整校验
+- FR-33：延迟掩盖机制（插件只提供触发框架，不提供动画资产）：两条触发路径——①StateTree 状态切换时自动触发 `UAnimMontage` 插槽；②`NpcEventSubsystem` 事件到达时即时触发（受击等不等 StateTree Tick）。统一通过 `OnDelayMaskingStart/End` 蓝图事件通知，`NpcPersonaDataAsset` 中按策略类型（思考/受击/端详/超时）配置 Montage 引用；示例项目提供占位动画演示
 
 ### 感知系统
-- FR-33：`NpcEventSubsystem`（GameInstanceSubsystem）全局委托广播，宿主只需广播标签+载荷
-- FR-34：事件载荷采用 `FInstancedStruct`（C++ 灵活性优先），配套蓝图辅助函数封装常用载荷类型
+- FR-34：`NpcEventSubsystem`（GameInstanceSubsystem）全局委托广播，宿主只需广播标签+载荷
+- FR-35：事件载荷采用 `FInstancedStruct`（C++ 灵活性优先），配套蓝图辅助函数封装常用载荷类型
 
 ### Prompt 工程
-- FR-35：Prompt 黄金模板结构：系统层（不可覆盖，代码级强制拼接，开发者无法通过 DataAsset 移除）→ 人格层（OCEAN+说话风格）→ 记忆层（动态注入）→ 情境层（每次更新）→ 输出约束。分阶段渐进展开：Phase 1 仅启用系统层+人格层+输出约束；Phase 3a 增加记忆层；Phase 4 增加情境层（情感/关系/评价链/SmartObject 列表）
-- FR-36：Prompt 模板可通过 `NpcPersonaDataAsset` 自定义覆盖各层内容
+- FR-36：Prompt 黄金模板结构：系统层（不可覆盖，代码级强制拼接，开发者无法通过 DataAsset 移除）→ 人格层（OCEAN+说话风格）→ 记忆层（动态注入）→ 情境层（每次更新）→ 输出约束。分阶段渐进展开：Phase 1 仅启用系统层+人格层+输出约束；Phase 3a 增加记忆层；Phase 4 增加情境层（情感/关系/评价链/SmartObject 列表）
+- FR-37：Prompt 模板可通过 `NpcPersonaDataAsset` 自定义覆盖各层内容
 
 ### 网络同步
-- FR-40：多人游戏权威边界：LLM 调用和记忆写入在 Server 端执行（`UFUNCTION(Server)`），对话文本和动作指令通过 Multicast RPC 同步到客户端；单机模式跳过网络层直连
+- FR-38：多人游戏权威边界：LLM 调用和记忆写入在 Server 端执行（`UFUNCTION(Server)`），对话文本和动作指令通过 Multicast RPC 同步到客户端；单机模式跳过网络层直连
 
 ### 安全系统
-- FR-37：`InputSanitizer` 覆盖 3 类攻击：直接提示 / 社会工程 / 指令覆盖
-- FR-38：`OutputValidator`：JSON Schema 校验 + 动作白名单 + 人设边界检测 + system prompt 泄露检测
-- FR-39：异常亲密度增长检测，超阈值触发防御升级
+- FR-39：`InputSanitizer` 覆盖 3 类攻击：直接提示 / 社会工程 / 指令覆盖
+- FR-40：`OutputValidator`：JSON Schema 校验 + 动作白名单 + 人设边界检测 + system prompt 泄露检测
+- FR-41：异常亲密度增长检测，超阈值触发防御升级
 
 ---
 
@@ -223,6 +224,20 @@ UE5 即插即用的 AI NPC 插件，通过 LLM 驱动 NPC 的对话、情感、�
 - SSE Parser 自建：引擎 `FHttpRequestStreamDelegate` 仅提供原始字节流
 - 感知解耦用 `UGameInstanceSubsystem` 全局委托，不依赖 Lyra 的 GameplayMessageRouter
 - 情感数值本地计算，不依赖 Provider
+
+### NpcPersonaDataAsset 字段总览（各 FR 汇总）
+| 字段 | 类型 | 来源 FR | Phase |
+|------|------|---------|-------|
+| ApiKey | FString | FR-6 | 1 |
+| PersonaName / Background / SpeakingStyle | FString | US-1 | 1 |
+| PromptTemplateOverrides | TMap\<EPromptLayer, FString\> | FR-37 | 1 |
+| DelayMaskingMontages | TMap\<EDelayStrategy, TSoftObjectPtr\<UAnimMontage\>\> | FR-33 | 1 |
+| RetrievalWeights (α/β/γ) | FVector | FR-10 | 3a |
+| AppraisalRules | TMap\<FGameplayTag, FAppraisalRule\> | FR-21 | 4 |
+| OCEAN | FNpcOceanPersonality (5×float) | FR-23 | 4 |
+| PersonalityInertia | float | FR-24 | 4 |
+
+> 此表为 PRD 级草案，SDD 阶段确定最终字段名和嵌套结构。
 
 ---
 
@@ -273,7 +288,7 @@ UE5 即插即用的 AI NPC 插件，通过 LLM 驱动 NPC 的对话、情感、�
 
 - 开发者从插件安装完成到 NPC 开口说话 < 15 分钟（Phase 1 验收基准，前提：已有可编译的 UE5 项目）
 - LLM 响应延迟 P50 < 2s，P95 < 4s（Phase 1 起持续度量）
-- 人设一致性：连续 50 轮对话中 OutputValidator 人设边界拒绝率 < 5%（Phase 4 起自动化统计）
+- 人设一致性：连续 50 轮正常对话（非攻击场景）中 OutputValidator 人设边界拒绝率 < 5%（Phase 4 起自动化统计）
 - 提示注入防御：3 类攻击场景测试通过率 > 90%（Phase 4 验收基准）
 - 记忆检索准确率：Top-5 召回中包含正确记忆 > 80%（Phase 3a 验收基准）
 - 蓝图全流程可用：四个核心流程无需写一行 C++（Phase 1 起持续保证）
