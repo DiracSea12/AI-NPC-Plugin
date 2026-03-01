@@ -63,7 +63,7 @@
 | **Personica AI** | Cognitive NPC Brain 插件（Fab商城） | UE5插件 | ★★★ 即插即用竞品参考 |
 
 **关键洞察：**
-- Inworld：2025年从游戏NPC Character Engine扩展为通用Agent Runtime平台（2025.08.13 正式发布 Inworld Runtime，定位"首个面向消费级应用的 AI Runtime"），记忆/情感/多模态编排架构仍为业界标杆；已发布 Unreal AI Runtime SDK（Fab商城+GitHub开源）
+- Inworld：2025年从游戏NPC Character Engine扩展为通用Agent Runtime平台（2025.08.13 正式发布 Inworld Runtime，定位"首个面向消费级应用的 AI Runtime"），记忆/情感/多模态编排架构仍为业界标杆；已发布 Unreal AI Runtime SDK（Fab商城+GitHub开源）；新增 Multi-Agent 功能（2-5 角色群组对话 + Director Layer 编排对话轮次）和 Dynamic Relationships（关系阶段：陌生→熟人→朋友→密友，阶段升级触发事件）
 - NVIDIA ACE：已发布 ACE Unreal Plugin 2.5 + NVIGI SDK（本地推理），开源 Audio2Face-3D 动画模型，支持本地 SLM 推理，RTX 40系列+ 可本地运行推理管线
 - Convai：开源UE5 SDK（GitHub），感知环境并执行游戏内动作，路线图包含流式视觉感知
 - Personica AI：Fab 商城上架的 Cognitive NPC Brain 插件，定位与本插件相似，可作为竞品参考
@@ -484,13 +484,13 @@ Plugins/AINpc/
 |------|-------------|-----------|-----------|--------|-------------------|-------------------|
 | 自主行为 | ⚠️ 动作队列 | ⚠️ 有限 | ❌ | ❌ | ❌ | ✅ 日程循环 |
 | 主动交互 | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ 条件触发 |
-| NPC社交 | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ 轻量协议 |
+| NPC社交 | ❌ | ⚠️ Multi-Agent | ❌ | ❌ | ❌ | ✅ 轻量协议 |
 | 情感外化 | ❌ | ⚠️ 文本 | ✅ 面部动画 | ⚠️ 文本 | ❌ | ✅ 动画参数接口 |
 | 流式首Token | ❌ | ✅ | ✅ | ❌ (~20s) | ⚠️ Phase 2 SSE | ✅ <500ms |
 | 记忆深度 | ⚠️ 排名 | ⚠️ 基础 | ❌ | ⚠️ 基础 | ✅ 三层+冲突解决 | ✅ |
 | 情感系统 | ❌ | ⚠️ 基础 | ⚠️ 预设 | ⚠️ 基础 | ✅ VAD+评价链 | ✅ |
 
-**关键洞察**：记忆和情感是"正确但不够"的基础设施。真正让玩家感到 NPC "活着"的是自主行为和主动交互。Personica 有基础动作队列自主执行（Autonomy System），但缺少日程驱动和时间感知；主动交互仍是所有竞品的空白区。Ubisoft Teammates（2025.11）已验证 proactive NPC 方向的商业价值，AAA 工作室正在投入资源。
+**关键洞察**：记忆和情感是"正确但不够"的基础设施。真正让玩家感到 NPC "活着"的是自主行为和主动交互。Personica 有基础动作队列自主执行（Autonomy System），但缺少日程驱动和时间感知；Inworld 已发布 Multi-Agent 功能（2-5 角色群组对话 + Director Layer 编排），但仅限云端 SaaS；GaminAI 已在商业农场模拟游戏中验证 LLM 生成 NPC 日程的可行性。Ubisoft Teammates（2025.11）已验证 proactive NPC 方向的商业价值，AAA 工作室正在投入资源。
 
 ### 7.4 成本估算
 
@@ -617,6 +617,10 @@ Phase 1-5 解决了"NPC 能不能聊天"的问题，Phase 6 解决了"NPC 像不
 - [OmniCharacter: Towards Unified Character Generation (arXiv 2025)](https://arxiv.org/abs/2505.20277) - 统一角色生成框架
 - [Open-Theatre: Multi-Agent NPC Interaction (EMNLP 2025)](https://aclanthology.org/2025.emnlp-main.open-theatre) - 多Agent NPC交互框架
 - [Exploring Presence with AI NPCs (ACM 2024)](https://dl.acm.org/doi/10.1145/3613905.3650756) - AI NPC沉浸感玩家体验研究
+- [Sentipolis: Emotion-Aware Agent Social Simulation (arXiv 2026)](https://arxiv.org/abs/2601.18027) - 情感感知Agent社交模拟，双速情感动态
+- [Deflanderization: NPC Character Authenticity (arXiv 2025)](https://arxiv.org/abs/2510.13586) - LLM NPC过度角色扮演问题
+- [AI NPC Believability in VR (arXiv 2025)](https://arxiv.org/abs/2507.10469) - VR环境AI NPC可信度实证评估
+- [EvoEmo: Evolutionary RL for Emotion (arXiv 2025)](https://arxiv.org/abs/2509.04310) - 进化RL优化情感表达策略
 
 ### 商业方案
 - [Inworld AI - Agent Runtime平台](https://inworld.ai/blog/introducing-unreal-ai-runtime-sdk)
@@ -625,6 +629,9 @@ Phase 1-5 解决了"NPC 能不能聊天"的问题，Phase 6 解决了"NPC 像不
 - [NVIDIA ACE 开源SLM本地部署](https://developer.nvidia.com/blog/nvidia-ace-adds-open-source-qwen3-slm-for-on-device-deployment-in-pc-games/)
 - [Convai UE5 SDK](https://github.com/Conv-AI/Convai-UnrealEngine-SDK)
 - [Personica AI - Cognitive NPC Brain](https://www.fab.com/listings/personica-ai) - Fab商城竞品插件
+- [Inworld Multi-Agent Feature](https://inworld.ai/blog/multi-agent-feature-npc-to-npc) - NPC间群组对话 + Director Layer
+- [Inworld Dynamic Relationships](https://www.inworld.ai/blog/introducing-dynamic-relationships) - 关系阶段系统
+- [GaminAI - AI-Driven NPC Schedules](https://gamineai.com/blog/case-study-shipping-cozy-farming-sim-ai-driven-npc-schedules) - LLM生成NPC日程商业案例
 - [NVIDIA ACE × PUBG 合作公告](https://nvidianews.nvidia.com/news/nvidia-ace-generative-ai-microservices) - ACE商业合作案例
 - [Where Winds Meet "Solid Snake Method" 提示注入事件](https://www.pcgamesn.com/where-winds-meet/ai-npc-exploit) - LLM NPC安全风险实例
 
