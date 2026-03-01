@@ -583,6 +583,45 @@ ConceptNode 数据结构的关键字段：
 | 6 | 情感动画参数应分离"基础表情"和"情感叠加" | EMOTE | 4.9.5 情感外化接口 |
 | 7 | 情感过渡使用平滑插值避免突变 | EMOTE | 4.9.5 情感外化接口 |
 
+#### 4.5.7 Phase 6 专项 Review 补充发现（2026-03，独立 Agent 调研）
+
+> 由独立 Agent 带上网检索能力进行 Phase 6 全量 Review，以下为经逐条核实后采纳的增量发现。
+
+**新发现的论文/项目（文档此前未覆盖）：**
+
+| 论文/项目 | 核心贡献 | 对 Phase 6 的影响 |
+|-----------|----------|------------------|
+| **Persona Drift 研究** (2402.10962) | LLM 在 8 轮对话内出现显著人格漂移 | FR-44 NPC社交必须限制 LLM 对话轮数 |
+| **Consistent-LLMs** (2511.00222) | 多轮 RL 微调可将人格不一致性降低 55% | 长期优化方向 |
+| **行为退化量化** (2601.04170) | 多 Agent 系统交互后决策质量下降 | FR-44 NPC社交的长期稳定性风险 |
+| **Prompt Caching 评测** (2601.06007) | Prefix caching 降低 TTFT 13-31%，成本 45-80% | FR-45 流式首Token 的关键遗漏 |
+| **Ubisoft Teammates** (2025.11) | AAA 工作室验证 proactive NPC 方向 | 验证 Phase 6 战略方向的商业价值 |
+| **SALM 框架** (2505.09081) | 多 Agent 社交网络的时间稳定性问题 | FR-44 长期运行的行为漂移风险 |
+| **Context Equilibria** (2510.07777) | 上下文漂移可通过定期重注入人格锚点缓解 | Persona drift 的理论缓解方案 |
+
+**经核实采纳的设计改进（已写入 SDD v1.6）：**
+
+| # | 改进项 | 来源 | 已写入SDD章节 |
+|---|--------|------|--------------|
+| 8 | Intensity 公式修复：`Arousal × max(\|Valence\|, 0.3)` | Review 独立发现 | 4.9.5 情感外化 |
+| 9 | 情感过渡 Lerp 平滑 + MinEmotionDuration | EMOTE + Review | 4.9.5 情感外化 |
+| 10 | Prompt Caching 策略（稳定前缀+动态后缀） | 2601.06007 | 4.9.4 流式首Token |
+| 11 | 全局主动交互频率上限 MaxProactivePerInterval | Proactive Dialogue评测 | 4.9.2 主动交互 |
+| 12 | 日程模糊度参数 ScheduleFuzziness | Narrative-to-Action | 4.9.1 自主行为 |
+| 13 | 日程中断恢复策略（跳到当前时段） | Review 独立发现 | 4.9.1 自主行为 |
+| 14 | NPC社交 Persona Drift 防护（轮数限制+人格重注入） | 2402.10962 | 4.9.3 NPC社交 |
+| 15 | 社交信息传播标记 bShareableWithPlayer | AgentSociety | 4.9.3 NPC社交 |
+| 16 | 社交对象选择随机因子（70/30） | Review 独立发现 | 4.9.3 NPC社交 |
+| 17 | 玩家状态前置检查（战斗/对话中跳过） | Review 独立发现 | 4.9.2 主动交互 |
+
+**未采纳的建议及理由：**
+
+| 建议 | 不采纳理由 |
+|------|-----------|
+| 增加"目标驱动"行为维度（Inworld Goals） | Phase 6 范围已足够大，目标驱动可作为 Phase 7 方向 |
+| Brain Modes 三档切换（Personica） | 已有 LOD 系统覆盖类似需求，命名不同但功能等价 |
+| 语音指令驱动（Ubisoft Teammates） | 超出插件范围，属于项目方集成层 |
+
 ---
 
 ## 五、综合总结：优先级行动清单

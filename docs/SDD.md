@@ -1,7 +1,7 @@
 ﻿# AINpc 插件系统设计文档（SDD）
 
 > 来源：docs/PRD.md v1.4
-> 版本：1.5
+> 版本：1.6
 > 日期：2026-03-01
 
 ---
@@ -1397,6 +1397,12 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite)
     TArray<FScheduleEntry> DailySchedule;
 
+    // 日程模糊度 [0, 1]：实际执行时间 = 计划时间 ± Fuzziness × 随机偏移
+    // 0 = 严格按时间执行，1 = 最大偏移（±30分钟游戏时间）
+    // 设计理由：纯静态时间槽会让 NPC 行为机械可预测，适度随机偏移增加"活人"感
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0", ClampMax = "1"))
+    float ScheduleFuzziness = 0.3f;
+
     // 根据当前游戏时间返回应执行的行为标签
     FGameplayTag GetCurrentBehavior(float GameHour) const;
 };
@@ -1420,6 +1426,12 @@ ST_AINpcDefault（扩展后）:
 - 高优先级子树激活时自动打断日程行为（StateTree 原生优先级机制）
 - 事件结束后 StateTree 自动回落到 ScheduleSubtree 恢复日程
 - 无日程表配置时降级为原有 Idle 行为，零破坏性
+
+**日程中断恢复策略（Review 后补充）：**
+
+- 中断结束后，ScheduleRouter 重新读取当前游戏时间，跳到对应时段（而非从中断点继续）
+- 若当前时间已超过被中断时段的 EndHour，直接进入下一时段
+- 设计理由：玩家与 NPC 对话 2 小时游戏时间后，NPC 不应"补做"已过去的工作时段，而应自然过渡到当前应做的事
 
 #### 4.9.2 主动交互触发（FR-43）
 
@@ -1450,10 +1462,27 @@ struct FProactiveCondition
 };
 ```
 
+**全局频率控制（Review 后补充）：**
+
+```cpp
+// UAINpcComponent 中的全局主动交互限制
+UPROPERTY(EditAnywhere, Category = "AINpc|Proactive")
+int32 MaxProactivePerInterval = 1;       // 每个时间窗口最多主动交互次数
+
+UPROPERTY(EditAnywhere, Category = "AINpc|Proactive")
+float ProactiveIntervalSeconds = 300.f;  // 时间窗口长度（默认5分钟）
+```
+
+> 设计理由：单条件冷却只防止同一条件反复触发，但多条件可能在短时间内依次命中。全局上限防止 NPC 变成"话痨"。Proactive Dialogue 评测论文（2508.20973）核心发现：过度主动比不够主动更令人反感。
+
 **评估流程（定时轮询，默认 30s）：**
 
 ```
 FStateTreeEvaluator_ProactiveCheck（StateTree Evaluator，每 30s Tick 一次）
+  │
+  ├─ 前置检查（Review 后补充）：
+  │   ├─ 全局频率上限：本窗口内已触发次数 < MaxProactivePerInterval
+  │   └─ 玩家状态：非战斗中（bPlayerInCombat）且非对话中（bPlayerInDialogue）
   │
   ├─ 检查玩家是否在感知范围内（AIPerception 或距离检测）
   ├─ 遍历 NpcPersonaDataAsset 中配置的 TArray<FProactiveCondition>
@@ -1530,6 +1559,26 @@ NPC_A 的 ScheduleSubtree 进入 "Schedule.Socialize" 时段
 - 玩家发起对话时立即打断社交，NPC 转入对话状态
 - 社交结果广播后，UI 层可选择性显示旁观气泡（默认不显示，蓝图可开启）
 
+**Persona Drift 防护（Review 后补充）：**
+
+研究表明 LLM 在 8 轮对话内就会出现显著人格漂移（2402.10962），NPC↔NPC 社交如果使用 LLM 路径，长期运行后两个 NPC 的人格可能互相"污染"。
+
+- LLM 路径社交对话最大轮数限制：2-3 轮（不含模板路径）
+- 每次 LLM 社交 Prompt 必须重新注入完整人格层（不依赖上下文延续）
+- 社交对话结果经过轻量 OutputValidator 校验（至少检查人设边界词汇）
+
+**社交信息传播（Review 后补充）：**
+
+- 社交记忆增加 `bShareableWithPlayer` 标志（默认 true）
+- 后续与玩家对话时，PromptBuilder 可注入"我听说..."类型的社交记忆
+- 实现 NPC 之间的"口碑传播"效果，增强世界活性感知
+
+**社交对象选择优化（Review 后补充）：**
+
+- 70% 概率选择 Familiarity 最高的附近 NPC
+- 30% 概率随机选择附近 NPC（引入新关系建立机会）
+- 避免固定社交圈导致的行为单调
+
 #### 4.9.4 流式首 Token 优化（FR-45）
 
 基于 Phase 2 已有的 SSE 流式能力，优化首个可见字符的到达时间。
@@ -1578,6 +1627,33 @@ void FSSEParser::ProcessChunk(const TArray<uint8>& Data)
 - 非流式模式下此优化不生效，行为与 Phase 1 一致
 - `OnFirstTokenReceived` 为蓝图可绑定委托，项目方可自定义首 Token 响应行为
 
+**Prompt Caching 策略（Review 后补充）：**
+
+NPC 的 Prompt 结构天然适合 prefix caching——系统层+人格层在多次对话间高度稳定，记忆层+情境层是动态的。
+
+```
+Prompt 结构（缓存友好排列）：
+┌─────────────────────────────┐
+│ [系统层] 角色设定、禁止规则  │ ← 稳定前缀（可缓存）
+│ [人格层] OCEAN数值、说话风格  │ ← 稳定前缀（可缓存）
+├─────────────────────────────┤
+│ [记忆层] 相关记忆注入        │ ← 动态后缀（每次不同）
+│ [情境层] 当前场景、对话历史  │ ← 动态后缀（每次不同）
+│ [输出约束] 格式要求          │ ← 动态后缀
+└─────────────────────────────┘
+```
+
+- PromptBuilder 确保稳定内容始终在 Prompt 前部，动态内容在后部
+- 利用 OpenAI/Anthropic 的自动 prefix caching（无需额外 API 调用）
+- 预期收益：TTFT 降低 13-31%，token 成本降低 45-80%（参考 2601.06007 评测）
+- 延迟目标细化：本地模型 P50 < 200ms，云端 API P50 < 500ms
+
+**连接预热（可选增强）：**
+
+- 玩家进入 NPC 感知范围时，预先建立 HTTP 连接（TCP/TLS 握手）
+- 减少首次请求的连接建立延迟（约 50-150ms）
+- 实现：在 AIPerception 的 OnTargetPerceptionUpdated 中触发预连接
+
 #### 4.9.5 情感外化接口（FR-46）
 
 将 VAD 情感状态映射为动画蓝图可消费的参数结构，插件只提供数据接口，不提供动画资产。
@@ -1604,7 +1680,9 @@ struct AINPCRUNTIME_API FEmotionAnimParams
     UPROPERTY(BlueprintReadOnly)
     FGameplayTag PrimaryEmotion;
 
-    // 情感强度（Arousal × |Valence|，用于控制表情幅度）
+    // 情感强度，用于控制表情幅度
+    // 公式：Arousal × max(|Valence|, 0.3)
+    // 注：|Valence| 设 0.3 下限，确保高 Arousal 低 |Valence| 状态（如惊讶）仍有足够表情幅度
     UPROPERTY(BlueprintReadOnly)
     float Intensity = 0.f;
 };
@@ -1613,7 +1691,7 @@ struct AINPCRUNTIME_API FEmotionAnimParams
 **UAINpcComponent 接口：**
 
 ```cpp
-// 蓝图可调用，每帧或按需获取
+// 蓝图可调用，返回经过 Lerp 平滑后的情感参数（非瞬时值）
 UFUNCTION(BlueprintCallable, Category = "AINpc|Emotion")
 FEmotionAnimParams GetEmotionAnimParams() const;
 
@@ -1621,6 +1699,13 @@ FEmotionAnimParams GetEmotionAnimParams() const;
 UPROPERTY(BlueprintAssignable, Category = "AINpc|Emotion")
 FOnEmotionAnimParamsChanged OnEmotionAnimParamsChanged;
 ```
+
+**情感过渡平滑策略（Review 后补充）：**
+
+- `GetEmotionAnimParams()` 返回的是经过 `FMath::FInterpTo` 平滑后的值，而非情感系统的瞬时原始值
+- `EmotionLerpSpeed: float = 2.0f`（可配置）：控制情感插值速率，值越大过渡越快
+- `MinEmotionDuration: float = 2.0f`（可配置）：情感状态最小持续时间，防止表情闪烁
+- 多人模式同步策略：VAD 任一维度变化 > 0.1 时才广播 `OnEmotionAnimParamsChanged`，减少网络流量
 
 **项目方绑定示例（动画蓝图）：**
 
