@@ -1,7 +1,7 @@
 ﻿# AINpc 插件系统设计文档（SDD）
 
 > 来源：docs/PRD.md v1.4
-> 版本：1.2
+> 版本：1.3
 > 日期：2026-03-01
 
 ---
@@ -75,7 +75,7 @@ UNpcEventSubsystem (GameInstanceSubsystem)
  └── 全局委托广播，UAINpcComponent 自行订阅+过滤
 
 UMemorySubsystem (GameInstanceSubsystem)
- └── 持有 SQLite 连接，按 NpcId 分表管理长期记忆
+ └── 持有 SQLite 连接，单表按 NpcId 索引管理长期记忆
 
 ULLMRequestSubsystem (GameInstanceSubsystem)
  └── 管理并发限流（NFR-3）、请求队列、Provider 实例池
@@ -539,6 +539,48 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnDialogueReceived, const FString&
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnEmotionChanged, FVADState, NewState);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnRelationshipChanged, const FString&, PlayerId, FRelationshipData, NewData);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLLMFallback, const FString&, FallbackText);
+
+// ---- UAINpcComponent 蓝图公共 API（NFR-8）----
+// 四个核心流程的蓝图入口，确保纯蓝图可完成全流程
+
+UCLASS(ClassGroup=(AINpc), meta=(BlueprintSpawnableComponent))
+class UAINpcComponent : public UActorComponent
+{
+    GENERATED_BODY()
+public:
+    // ---- 蓝图可调用方法 ----
+
+    // 发起对话（核心流程②）
+    UFUNCTION(BlueprintCallable, Category="AINpc|Dialogue")
+    void RequestDialogue(const FString& PlayerInput);
+
+    // 查询关系数据（核心流程④）
+    UFUNCTION(BlueprintCallable, BlueprintPure, Category="AINpc|Relationship")
+    FRelationshipData GetRelationship(const FString& PlayerId) const;
+
+    // 获取当前情感状态
+    UFUNCTION(BlueprintCallable, BlueprintPure, Category="AINpc|Emotion")
+    FVADState GetCurrentEmotion() const;
+
+    // ---- 蓝图可绑定委托（核心流程③：监听响应）----
+
+    UPROPERTY(BlueprintAssignable, Category="AINpc|Dialogue")
+    FOnDialogueReceived OnDialogueReceived;
+
+    UPROPERTY(BlueprintAssignable, Category="AINpc|Emotion")
+    FOnEmotionChanged OnEmotionChanged;
+
+    UPROPERTY(BlueprintAssignable, Category="AINpc|Relationship")
+    FOnRelationshipChanged OnRelationshipChanged;
+
+    UPROPERTY(BlueprintAssignable, Category="AINpc|Dialogue")
+    FOnLLMFallback OnLLMFallback;
+
+    // ---- 配置（核心流程①：配置 Key）----
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AINpc|Config")
+    UNpcPersonaDataAsset* PersonaData;
+};
 ```
 
 #### 4.1.2 LLMRequestSubsystem（并发限流）
