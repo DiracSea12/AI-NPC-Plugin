@@ -1,0 +1,245 @@
+﻿{
+    "version":  1,
+    "story":  {
+                  "default":  [
+                                  {
+                                      "id":  "build-plugin-win64",
+                                      "shell":  "cmd",
+                                      "timeoutSec":  7200,
+                                      "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64)"
+                                  }
+                              ],
+                  "overrides":  {
+                                    "US-1-T2":  [
+                                                    {
+                                                        "id":  "fps-editor-build",
+                                                        "shell":  "cmd",
+                                                        "timeoutSec":  7200,
+                                                        "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild)"
+                                                    }
+                                                ]
+                                }
+              },
+    "phase":  {
+                  "1":  [
+                            {
+                                "id":  "phase1-editor-build",
+                                "shell":  "cmd",
+                                "timeoutSec":  7200,
+                                "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild)"
+                            },
+                            {
+                                "id":  "phase1-plugin-build",
+                                "shell":  "cmd",
+                                "timeoutSec":  7200,
+                                "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64)"
+                            },
+                            {
+                                "id":  "phase1-editor-log-smoke",
+                                "shell":  "powershell",
+                                "timeoutSec":  1800,
+                                "command":  "\u0026 \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\docs\\\\ralph\\\\run-editor-log-gate.ps1\u0027 -ProjectPath \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\\\\\VerifierHost.uproject\u0027 -LogDir \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\TestLogs\u0027 -TimeoutSec 900"
+                            }
+                        ],
+                  "2a":  [
+                             {
+                                 "id":  "phase2a-editor-build",
+                                 "shell":  "cmd",
+                                 "timeoutSec":  7200,
+                                 "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild)"
+                             },
+                             {
+                                 "id":  "phase2a-plugin-build",
+                                 "shell":  "cmd",
+                                 "timeoutSec":  7200,
+                                 "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64)"
+                             },
+                             {
+                                 "id":  "phase2a-editor-log-smoke",
+                                 "shell":  "powershell",
+                                 "timeoutSec":  1800,
+                                 "command":  "\u0026 \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\docs\\\\ralph\\\\run-editor-log-gate.ps1\u0027 -ProjectPath \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\\\\\VerifierHost.uproject\u0027 -LogDir \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\TestLogs\u0027 -TimeoutSec 900"
+                             }
+                         ],
+                  "2b":  [
+                             {
+                                 "id":  "phase2b-editor-build",
+                                 "shell":  "cmd",
+                                 "timeoutSec":  7200,
+                                 "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild)"
+                             },
+                             {
+                                 "id":  "phase2b-plugin-build",
+                                 "shell":  "cmd",
+                                 "timeoutSec":  7200,
+                                 "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64)"
+                             },
+                             {
+                                 "id":  "phase2b-editor-log-smoke",
+                                 "shell":  "powershell",
+                                 "timeoutSec":  1800,
+                                 "command":  "\u0026 \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\docs\\\\ralph\\\\run-editor-log-gate.ps1\u0027 -ProjectPath \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\\\\\VerifierHost.uproject\u0027 -LogDir \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\TestLogs\u0027 -TimeoutSec 900"
+                             }
+                         ],
+                  "2c":  [
+                             {
+                                 "id":  "phase2c-editor-build",
+                                 "shell":  "cmd",
+                                 "timeoutSec":  7200,
+                                 "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild)"
+                             },
+                             {
+                                 "id":  "phase2c-plugin-build",
+                                 "shell":  "cmd",
+                                 "timeoutSec":  7200,
+                                 "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64)"
+                             },
+                             {
+                                 "id":  "phase2c-editor-log-smoke",
+                                 "shell":  "powershell",
+                                 "timeoutSec":  1800,
+                                 "command":  "\u0026 \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\docs\\\\ralph\\\\run-editor-log-gate.ps1\u0027 -ProjectPath \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\\\\\VerifierHost.uproject\u0027 -LogDir \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\TestLogs\u0027 -TimeoutSec 900"
+                             }
+                         ],
+                  "2d":  [
+                             {
+                                 "id":  "phase2d-editor-build",
+                                 "shell":  "cmd",
+                                 "timeoutSec":  7200,
+                                 "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild)"
+                             },
+                             {
+                                 "id":  "phase2d-plugin-build",
+                                 "shell":  "cmd",
+                                 "timeoutSec":  7200,
+                                 "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64)"
+                             },
+                             {
+                                 "id":  "phase2d-editor-log-smoke",
+                                 "shell":  "powershell",
+                                 "timeoutSec":  1800,
+                                 "command":  "\u0026 \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\docs\\\\ralph\\\\run-editor-log-gate.ps1\u0027 -ProjectPath \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\\\\\VerifierHost.uproject\u0027 -LogDir \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\TestLogs\u0027 -TimeoutSec 900"
+                             }
+                         ],
+                  "3":  [
+                            {
+                                "id":  "phase3-editor-build",
+                                "shell":  "cmd",
+                                "timeoutSec":  7200,
+                                "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild)"
+                            },
+                            {
+                                "id":  "phase3-plugin-build",
+                                "shell":  "cmd",
+                                "timeoutSec":  7200,
+                                "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64)"
+                            },
+                            {
+                                "id":  "phase3-editor-log-smoke",
+                                "shell":  "powershell",
+                                "timeoutSec":  1800,
+                                "command":  "\u0026 \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\docs\\\\ralph\\\\run-editor-log-gate.ps1\u0027 -ProjectPath \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\\\\\VerifierHost.uproject\u0027 -LogDir \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\TestLogs\u0027 -TimeoutSec 900"
+                            }
+                        ],
+                  "4":  [
+                            {
+                                "id":  "phase4-editor-build",
+                                "shell":  "cmd",
+                                "timeoutSec":  7200,
+                                "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild)"
+                            },
+                            {
+                                "id":  "phase4-plugin-build",
+                                "shell":  "cmd",
+                                "timeoutSec":  7200,
+                                "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64)"
+                            },
+                            {
+                                "id":  "phase4-editor-log-smoke",
+                                "shell":  "powershell",
+                                "timeoutSec":  1800,
+                                "command":  "\u0026 \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\docs\\\\ralph\\\\run-editor-log-gate.ps1\u0027 -ProjectPath \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\\\\\VerifierHost.uproject\u0027 -LogDir \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\TestLogs\u0027 -TimeoutSec 900"
+                            }
+                        ],
+                  "5":  [
+                            {
+                                "id":  "phase5-editor-build",
+                                "shell":  "cmd",
+                                "timeoutSec":  7200,
+                                "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild)"
+                            },
+                            {
+                                "id":  "phase5-plugin-build",
+                                "shell":  "cmd",
+                                "timeoutSec":  7200,
+                                "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64)"
+                            },
+                            {
+                                "id":  "phase5-editor-log-smoke",
+                                "shell":  "powershell",
+                                "timeoutSec":  1800,
+                                "command":  "\u0026 \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\docs\\\\ralph\\\\run-editor-log-gate.ps1\u0027 -ProjectPath \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\\\\\VerifierHost.uproject\u0027 -LogDir \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\TestLogs\u0027 -TimeoutSec 900"
+                            }
+                        ],
+                  "6":  [
+                            {
+                                "id":  "phase6-editor-build",
+                                "shell":  "cmd",
+                                "timeoutSec":  7200,
+                                "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild)"
+                            },
+                            {
+                                "id":  "phase6-plugin-build",
+                                "shell":  "cmd",
+                                "timeoutSec":  7200,
+                                "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64)"
+                            },
+                            {
+                                "id":  "phase6-editor-log-smoke",
+                                "shell":  "powershell",
+                                "timeoutSec":  1800,
+                                "command":  "\u0026 \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\docs\\\\ralph\\\\run-editor-log-gate.ps1\u0027 -ProjectPath \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\\\\\VerifierHost.uproject\u0027 -LogDir \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\TestLogs\u0027 -TimeoutSec 900"
+                            }
+                        ],
+                  "7":  [
+                            {
+                                "id":  "phase7-editor-build",
+                                "shell":  "cmd",
+                                "timeoutSec":  7200,
+                                "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild)"
+                            },
+                            {
+                                "id":  "phase7-plugin-build",
+                                "shell":  "cmd",
+                                "timeoutSec":  7200,
+                                "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64)"
+                            },
+                            {
+                                "id":  "phase7-editor-log-smoke",
+                                "shell":  "powershell",
+                                "timeoutSec":  1800,
+                                "command":  "\u0026 \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\docs\\\\ralph\\\\run-editor-log-gate.ps1\u0027 -ProjectPath \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\\\\\VerifierHost.uproject\u0027 -LogDir \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\TestLogs\u0027 -TimeoutSec 900"
+                            }
+                        ],
+                  "8":  [
+                            {
+                                "id":  "phase8-editor-build",
+                                "shell":  "cmd",
+                                "timeoutSec":  7200,
+                                "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Binaries\\\\DotNET\\\\UnrealBuildTool\\\\UnrealBuildTool.exe\" FPSRoguelikeEditor Win64 Development \"-Project=G:\\\\UE5\\\\FPSRoguelike\\\\FPSRoguelike.uproject\" -WaitMutex -FromMsBuild)"
+                            },
+                            {
+                                "id":  "phase8-plugin-build",
+                                "shell":  "cmd",
+                                "timeoutSec":  7200,
+                                "command":  "if exist \"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64) else (\"G:\\\\UE5\\\\UnrealEngine\\\\Engine\\\\Build\\\\BatchFiles\\\\RunUAT.bat\" BuildPlugin -Plugin=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Plugins\\\\AINpc\\\\AINpc.uplugin -Package=G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\Build\\\\AINpc -TargetPlatforms=Win64)"
+                            },
+                            {
+                                "id":  "phase8-editor-log-smoke",
+                                "shell":  "powershell",
+                                "timeoutSec":  1800,
+                                "command":  "\u0026 \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\docs\\\\ralph\\\\run-editor-log-gate.ps1\u0027 -ProjectPath \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\\\\\VerifierHost.uproject\u0027 -LogDir \u0027G:\\\\UE5\\\\AI-NPC-Plugin\\\\Saved\\\\TestLogs\u0027 -TimeoutSec 900"
+                            }
+                        ]
+              }
+}
