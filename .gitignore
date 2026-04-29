@@ -1,0 +1,64 @@
+# Unreal Engine generated artifacts
+/Binaries/
+/DerivedDataCache/
+/Intermediate/
+/Saved/
+/Temp/
+Plugins/*/Binaries/
+Plugins/*/Intermediate/
+Plugins/*/Saved/
+Plugins/*/Plugins/
+
+# IDE and local tool state
+/.vs/
+/.serena/
+/__pycache__/
+.claude/
+.codex/
+CLAUDE.md
+*.VC.db
+
+# Local editor-only content
+/Content/Collections/
+/Content/Developers/
+
+# Generated plugin/package outputs
+/docs/ralph/image/
+/docs/Blueprint_*.md
+/docs/Blueprint_Quickstart*.md
+/openspec/
+/Plugins/AINpc/*.log
+/Plugins/nul
+
+# Root-level scratch logs and transient outputs
+/*.log
+/*.pid
+/nul
+/progress.txt
+/build_result.txt
+/build_output.txt
+/compile_output.txt
+/test_output.txt
+/fixed_event_binding.txt
+/GUE5AI-NPC-Plugin*
+*.bak
+
+# Root-level ad hoc probe and fix helpers
+/.manual_probe_cmd.cmd
+/.probe_*.cmd
+/.probe_*.ps1
+/apply_fix.py
+/fix_*.py
+/fix_*.patch
+/build_*.ps1
+/build_simple.bat
+/clean_automation_locks.ps1
+/compile_test.ps1
+/force_clean*.ps1
+/kill_*.ps1
+/list_tests.ps1
+/nuclear_clean.ps1
+/run_*.ps1
+/run_*.bat
+/temp_*.bat
+/test_*.ps1

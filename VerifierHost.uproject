@@ -1,0 +1,32 @@
+﻿{
+  "FileVersion": 3,
+  "EngineAssociation": "5.7",
+  "Category": "Tests",
+  "Description": "Verifier host",
+  "Plugins": [
+    {
+      "Name": "AINpc",
+      "Enabled": true
+    },
+    {
+      "Name": "CmdLinkServer",
+      "Enabled": false
+    },
+    {
+      "Name": "FabLauncher",
+      "Enabled": false
+    },
+    {
+      "Name": "FabLauncherQuixelDependencies",
+      "Enabled": false
+    },
+    {
+      "Name": "FabSharedInterchangeHandler",
+      "Enabled": false
+    },
+    {
+      "Name": "Design2UMG",
+      "Enabled": false
+    }
+  ]
+}
