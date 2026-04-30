@@ -9,6 +9,13 @@
 
 enum class ENpcEventDispatchStage : uint8;
 struct FNpcEventMessage;
+class FAINpcDialogueFallbackHandler;
+class FAINpcDialogueLifecycleHandler;
+class FAINpcDialogueRequestBuilder;
+class FAINpcComponentStateHandler;
+class FAINpcDelayMaskingHandler;
+class FAINpcEventRoutingHandler;
+class FAINpcMemoryMaintenanceHandler;
 class FOpenAIProvider;
 class UStateTree;
 class UAnimMontage;
@@ -180,13 +187,7 @@ private:
 	void EnsureProvider();
 	FLLMRequest BuildRequest() const;
 	FString BuildSystemPrompt() const;
-	bool DispatchDialogueRequest();
-	bool DispatchDialogueRequestNow();
 	bool TryDispatchQueuedDialogueRequest(uint64 QueueToken);
-	void CancelQueuedDialogueRequest();
-	void ReleaseDialogueDispatchSlot();
-	static void PumpQueuedDialogueRequests();
-	static int32 GetDialogueRequestConcurrencyLimit();
 	bool TryAcquireMemoryMaintenanceSlot();
 	bool TryAcquireQueuedMemoryMaintenanceSlot(uint64 QueueToken);
 	void CancelQueuedMemoryMaintenanceRequest();
@@ -194,20 +195,9 @@ private:
 	uint64 GetQueuedMemoryMaintenanceRequestToken() const { return QueuedMemoryMaintenanceRequestToken; }
 	void ReleaseMemoryMaintenanceSlot();
 	static void PumpQueuedMemoryMaintenanceRequests();
-	static int32 GetMemoryMaintenanceConcurrencyLimit();
 	TArray<FString> GetAvailableSmartObjectTargetsForPrompt() const;
-	void HandleRequestCompleted(const FLLMResponse& Response);
-	bool IsRetryableFailure(const FLLMResponse& Response) const;
-	int32 GetMaxRetryAttempts() const;
-	float GetRetryBackoffBaseSeconds() const;
-	float GetRetryDelaySeconds(int32 RetryAttemptIndex) const;
-	void ScheduleRetryRequest(float DelaySeconds);
-	void ClearRetryTimer();
 	void HandleRetryRequestTimerElapsed();
 	bool TryHandleFailureWithFallback(const FLLMResponse& Response);
-	FString ResolveFallbackResponseText() const;
-	void BroadcastError(const FString& ErrorMessage);
-	void ClearActiveRequest();
 	void EnsureNpcControllerAndStateTreeBinding();
 	void SetDialogueState(ENpcDialogueState NewState);
 	void ScheduleDelayMasking();
@@ -232,6 +222,14 @@ private:
 	void ProcessNpcEventPromptUpdate(const FNpcEventMessage& EventMessage);
 
 private:
+	friend class FAINpcDialogueFallbackHandler;
+	friend class FAINpcDialogueLifecycleHandler;
+	friend class FAINpcDialogueRequestBuilder;
+	friend class FAINpcComponentStateHandler;
+	friend class FAINpcDelayMaskingHandler;
+	friend class FAINpcEventRoutingHandler;
+	friend class FAINpcMemoryMaintenanceHandler;
+
 	TSharedPtr<FOpenAIProvider, ESPMode::ThreadSafe> Provider;
 	TWeakObjectPtr<UNpcEventSubsystem> BoundEventSubsystem;
 	FDelegateHandle EventStageDispatchedHandle;

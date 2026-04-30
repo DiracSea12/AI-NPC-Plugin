@@ -69,7 +69,6 @@ private:
 	static constexpr int32 MaxRequestRetries = 3;
 	static constexpr float RetryBackoffBaseSeconds = 1.0f;
 	static constexpr float RequestTimeoutSeconds = 30.0f;
-	inline static const FString FallbackResponse = TEXT("{\"dialogue\":\"I need a moment to think.\",\"actions\":[],\"emotion_delta\":{\"valence\":0,\"arousal\":0,\"dominance\":0},\"relationship_delta\":{\"affinity\":0,\"trust\":0,\"familiarity\":0}}");
 
 	mutable FCriticalSection ActiveRequestsMutex;
 	TSet<FGuid> PendingRequests;

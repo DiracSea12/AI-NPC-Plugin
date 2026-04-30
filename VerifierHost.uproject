@@ -9,6 +9,30 @@
       "Enabled": true
     },
     {
+      "Name": "GameplayAbilities",
+      "Enabled": true
+    },
+    {
+      "Name": "TargetingSystem",
+      "Enabled": true
+    },
+    {
+      "Name": "WorldConditions",
+      "Enabled": true
+    },
+    {
+      "Name": "PropertyAccessEditor",
+      "Enabled": true
+    },
+    {
+      "Name": "PropertyBindingUtils",
+      "Enabled": true
+    },
+    {
+      "Name": "Gauntlet",
+      "Enabled": true
+    },
+    {
       "Name": "CmdLinkServer",
       "Enabled": false
     },

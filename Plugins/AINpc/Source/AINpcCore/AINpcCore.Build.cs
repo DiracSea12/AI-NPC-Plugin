@@ -49,6 +49,12 @@ public class AINpcCore : ModuleRules
         if (Target.Configuration != UnrealTargetConfiguration.Shipping)
         {
             PrivateDependencyModuleNames.Add("AutomationTest");
+
+            // Gauntlet-based gameplay test controller for NPC behavior scenarios
+            if (Target.Type != TargetType.Server)
+            {
+                PrivateDependencyModuleNames.Add("Gauntlet");
+            }
         }
     }
 }

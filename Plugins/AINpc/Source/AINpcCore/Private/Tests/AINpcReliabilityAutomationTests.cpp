@@ -62,6 +62,47 @@ private:
 	bool bHasSettings = false;
 };
 
+class FScopedProviderRequestSettingsOverride
+{
+public:
+	FScopedProviderRequestSettingsOverride(const FString& InGlobalBaseUrl, const FString& InGlobalModel, const float InRequestTimeoutSeconds)
+	{
+		UAINpcSettings* Settings = GetMutableDefault<UAINpcSettings>();
+		if (Settings)
+		{
+			OriginalGlobalBaseUrl = Settings->GlobalBaseUrl;
+			OriginalGlobalModel = Settings->GlobalModel;
+			OriginalRequestTimeoutSeconds = Settings->RequestTimeoutSeconds;
+
+			Settings->GlobalBaseUrl = InGlobalBaseUrl;
+			Settings->GlobalModel = InGlobalModel;
+			Settings->RequestTimeoutSeconds = InRequestTimeoutSeconds;
+			bHasSettings = true;
+		}
+	}
+
+	~FScopedProviderRequestSettingsOverride()
+	{
+		if (!bHasSettings)
+		{
+			return;
+		}
+
+		if (UAINpcSettings* Settings = GetMutableDefault<UAINpcSettings>())
+		{
+			Settings->GlobalBaseUrl = OriginalGlobalBaseUrl;
+			Settings->GlobalModel = OriginalGlobalModel;
+			Settings->RequestTimeoutSeconds = OriginalRequestTimeoutSeconds;
+		}
+	}
+
+private:
+	FString OriginalGlobalBaseUrl;
+	FString OriginalGlobalModel;
+	float OriginalRequestTimeoutSeconds = 0.0f;
+	bool bHasSettings = false;
+};
+
 float ComputeRequiredReliabilityBudgetSeconds(const UAINpcSettings* Settings)
 {
 	if (!Settings)
@@ -344,6 +385,86 @@ bool FAINpcComponentEnvironmentApiKeyFallbackTest::RunTest(const FString& Parame
 		TEXT("Environment API key should be used when global/persona/component keys are empty."),
 		Component->BuildRequestForTest().ApiKey,
 		FString(TEXT("env-key")));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAINpcComponentProviderRequestConfigPrecedenceTest,
+	"AINpc.Core.Provider.ComponentProviderRequestConfigPrecedence",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcComponentProviderRequestConfigPrecedenceTest::RunTest(const FString& Parameters)
+{
+	FScopedEnvironmentVariableOverride ScopedEnvApiKey(TEXT("AINPC_OPENAI_API_KEY"), TEXT(""));
+	FScopedGlobalApiKeyOverride ScopedGlobalApiKey(TEXT(""));
+	FScopedProviderRequestSettingsOverride ScopedProviderSettings(
+		TEXT("  https://global.example/v1  "),
+		TEXT("  global-model  "),
+		12.5f);
+
+	UAINpcComponent* Component = NewObject<UAINpcComponent>();
+	TestNotNull(TEXT("Component instance should be created for provider request precedence test."), Component);
+	if (!Component)
+	{
+		return false;
+	}
+
+	UNpcPersonaDataAsset* Persona = NewObject<UNpcPersonaDataAsset>();
+	TestNotNull(TEXT("Persona data asset should be created for provider request precedence test."), Persona);
+	if (!Persona)
+	{
+		return false;
+	}
+
+	Component->PersonaDataAsset = Persona;
+	Component->BaseUrlOverride = TEXT("");
+	Component->ModelOverride = TEXT("");
+
+	{
+		Persona->BaseUrl = TEXT("");
+		Persona->Model = TEXT("");
+
+		const FLLMRequest Request = Component->BuildRequestForTest();
+		TestEqual(TEXT("Global BaseUrl should be used when persona and component overrides are absent."), Request.BaseUrl, FString(TEXT("https://global.example/v1")));
+		TestEqual(TEXT("Global model should be used when persona and component overrides are absent."), Request.Model, FString(TEXT("global-model")));
+		TestTrue(TEXT("Global timeout should flow into the request."), FMath::IsNearlyEqual(Request.TimeoutSeconds, 12.5f));
+	}
+
+	{
+		Persona->BaseUrl = TEXT("  https://persona.example/v1  ");
+		Persona->Model = TEXT("  persona-model  ");
+
+		const FLLMRequest Request = Component->BuildRequestForTest();
+		TestEqual(TEXT("Persona BaseUrl should override global BaseUrl."), Request.BaseUrl, FString(TEXT("https://persona.example/v1")));
+		TestEqual(TEXT("Persona model should override global model."), Request.Model, FString(TEXT("persona-model")));
+	}
+
+	{
+		Persona->BaseUrl = TEXT("https://persona.example/v1");
+		Persona->Model = TEXT("persona-model");
+		Component->BaseUrlOverride = TEXT("  https://override.example/v1  ");
+		Component->ModelOverride = TEXT("  override-model  ");
+
+		const FLLMRequest Request = Component->BuildRequestForTest();
+		TestEqual(TEXT("Component BaseUrl override should override persona and global BaseUrl."), Request.BaseUrl, FString(TEXT("https://override.example/v1")));
+		TestEqual(TEXT("Component model override should override persona and global model."), Request.Model, FString(TEXT("override-model")));
+	}
+
+	{
+		FScopedProviderRequestSettingsOverride ScopedNegativeTimeout(
+			TEXT("https://global.example/v1"),
+			TEXT("global-model"),
+			-3.0f);
+
+		Persona->BaseUrl = TEXT("");
+		Persona->Model = TEXT("");
+		Component->BaseUrlOverride = TEXT("");
+		Component->ModelOverride = TEXT("");
+
+		const FLLMRequest Request = Component->BuildRequestForTest();
+		TestTrue(TEXT("Negative timeout settings should clamp to zero in the request."), FMath::IsNearlyZero(Request.TimeoutSeconds));
+	}
 
 	return true;
 }
@@ -1479,6 +1600,47 @@ bool FAINpcStateTreeTimeoutRoutesThroughFallbackPathTest::RunTest(const FString&
 	TestEqual(TEXT("Timeout cleanup should emit one fallback dialogue response."), ResponseCount, 1);
 	TestEqual(TEXT("Timeout cleanup should not emit hard error when fallback is available."), ErrorCount, 0);
 	TestTrue(TEXT("Timeout degraded failure reason should mention timeout."), LastDegradedFailureReason.Contains(TEXT("timed out"), ESearchCase::IgnoreCase));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAINpcDialogueStateTransitionClearsDelayMaskingTest,
+	"AINpc.Core.Dialogue.StateTransitionClearsDelayMasking",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcDialogueStateTransitionClearsDelayMaskingTest::RunTest(const FString& Parameters)
+{
+	UAINpcComponent* Component = NewObject<UAINpcComponent>();
+	TestNotNull(TEXT("Component instance should be created for dialogue-state housekeeping test."), Component);
+	if (!Component)
+	{
+		return false;
+	}
+
+	UNpcPersonaDataAsset* Persona = NewObject<UNpcPersonaDataAsset>();
+	TestNotNull(TEXT("Persona data asset should be created for dialogue-state housekeeping test."), Persona);
+	if (!Persona)
+	{
+		return false;
+	}
+
+	Persona->DelayFillerTexts.Add(FText::FromString(TEXT("Thinking...")));
+	Component->PersonaDataAsset = Persona;
+	Component->SetDialogueTestState(true, true, FGuid::NewGuid(), 0, ENpcDialogueState::WaitingForLLM);
+
+	int32 DelayMaskingEndCount = 0;
+	Component->OnDelayMaskingEndNative().AddLambda([&DelayMaskingEndCount]() { ++DelayMaskingEndCount; });
+
+	Component->HandleDelayMaskingThresholdReachedForTest();
+	TestTrue(TEXT("Threshold path should activate delay masking while still waiting for LLM."), Component->IsDelayMaskingActive());
+
+	Component->SetDialogueStateFromStateTree(ENpcDialogueState::Cooldown);
+
+	TestEqual(TEXT("Leaving WaitingForLLM should transition the component into the requested dialogue state."), Component->GetDialogueState(), ENpcDialogueState::Cooldown);
+	TestFalse(TEXT("Leaving WaitingForLLM should clear active delay masking."), Component->IsDelayMaskingActive());
+	TestEqual(TEXT("Leaving WaitingForLLM should emit one delay-masking end signal."), DelayMaskingEndCount, 1);
+	TestFalse(TEXT("Fresh Cooldown transition should not already satisfy a long state-duration threshold."), Component->HasBeenInDialogueStateLongerThan(1000.0f));
 
 	return true;
 }

@@ -404,8 +404,16 @@ void FOpenAIProvider::CompleteRequest(
 
 		if (RetryCount >= MaxRequestRetries)
 		{
-			Response.Content = FallbackResponse;
-			Response.bSuccess = true;
+			const FString RetryExhaustedMessage = TEXT("OpenAI request failed after exhausting retries.");
+			if (Response.ErrorMessage.IsEmpty())
+			{
+				Response.ErrorMessage = RetryExhaustedMessage;
+			}
+			else if (!Response.ErrorMessage.Contains(TEXT("exhausting retries"), ESearchCase::IgnoreCase) &&
+			         !Response.ErrorMessage.Contains(TEXT("retries exhausted"), ESearchCase::IgnoreCase))
+			{
+				Response.ErrorMessage = FString::Printf(TEXT("%s Retries exhausted."), *Response.ErrorMessage);
+			}
 			OnDegradation.Broadcast(RequestId);
 		}
 	}

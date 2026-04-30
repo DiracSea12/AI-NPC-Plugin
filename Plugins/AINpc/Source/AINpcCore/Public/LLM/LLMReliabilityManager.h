@@ -1,19 +1,17 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "LLM/LLMProviderTypes.h"
 
-// Retry strategy using exponential backoff
-enum class ERetryStrategy : uint8
+class UAINpcSettings;
+class UNpcPersonaDataAsset;
+
+class AINPCCORE_API FLLMReliabilityManager
 {
-	ExponentialBackoff
+public:
+	static bool IsRetryableFailure(const FLLMResponse& Response);
+	static int32 GetMaxRetryAttempts(const UAINpcSettings* Settings);
+	static float GetRetryBackoffBaseSeconds(const UAINpcSettings* Settings);
+	static float GetRetryDelaySeconds(const UAINpcSettings* Settings, int32 RetryAttemptIndex);
+	static FString ResolveFallbackResponseText(const UNpcPersonaDataAsset* PersonaDataAsset, const UAINpcSettings* Settings);
 };
-
-// Fallback strategies for reliability
-enum class EFallbackStrategy : uint8
-{
-	TimeoutFallback,
-	TemplateResponse
-};
-
-// Type alias for degradation notification delegate
-using FDegradationNotification = TMulticastDelegate<void(const FGuid&, int32)>;
