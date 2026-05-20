@@ -5,6 +5,9 @@
 #include "Components/AINpcProviderConfigResolver.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "GameFramework/DefaultPawn.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
 #include "HAL/PlatformMisc.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -61,7 +64,7 @@ namespace
 
 AAINpcTestGameMode::AAINpcTestGameMode()
 {
-	DefaultPawnClass = AAINpcTestCharacter::StaticClass();
+	DefaultPawnClass = ADefaultPawn::StaticClass();
 }
 
 void AAINpcTestGameMode::BeginPlay()
@@ -126,26 +129,44 @@ void AAINpcTestGameMode::SpawnTestNpc()
 		RecordFailure(TEXT("Failed to spawn NPC test character or its UAINpcComponent is null."));
 		return;
 	}
-	UE_LOG(LogTemp, Warning, TEXT("=== NPC spawned successfully! ==="));
+	UE_LOG(LogTemp, Warning, TEXT("=== Humanoid NPC Character spawned successfully and is not the player pawn. ==="));
 
-	// Set camera to look at NPC
 	APlayerController* PC = World->GetFirstPlayerController();
-	if (PC)
+	if (!PC)
 	{
-		FVector CameraLoc = SpawnLocation + FVector(-300.0f, 0.0f, 50.0f);
-		FRotator CameraRot = (SpawnLocation - CameraLoc).Rotation();
-
-		// Set view target to NPC
-		PC->SetViewTarget(SpawnedNpc);
-
-		// Or teleport player pawn to camera position
-		if (APawn* PlayerPawn = PC->GetPawn())
-		{
-			PlayerPawn->SetActorLocation(CameraLoc);
-			PC->SetControlRotation(CameraRot);
-		}
-		UE_LOG(LogTemp, Warning, TEXT("=== Camera set to look at NPC ==="));
+		RecordFailure(TEXT("Visual harness could not find a PlayerController for the observer camera."));
+		return;
 	}
+
+	APawn* ObserverPawn = PC->GetPawn();
+	if (!ObserverPawn)
+	{
+		RecordFailure(TEXT("Visual harness PlayerController has no observer pawn."));
+		return;
+	}
+
+	if (ObserverPawn == SpawnedNpc)
+	{
+		RecordFailure(TEXT("Observer pawn incorrectly resolved to the spawned NPC."));
+		return;
+	}
+
+	const FVector FocusPoint = (SpawnLocation + SmartObjectLocation) * 0.5f + FVector(0.0f, 0.0f, 90.0f);
+	const FVector CameraLoc = SpawnLocation + FVector(-520.0f, -360.0f, 180.0f);
+	const FRotator CameraRot = (FocusPoint - CameraLoc).Rotation();
+
+	ObserverPawn->SetActorLocation(CameraLoc);
+	ObserverPawn->SetActorRotation(CameraRot);
+	PC->SetControlRotation(CameraRot);
+	PC->SetViewTarget(ObserverPawn);
+	UE_LOG(
+		LogTemp,
+		Warning,
+		TEXT("=== Observer camera active. ObserverPawn=%s Npc=%s Camera=%s Focus=%s ==="),
+		*ObserverPawn->GetName(),
+		*SpawnedNpc->GetName(),
+		*CameraLoc.ToString(),
+		*FocusPoint.ToString());
 
 	UAINpcComponent* const NpcComponent = SpawnedNpc->NpcComponent;
 	NpcComponent->OnDialogueSessionStarted.AddDynamic(this, &AAINpcTestGameMode::OnNpcSessionStarted);

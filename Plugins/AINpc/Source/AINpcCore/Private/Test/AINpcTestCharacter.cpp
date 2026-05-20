@@ -6,43 +6,95 @@
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "UObject/ConstructorHelpers.h"
+
+namespace
+{
+	void ConfigureHumanoidPart(
+		UStaticMeshComponent& Part,
+		USceneComponent& Parent,
+		const FVector& RelativeLocation,
+		const FVector& RelativeScale)
+	{
+		Part.SetupAttachment(&Parent);
+		Part.SetRelativeLocation(RelativeLocation);
+		Part.SetRelativeScale3D(RelativeScale);
+		Part.SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Part.SetVisibility(true);
+		Part.SetHiddenInGame(false);
+	}
+}
 
 AAINpcTestCharacter::AAINpcTestCharacter()
 {
 	PrimaryActorTick.bCanEverTick = true;
 
-	PlaceholderMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PlaceholderMesh"));
-	PlaceholderMesh->SetupAttachment(GetRootComponent());
-	PlaceholderMesh->SetRelativeLocation(FVector(0.0f, 0.0f, 100.0f));
-	PlaceholderMesh->SetRelativeScale3D(FVector(5.0f, 5.0f, 10.0f));
-	PlaceholderMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeFinder(
-		TEXT("/Engine/BasicShapes/Cube"));
-	if (CubeFinder.Succeeded())
+	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
 	{
-		PlaceholderMesh->SetStaticMesh(CubeFinder.Object);
-		UE_LOG(LogTemp, Warning, TEXT("=== Cube mesh loaded successfully ==="));
+		Capsule->InitCapsuleSize(42.0f, 96.0f);
+	}
+
+	TorsoMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("HumanoidTorso"));
+	HeadMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("HumanoidHead"));
+	LeftArmMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("HumanoidLeftArm"));
+	RightArmMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("HumanoidRightArm"));
+	LeftLegMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("HumanoidLeftLeg"));
+	RightLegMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("HumanoidRightLeg"));
+
+	ConfigureHumanoidPart(*TorsoMesh, *GetRootComponent(), FVector(0.0f, 0.0f, 95.0f), FVector(0.48f, 0.34f, 0.95f));
+	ConfigureHumanoidPart(*HeadMesh, *GetRootComponent(), FVector(0.0f, 0.0f, 165.0f), FVector(0.32f, 0.32f, 0.32f));
+	ConfigureHumanoidPart(*LeftArmMesh, *GetRootComponent(), FVector(0.0f, -48.0f, 90.0f), FVector(0.13f, 0.13f, 0.74f));
+	ConfigureHumanoidPart(*RightArmMesh, *GetRootComponent(), FVector(0.0f, 48.0f, 90.0f), FVector(0.13f, 0.13f, 0.74f));
+	ConfigureHumanoidPart(*LeftLegMesh, *GetRootComponent(), FVector(0.0f, -18.0f, 30.0f), FVector(0.16f, 0.16f, 0.62f));
+	ConfigureHumanoidPart(*RightLegMesh, *GetRootComponent(), FVector(0.0f, 18.0f, 30.0f), FVector(0.16f, 0.16f, 0.62f));
+
+	HumanoidBodyParts = {
+		TorsoMesh,
+		HeadMesh,
+		LeftArmMesh,
+		RightArmMesh,
+		LeftLegMesh,
+		RightLegMesh
+	};
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CylinderFinder(TEXT("/Engine/BasicShapes/Cylinder"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereFinder(TEXT("/Engine/BasicShapes/Sphere"));
+	if (CylinderFinder.Succeeded())
+	{
+		TorsoMesh->SetStaticMesh(CylinderFinder.Object);
+		LeftArmMesh->SetStaticMesh(CylinderFinder.Object);
+		RightArmMesh->SetStaticMesh(CylinderFinder.Object);
+		LeftLegMesh->SetStaticMesh(CylinderFinder.Object);
+		RightLegMesh->SetStaticMesh(CylinderFinder.Object);
 	}
 	else
 	{
-		UE_LOG(LogTemp, Error, TEXT("=== FAILED to load Cube mesh! ==="));
+		UE_LOG(LogTemp, Error, TEXT("=== FAILED to load Cylinder mesh for humanoid NPC body! ==="));
 	}
 
-	// Use basic unlit material - no lighting needed
+	if (SphereFinder.Succeeded())
+	{
+		HeadMesh->SetStaticMesh(SphereFinder.Object);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("=== FAILED to load Sphere mesh for humanoid NPC head! ==="));
+	}
+
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> MatFinder(
 		TEXT("/Engine/BasicShapes/BasicShapeMaterial"));
 	if (MatFinder.Succeeded())
 	{
-		PlaceholderMesh->SetMaterial(0, MatFinder.Object.Get());
-		UE_LOG(LogTemp, Warning, TEXT("=== BasicShapeMaterial loaded successfully ==="));
+		for (UStaticMeshComponent* BodyPart : HumanoidBodyParts)
+		{
+			BodyPart->SetMaterial(0, MatFinder.Object.Get());
+		}
+		UE_LOG(LogTemp, Warning, TEXT("=== Humanoid NPC body meshes/material loaded successfully ==="));
 	}
 	else
 	{
 		UE_LOG(LogTemp, Error, TEXT("=== FAILED to load BasicShapeMaterial! ==="));
 	}
-
-	AutoPossessPlayer = EAutoReceiveInput::Player0;
 
 	NpcComponent = CreateDefaultSubobject<UAINpcComponent>(TEXT("NpcComponent"));
 	NpcComponent->bAutoCreateNpcController = false;
@@ -56,34 +108,38 @@ void AAINpcTestCharacter::BeginPlay()
 	UE_LOG(LogTemp, Warning, TEXT("=== AAINpcTestCharacter::BeginPlay START [%s] ==="),
 		*Now.ToString(TEXT("%Y-%m-%d %H:%M:%S")));
 
-	// Force mesh visible
-	if (PlaceholderMesh)
+	HumanoidMaterials.Reset();
+	bool bHasMissingBodyPart = false;
+	for (UStaticMeshComponent* BodyPart : HumanoidBodyParts)
 	{
-		PlaceholderMesh->SetVisibility(true);
-		PlaceholderMesh->SetHiddenInGame(false);
-		PlaceholderMaterial = PlaceholderMesh->CreateAndSetMaterialInstanceDynamic(0);
-		UpdateDebugMaterialColor(FLinearColor::Red);
-		UE_LOG(LogTemp, Warning, TEXT("=== Mesh exists: %s, Visible: %d ==="),
-			PlaceholderMesh->GetStaticMesh() ? TEXT("YES") : TEXT("NO"),
-			PlaceholderMesh->IsVisible());
-	}
-	else
-	{
-		UE_LOG(LogTemp, Error, TEXT("=== PlaceholderMesh is NULL! ==="));
+		if (!BodyPart)
+		{
+			bHasMissingBodyPart = true;
+			continue;
+		}
+
+		BodyPart->SetVisibility(true);
+		BodyPart->SetHiddenInGame(false);
+		HumanoidMaterials.Add(BodyPart->CreateAndSetMaterialInstanceDynamic(0));
 	}
 
-	// Giant debug sphere — impossible to miss
-	DrawDebugSphere(GetWorld(), GetActorLocation(), 100.0f, 32, FColor::Red, true, 30.0f);
-	DrawDebugSphere(GetWorld(), GetActorLocation() + FVector(0, 0, 200), 60.0f, 32, FColor::Yellow, true, 30.0f);
-	DrawDebugString(GetWorld(), GetActorLocation() + FVector(0, 0, 300),
-		TEXT("AINPC TEST CHARACTER"), nullptr, FColor::White, 30.0f, true);
+	UpdateDebugMaterialColor(FLinearColor::Red);
+	if (bHasMissingBodyPart)
+	{
+		UE_LOG(LogTemp, Error, TEXT("=== Humanoid NPC has missing body part components! ==="));
+	}
+	UE_LOG(LogTemp, Warning, TEXT("=== Humanoid NPC Character ready. BodyParts=%d ObserverControlled=false ==="),
+		HumanoidBodyParts.Num());
+
+	DrawDebugString(GetWorld(), GetActorLocation() + FVector(0, 0, 230),
+		TEXT("HUMANOID AINPC TEST CHARACTER"), nullptr, FColor::White, 30.0f, true);
 
 	if (GEngine)
 	{
 		GEngine->AddOnScreenDebugMessage(-1, 30.0f, FColor::Red,
-			FString::Printf(TEXT("NPC SPAWNED at %s — Mesh: %s"),
+			FString::Printf(TEXT("Humanoid NPC Character spawned at %s, BodyParts=%d, separate from observer pawn"),
 				*GetActorLocation().ToString(),
-				PlaceholderMesh->GetStaticMesh() ? TEXT("YES") : TEXT("MISSING")));
+				HumanoidBodyParts.Num()));
 	}
 }
 
@@ -116,11 +172,10 @@ void AAINpcTestCharacter::Tick(float DeltaTime)
 		}
 	}
 
-	// Keep drawing debug sphere every frame so it never disappears
 	const FColor SphereColor = bVisualActionTargetReached ? FColor::Green : (bVisualActionMoveActive ? FColor::Yellow : FColor::Red);
-	DrawDebugSphere(GetWorld(), GetActorLocation(), 100.0f, 32, SphereColor, false, 0.0f);
-	DrawDebugString(GetWorld(), GetActorLocation() + FVector(0, 0, 300),
-		TEXT("AINPC TEST NPC"), nullptr, FColor::White, 0.0f, true);
+	DrawDebugSphere(GetWorld(), GetActorLocation() + FVector(0, 0, 220), 16.0f, 12, SphereColor, false, 0.0f);
+	DrawDebugString(GetWorld(), GetActorLocation() + FVector(0, 0, 245),
+		TEXT("HUMANOID AINPC TEST NPC"), nullptr, FColor::White, 0.0f, true);
 
 	if (bVisualActionMoveActive || bVisualActionTargetReached)
 	{
@@ -173,10 +228,11 @@ const FString& AAINpcTestCharacter::GetVisualActionTargetId() const
 
 void AAINpcTestCharacter::UpdateDebugMaterialColor(const FLinearColor& NewColor)
 {
-	if (!PlaceholderMaterial)
+	for (UMaterialInstanceDynamic* Material : HumanoidMaterials)
 	{
-		return;
+		if (Material)
+		{
+			Material->SetVectorParameterValue(TEXT("Color"), NewColor);
+		}
 	}
-
-	PlaceholderMaterial->SetVectorParameterValue(TEXT("Color"), NewColor);
 }
