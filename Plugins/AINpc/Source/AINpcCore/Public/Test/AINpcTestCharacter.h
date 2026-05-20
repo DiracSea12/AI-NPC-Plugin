@@ -31,33 +31,7 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	TObjectPtr<class UAINpcComponent> NpcComponent;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
-	TObjectPtr<class UStaticMeshComponent> TorsoMesh;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
-	TObjectPtr<class UStaticMeshComponent> HeadMesh;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
-	TObjectPtr<class UStaticMeshComponent> LeftArmMesh;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
-	TObjectPtr<class UStaticMeshComponent> RightArmMesh;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
-	TObjectPtr<class UStaticMeshComponent> LeftLegMesh;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
-	TObjectPtr<class UStaticMeshComponent> RightLegMesh;
-
 private:
-	void UpdateDebugMaterialColor(const FLinearColor& NewColor);
-
-	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UStaticMeshComponent>> HumanoidBodyParts;
-
-	UPROPERTY(Transient)
-	TArray<TObjectPtr<class UMaterialInstanceDynamic>> HumanoidMaterials;
-
 	bool bVisualActionMoveActive = false;
 	bool bVisualActionTargetReached = false;
 	FVector VisualActionTargetLocation = FVector::ZeroVector;
