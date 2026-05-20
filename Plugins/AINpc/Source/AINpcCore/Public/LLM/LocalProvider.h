@@ -19,6 +19,10 @@ public:
 	virtual bool CancelRequest(const FGuid& RequestId) override;
 	virtual FLLMProviderCapabilities GetCapabilities() const override;
 
+#if WITH_EDITOR
+	FString BuildRequestBodyForTest(const FLLMRequest& Request) const;
+#endif
+
 private:
 	void DispatchRequest(const FGuid& RequestId, FLLMRequest Request, FLLMResponseCallback CompletionCallback);
 	void CompleteRequest(

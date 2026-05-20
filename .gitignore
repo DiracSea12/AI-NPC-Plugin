@@ -8,6 +8,7 @@ Plugins/*/Binaries/
 Plugins/*/Intermediate/
 Plugins/*/Saved/
 Plugins/*/Plugins/
+/Config/AINpcLocalProvider.json
 
 # IDE and local tool state
 /.vs/
@@ -15,6 +16,10 @@ Plugins/*/Plugins/
 /__pycache__/
 .claude/
 .codex/
+.agents/
+.mcp.json
+.aider.conf.yml
+.continue/
 CLAUDE.md
 *.VC.db
 
@@ -29,6 +34,10 @@ CLAUDE.md
 /openspec/
 /Plugins/AINpc/*.log
 /Plugins/nul
+/TestResults/
+/Build/Windows/FileOpenOrder/
+/docs/ralph/state/
+/.artifacts/
 
 # Root-level scratch logs and transient outputs
 /*.log

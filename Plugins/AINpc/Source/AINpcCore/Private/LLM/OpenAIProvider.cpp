@@ -1,4 +1,5 @@
 ﻿#include "LLM/OpenAIProvider.h"
+#include "LLM/StructuredOutputPromptLibrary.h"
 #include "LLM/StructuredOutputSchemaHelpers.h"
 #include "LLM/SSEParser.h"
 
@@ -181,6 +182,24 @@ void FOpenAIProvider::DispatchRequest(const FGuid& RequestId, FLLMRequest Reques
 			FLLMResponse Response;
 			Response.RequestId = RequestId;
 			Response.ErrorMessage = TEXT("OpenAI API key is empty.");
+			CompletionCallback(Response);
+		}
+		return;
+	}
+
+	const FString Model = ResolveModel(Request);
+	if (Model.IsEmpty())
+	{
+		{
+			FScopeLock Lock(&ActiveRequestsMutex);
+			PendingRequests.Remove(RequestId);
+		}
+
+		if (CompletionCallback)
+		{
+			FLLMResponse Response;
+			Response.RequestId = RequestId;
+			Response.ErrorMessage = TEXT("OpenAI model is empty.");
 			CompletionCallback(Response);
 		}
 		return;
@@ -528,7 +547,7 @@ TSharedRef<FJsonObject> FOpenAIProvider::BuildJsonPayload(const FLLMRequest& Req
 		FunctionDefinition->SetStringField(TEXT("name"), StructuredOutputToolName);
 		FunctionDefinition->SetStringField(
 			TEXT("description"),
-			TEXT("Return structured NPC dialogue, action intents, and state deltas."));
+			AINpc::StructuredOutputPrompts::GetToolDescription());
 		FunctionDefinition->SetObjectField(TEXT("parameters"), BuildStructuredOutputParametersSchema());
 
 		const TSharedRef<FJsonObject> ToolDefinition = MakeShared<FJsonObject>();
@@ -556,11 +575,7 @@ TSharedRef<FJsonObject> FOpenAIProvider::BuildJsonPayload(const FLLMRequest& Req
 
 		const TSharedRef<FJsonObject> SystemMessage = MakeShared<FJsonObject>();
 		SystemMessage->SetStringField(TEXT("role"), TEXT("system"));
-		SystemMessage->SetStringField(TEXT("content"),
-			TEXT("You must respond with valid JSON matching this schema: "
-			     "{\"dialogue\":string,\"actions\":[{\"type\":string,\"target\":string}],"
-			     "\"emotion_delta\":{\"valence\":number,\"arousal\":number,\"dominance\":number},"
-			     "\"relationship_delta\":{\"affinity\":number,\"trust\":number,\"familiarity\":number}}"));
+		SystemMessage->SetStringField(TEXT("content"), AINpc::StructuredOutputPrompts::GetJsonInstruction());
 		MessageArray.Insert(MakeShared<FJsonValueObject>(SystemMessage), 0);
 
 		JsonPayload->SetArrayField(TEXT("messages"), MessageArray);
@@ -581,12 +596,7 @@ TSharedRef<FJsonObject> FOpenAIProvider::BuildJsonPayload(const FLLMRequest& Req
 
 		const TSharedRef<FJsonObject> SystemMessage = MakeShared<FJsonObject>();
 		SystemMessage->SetStringField(TEXT("role"), TEXT("system"));
-		SystemMessage->SetStringField(TEXT("content"),
-			TEXT("You must respond with valid JSON matching this schema: "
-			     "{\"dialogue\":string,\"actions\":[{\"type\":string,\"target\":string}],"
-			     "\"emotion_delta\":{\"valence\":number,\"arousal\":number,\"dominance\":number},"
-			     "\"relationship_delta\":{\"affinity\":number,\"trust\":number,\"familiarity\":number}}. "
-			     "Do not include any text outside the JSON object."));
+		SystemMessage->SetStringField(TEXT("content"), AINpc::StructuredOutputPrompts::GetStrictJsonInstruction());
 		MessageArray.Insert(MakeShared<FJsonValueObject>(SystemMessage), 0);
 
 		JsonPayload->SetArrayField(TEXT("messages"), MessageArray);

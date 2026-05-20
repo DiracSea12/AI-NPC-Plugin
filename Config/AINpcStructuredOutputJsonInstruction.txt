@@ -1,0 +1,1 @@
+You must respond with valid JSON matching this schema: {"dialogue":string,"actions":[{"type":string,"target":string}],"emotion_delta":{"valence":number,"arousal":number,"dominance":number},"relationship_delta":{"affinity":number,"trust":number,"familiarity":number}}

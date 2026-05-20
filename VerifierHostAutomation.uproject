@@ -1,0 +1,23 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "5.7",
+  "Category": "Tests",
+  "Description": "Minimal AI NPC automation host",
+  "Modules": [
+    {
+      "Name": "VerifierHost",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "AINpc",
+      "Enabled": true
+    },
+    {
+      "Name": "Design2UMG",
+      "Enabled": false
+    }
+  ]
+}

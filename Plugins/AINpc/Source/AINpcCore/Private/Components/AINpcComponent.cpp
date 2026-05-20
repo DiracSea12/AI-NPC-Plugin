@@ -7,13 +7,13 @@
 #include "Components/AINpcDialogueRequestBuilder.h"
 #include "Components/AINpcEventRoutingHandler.h"
 #include "Components/AINpcMemoryMaintenanceHandler.h"
-#include "Components/AINpcProviderConfigResolver.h"
+#include "AINpcProviderConfigResolver.h"
 #include "Components/AINpcSmartObjectPromptHandler.h"
 #include "Data/NpcPersonaDataAsset.h"
 #include "Events/NpcEventSubsystem.h"
+#include "LLM/ILLMProvider.h"
 #include "LLM/LLMConcurrencyManager.h"
 #include "LLM/LLMReliabilityManager.h"
-#include "LLM/OpenAIProvider.h"
 #include "Settings/AINpcSettings.h"
 
 UAINpcComponent::UAINpcComponent()
@@ -132,22 +132,6 @@ bool UAINpcComponent::IsMemoryMaintenanceActive() const
 	return FAINpcMemoryMaintenanceHandler::IsActive(*this);
 }
 
-void UAINpcComponent::HandleDialogueResponseDynamicForTest(const FString& ResponseText)
-{
-	(void)ResponseText;
-#if WITH_EDITOR
-	++DynamicDialogueResponseCountForTest;
-#endif
-}
-
-void UAINpcComponent::HandleDialogueErrorDynamicForTest(const FString& ErrorMessage)
-{
-	(void)ErrorMessage;
-#if WITH_EDITOR
-	++DynamicDialogueErrorCountForTest;
-#endif
-}
-
 FNpcDialogueSessionStartedNative& UAINpcComponent::OnDialogueSessionStartedNative()
 {
 	return DialogueSessionStartedNative;
@@ -188,7 +172,23 @@ FNpcDialogueDegradedNative& UAINpcComponent::OnDialogueDegradedNative()
 	return DialogueDegradedNative;
 }
 
-#if WITH_EDITOR
+void UAINpcComponent::HandleDialogueResponseDynamicForTest(const FString& ResponseText)
+{
+	(void)ResponseText;
+#if defined(WITH_DEV_AUTOMATION_TESTS) && WITH_DEV_AUTOMATION_TESTS
+	++DynamicDialogueResponseCountForTest;
+#endif
+}
+
+void UAINpcComponent::HandleDialogueErrorDynamicForTest(const FString& ErrorMessage)
+{
+	(void)ErrorMessage;
+#if defined(WITH_DEV_AUTOMATION_TESTS) && WITH_DEV_AUTOMATION_TESTS
+	++DynamicDialogueErrorCountForTest;
+#endif
+}
+
+#if defined(WITH_DEV_AUTOMATION_TESTS) && WITH_DEV_AUTOMATION_TESTS
 void UAINpcComponent::SetDialogueTestState(
 	const bool bSessionActive,
 	const bool bRequestInFlightState,

@@ -19,7 +19,7 @@ class AINPCCORE_API FOpenAIProvider : public ILLMProvider, public TSharedFromThi
 public:
 	explicit FOpenAIProvider(
 		FString InDefaultApiKey = FString(),
-		FString InDefaultModel = TEXT("gpt-4o-mini"),
+		FString InDefaultModel = FString(),
 		FString InBaseUrl = TEXT("https://api.openai.com/v1"));
 
 	virtual FGuid SendRequest(const FLLMRequest& Request, FLLMResponseCallback CompletionCallback) override;

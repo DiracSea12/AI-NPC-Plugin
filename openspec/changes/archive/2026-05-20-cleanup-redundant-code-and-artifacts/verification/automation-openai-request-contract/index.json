@@ -1,0 +1,44 @@
+﻿{
+	"devices": [
+		{
+			"deviceName": "DESKTOP-N780S1B",
+			"instance": "3111703841C20A756901CFB9118E29C5",
+			"instanceName": "DESKTOP-N780S1B-59560",
+			"platform": "WindowsEditor",
+			"oSVersion": "Windows 11 (23H2) [10.0.22631.2861] ",
+			"model": "Default",
+			"gPU": "NVIDIA GeForce RTX 3090",
+			"cPUModel": "Intel(R) Core(TM) Ultra 7 270K Plus",
+			"rAMInGB": 64,
+			"renderMode": "D3D12_SM5",
+			"rHI": "D3D12 (SM5)",
+			"appInstanceLog": ""
+		}
+	],
+	"reportCreatedOn": "2026.05.19-15.50.23",
+	"succeeded": 1,
+	"succeededWithWarnings": 0,
+	"failed": 0,
+	"notRun": 0,
+	"inProcess": 0,
+	"totalDuration": 0.0069507993757724762,
+	"comparisonExported": false,
+	"comparisonExportDirectory": "",
+	"tests": [
+		{
+			"testDisplayName": "OpenAIProviderRequestsStructuredOutputContract",
+			"fullTestPath": "AINpc.Core.Reliability.OpenAIProviderRequestsStructuredOutputContract",
+			"tags": [],
+			"state": "Success",
+			"deviceInstance": [
+				"3111703841C20A756901CFB9118E29C5"
+			],
+			"duration": 0.0069507993757724762,
+			"dateTime": "2026.05.19-15.50.23",
+			"entries": [],
+			"warnings": 0,
+			"errors": 0,
+			"artifacts": []
+		}
+	]
+}

@@ -1,0 +1,27 @@
+Structured-output request-body schema comparison for task 3.3.
+
+Before:
+- OpenAI request body read the tool parameters schema from StructuredOutputSchemaHelpers::BuildStructuredOutputParametersSchema().
+- Local request body read the tool parameters schema from StructuredOutputSchemaHelpers::BuildStructuredOutputParametersSchema().
+- Anthropic request body built tools[0].input_schema from a provider-local duplicate BuildStructuredOutputInputSchema() in AnthropicProvider.cpp.
+- The Anthropic duplicate declared the same top-level required fields but did not share the helper-owned additionalProperties=false contract on the root object, action item object, emotion_delta object, or relationship_delta object.
+
+After:
+- StructuredOutputSchemaHelpers owns both request schema entry points:
+  - BuildStructuredOutputParametersSchema() for OpenAI-compatible tools/function.parameters.
+  - BuildStructuredOutputInputSchema() for Anthropic tools/input_schema, forwarding to the same schema owner.
+- AnthropicProvider.cpp no longer contains a provider-local structured-output schema builder.
+- LocalProvider exposes BuildRequestBodyForTest only under WITH_EDITOR so the parity test can compare serialized request-derived schemas.
+- FAINpcStructuredOutputSchemaParityTest extracts schemas from serialized OpenAI, Local, and Anthropic request bodies and compares the schema JSON strings.
+- The same parity test verifies required fields and additionalProperties=false for:
+  - root: dialogue, actions, emotion_delta, relationship_delta
+  - actions.items: type
+  - emotion_delta: valence, arousal, dominance
+  - relationship_delta: affinity, trust, familiarity
+
+Out-of-scope changes removed from this evidence baseline:
+- No Anthropic streaming parser or completion-path rewrite.
+- No Anthropic endpoint auto-/v1 behavior.
+- No Anthropic or Local empty-model guard.
+- No default model changes.
+- No prompt text library behavior changes.

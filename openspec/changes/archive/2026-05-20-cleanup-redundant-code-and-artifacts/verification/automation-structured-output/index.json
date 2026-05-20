@@ -1,0 +1,44 @@
+﻿{
+	"devices": [
+		{
+			"deviceName": "DESKTOP-N780S1B",
+			"instance": "56164C8842F290EA5E87A792A59008A2",
+			"instanceName": "DESKTOP-N780S1B-72544",
+			"platform": "WindowsEditor",
+			"oSVersion": "Windows 11 (23H2) [10.0.22631.2861] ",
+			"model": "Default",
+			"gPU": "NVIDIA GeForce RTX 3090",
+			"cPUModel": "Intel(R) Core(TM) Ultra 7 270K Plus",
+			"rAMInGB": 64,
+			"renderMode": "D3D12_SM5",
+			"rHI": "D3D12 (SM5)",
+			"appInstanceLog": ""
+		}
+	],
+	"reportCreatedOn": "2026.05.19-15.48.47",
+	"succeeded": 1,
+	"succeededWithWarnings": 0,
+	"failed": 0,
+	"notRun": 0,
+	"inProcess": 0,
+	"totalDuration": 0.011168703436851501,
+	"comparisonExported": false,
+	"comparisonExportDirectory": "",
+	"tests": [
+		{
+			"testDisplayName": "StructuredOutputSchemaParity",
+			"fullTestPath": "AINpc.Core.Reliability.StructuredOutputSchemaParity",
+			"tags": [],
+			"state": "Success",
+			"deviceInstance": [
+				"56164C8842F290EA5E87A792A59008A2"
+			],
+			"duration": 0.011168703436851501,
+			"dateTime": "2026.05.19-15.48.47",
+			"entries": [],
+			"warnings": 0,
+			"errors": 0,
+			"artifacts": []
+		}
+	]
+}

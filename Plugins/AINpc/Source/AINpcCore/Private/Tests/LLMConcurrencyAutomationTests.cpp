@@ -2,7 +2,7 @@
 #include "LLM/LLMConcurrencyManager.h"
 #include "Misc/AutomationTest.h"
 
-#if WITH_EDITOR
+#if defined(WITH_DEV_AUTOMATION_TESTS) && WITH_DEV_AUTOMATION_TESTS
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAINpcConcurrencyBasicTest, "AINpc.Concurrency.Basic",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -126,4 +126,4 @@ bool FAINpcConcurrencyCancelQueuedTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-#endif
+#endif // WITH_DEV_AUTOMATION_TESTS

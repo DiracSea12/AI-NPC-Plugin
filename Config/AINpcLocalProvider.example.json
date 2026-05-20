@@ -1,0 +1,6 @@
+{
+  "provider": "anthropic",
+  "apiKey": "replace-with-local-key",
+  "baseUrl": "https://example.invalid/anthropic",
+  "model": "optional-model-name"
+}

@@ -224,7 +224,7 @@ void FLLMProviderChain::UseFallbackTemplate(const FGuid& RequestId, FLLMResponse
 		Response.Content = FallbackResponses[RandomIndex];
 		Response.ParsedResponse.Dialogue = Response.Content;
 		Response.ParsedResponse.Actions.Add(FNpcAction());
-		Response.ParsedResponse.Actions[0].ActionType = TEXT("Action.DefaultTalk");
+		Response.ParsedResponse.Actions[0].ActionType = AINpc::Actions::DefaultTalkActionType;
 		Response.ParsedResponse.ParseTier = ELLMResponseParseTier::PlainText;
 		Response.FallbackReason = ELLMFallbackReason::FallbackFailed;
 	}

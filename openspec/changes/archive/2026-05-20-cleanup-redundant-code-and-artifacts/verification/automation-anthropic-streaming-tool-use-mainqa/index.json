@@ -1,0 +1,105 @@
+﻿{
+	"devices": [
+		{
+			"deviceName": "DESKTOP-N780S1B",
+			"instance": "98BCCC5542B23C151D055C9516BDC7EE",
+			"instanceName": "DESKTOP-N780S1B-27776",
+			"platform": "WindowsEditor",
+			"oSVersion": "Windows 11 (23H2) [10.0.22631.2861] ",
+			"model": "Default",
+			"gPU": "NVIDIA GeForce RTX 3090",
+			"cPUModel": "Intel(R) Core(TM) Ultra 7 270K Plus",
+			"rAMInGB": 64,
+			"renderMode": "D3D12_SM5",
+			"rHI": "D3D12 (SM5)",
+			"appInstanceLog": ""
+		}
+	],
+	"reportCreatedOn": "2026.05.20-02.06.34",
+	"succeeded": 0,
+	"succeededWithWarnings": 0,
+	"failed": 1,
+	"notRun": 0,
+	"inProcess": 0,
+	"totalDuration": 0.054511301219463348,
+	"comparisonExported": false,
+	"comparisonExportDirectory": "",
+	"tests": [
+		{
+			"testDisplayName": "AnthropicStreamingToolUseStructuredOutput",
+			"fullTestPath": "AINpc.Core.Parser.AnthropicStreamingToolUseStructuredOutput",
+			"tags": [],
+			"state": "Fail",
+			"deviceInstance": [
+				"98BCCC5542B23C151D055C9516BDC7EE"
+			],
+			"duration": 0.054511301219463348,
+			"dateTime": "2026.05.20-02.06.34",
+			"entries": [
+				{
+					"event":
+					{
+						"type": "Error",
+						"message": "Expected 'Anthropic streaming tool_use response should parse successfully.' to be true.",
+						"context": "",
+						"artifact": "00000000000000000000000000000000"
+					},
+					"filename": "G:\\UE5\\AI-NPC-Plugin\\Plugins\\AINpc\\Source\\AINpcCore\\Private\\Tests\\AINpcReliabilityAutomationTests.cpp",
+					"lineNumber": 1472,
+					"timestamp": "2026.05.20-02.06.34"
+				},
+				{
+					"event":
+					{
+						"type": "Error",
+						"message": "Expected 'Anthropic streaming tool_use response should not report parser errors.' to be true.",
+						"context": "",
+						"artifact": "00000000000000000000000000000000"
+					},
+					"filename": "G:\\UE5\\AI-NPC-Plugin\\Plugins\\AINpc\\Source\\AINpcCore\\Private\\Tests\\AINpcReliabilityAutomationTests.cpp",
+					"lineNumber": 1473,
+					"timestamp": "2026.05.20-02.06.34"
+				},
+				{
+					"event":
+					{
+						"type": "Error",
+						"message": "Anthropic streaming tool_use should select function-calling tier.: The two values are not equal.",
+						"context": "",
+						"artifact": "00000000000000000000000000000000"
+					},
+					"filename": "G:\\UE5\\AI-NPC-Plugin\\Plugins\\AINpc\\Source\\AINpcCore\\Private\\Tests\\AINpcReliabilityAutomationTests.cpp",
+					"lineNumber": 1473,
+					"timestamp": "2026.05.20-02.06.34"
+				},
+				{
+					"event":
+					{
+						"type": "Error",
+						"message": "Expected 'Anthropic streaming tool_use should extract dialogue from input_json_delta.' to be \"I will inspect the pillar.\", but it was \"\".",
+						"context": "",
+						"artifact": "00000000000000000000000000000000"
+					},
+					"filename": "G:\\UE5\\AI-NPC-Plugin\\Plugins\\AINpc\\Source\\AINpcCore\\Private\\Tests\\AINpcReliabilityAutomationTests.cpp",
+					"lineNumber": 1474,
+					"timestamp": "2026.05.20-02.06.34"
+				},
+				{
+					"event":
+					{
+						"type": "Error",
+						"message": "Expected 'Anthropic streaming tool_use should extract one action.' to be 1, but it was 0.",
+						"context": "",
+						"artifact": "00000000000000000000000000000000"
+					},
+					"filename": "G:\\UE5\\AI-NPC-Plugin\\Plugins\\AINpc\\Source\\AINpcCore\\Private\\Tests\\AINpcReliabilityAutomationTests.cpp",
+					"lineNumber": 1476,
+					"timestamp": "2026.05.20-02.06.34"
+				}
+			],
+			"warnings": 0,
+			"errors": 5,
+			"artifacts": []
+		}
+	]
+}

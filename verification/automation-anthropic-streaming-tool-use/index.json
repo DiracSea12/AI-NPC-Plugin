@@ -1,0 +1,44 @@
+﻿{
+	"devices": [
+		{
+			"deviceName": "DESKTOP-N780S1B",
+			"instance": "BF57DA494639A0B428F190BC5A067320",
+			"instanceName": "DESKTOP-N780S1B-54292",
+			"platform": "WindowsEditor",
+			"oSVersion": "Windows 11 (23H2) [10.0.22631.2861] ",
+			"model": "Default",
+			"gPU": "NVIDIA GeForce RTX 3090",
+			"cPUModel": "Intel(R) Core(TM) Ultra 7 270K Plus",
+			"rAMInGB": 64,
+			"renderMode": "D3D12_SM5",
+			"rHI": "D3D12 (SM5)",
+			"appInstanceLog": ""
+		}
+	],
+	"reportCreatedOn": "2026.05.20-02.03.12",
+	"succeeded": 1,
+	"succeededWithWarnings": 0,
+	"failed": 0,
+	"notRun": 0,
+	"inProcess": 0,
+	"totalDuration": 0.011368498206138611,
+	"comparisonExported": false,
+	"comparisonExportDirectory": "",
+	"tests": [
+		{
+			"testDisplayName": "AnthropicStreamingToolUseStructuredOutput",
+			"fullTestPath": "AINpc.Core.Parser.AnthropicStreamingToolUseStructuredOutput",
+			"tags": [],
+			"state": "Success",
+			"deviceInstance": [
+				"BF57DA494639A0B428F190BC5A067320"
+			],
+			"duration": 0.011368498206138611,
+			"dateTime": "2026.05.20-02.03.12",
+			"entries": [],
+			"warnings": 0,
+			"errors": 0,
+			"artifacts": []
+		}
+	]
+}

@@ -1,20 +1,20 @@
 #include "Components/AINpcDialogueRequestBuilder.h"
 
 #include "Components/AINpcComponent.h"
-#include "Components/AINpcProviderConfigResolver.h"
+#include "AINpcProviderConfigResolver.h"
 #include "Components/AINpcSmartObjectPromptHandler.h"
 #include "Async/Async.h"
 #include "Prompt/PromptBuilder.h"
 
 namespace
 {
-	constexpr int32 MaxPromptTokens = 512;
+	constexpr int32 DefaultRequestPromptTokens = 512;
 }
 
 FString FAINpcDialogueRequestBuilder::BuildSystemPrompt(const UAINpcComponent& Component)
 {
 	FPromptBuilderConfig BuilderConfig;
-	BuilderConfig.MaxPromptTokens = MaxPromptTokens;
+	BuilderConfig.MaxPromptTokens = DefaultRequestPromptTokens;
 	BuilderConfig.AvailableSmartObjectTargets = FAINpcSmartObjectPromptHandler::GetAvailableTargets(Component);
 	return FPromptBuilder::BuildSystemPrompt(Component.PersonaDataAsset, BuilderConfig);
 }

@@ -4,13 +4,14 @@
 #include "Controllers/AINpcController.h"
 #include "GameFramework/Pawn.h"
 #include "HAL/PlatformTime.h"
+#include "LLM/LLMResponseParser.h"
 
 bool FAINpcComponentStateHandler::TryGetLatestActionIntent(const UAINpcComponent& Component, FNpcAction& OutActionIntent)
 {
 	for (const FNpcAction& Action : Component.LastParsedResponse.Actions)
 	{
 		const FString TrimmedActionType = Action.ActionType.TrimStartAndEnd();
-		if (!TrimmedActionType.IsEmpty() && !TrimmedActionType.Equals(TEXT("Action.DefaultTalk"), ESearchCase::CaseSensitive))
+		if (!TrimmedActionType.IsEmpty() && !TrimmedActionType.Equals(AINpc::Actions::DefaultTalkActionType, ESearchCase::CaseSensitive))
 		{
 			OutActionIntent = Action;
 			OutActionIntent.ActionType = TrimmedActionType;

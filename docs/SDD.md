@@ -19,24 +19,27 @@
 │  (PersonaEditor,         │  (对话气泡, 调试面板)       │
 │   MemoryDebugger)        │  仅客户端, 依赖 UMG/Slate  │
 ├──────────────────────────┴──────────────────────────┤
-│                  AINpcRuntime 模块                    │
-│  ┌────────────┐ ┌──────────┐ ┌───────────────────┐  │
-│  │ LLM 通信层  │ │ 行为执行层│ │    感知系统        │  │
-│  │ (Provider,  │ │(StateTree│ │ (NpcEventSubsystem│  │
-│  │  SSE, 重试) │ │ SmartObj)│ │  FInstancedStruct)│  │
-│  ├────────────┤ ├──────────┤ ├───────────────────┤  │
-│  │ 记忆系统    │ │ 情感关系  │ │   Prompt 工程     │  │
-│  │ (三层记忆,  │ │ (VAD,    │ │  (模板构建,       │  │
-│  │  SQLite)   │ │  OCEAN)  │ │   Token 管理)     │  │
-│  ├────────────┤ ├──────────┤ ├───────────────────┤  │
-│  │ 安全系统    │ │ 网络同步  │ │   调度系统        │  │
-│  │(Sanitizer, │ │(Server   │ │  (限流, LOD,      │  │
-│  │ Validator) │ │ Authority│ │   NpcScheduler)   │  │
-│  └────────────┘ └──────────┘ └───────────────────┘  │
+│  AINpcCore 模块（必选）     AINpcMemory    AINpcImmersion │
+│  ┌────────────┐          模块（可选）    模块（可选）     │
+│  │ LLM 通信层  │ ┌──────────┐ ┌───────────────────┐  │
+│  │ (Provider,  │ │ 行为执行层│ │    感知系统        │  │
+│  │  SSE, 重试) │ │(StateTree│ │ (NpcEventSubsystem│  │
+│  ├────────────┤ │ SmartObj)│ │  FInstancedStruct)│  │
+│  │ Prompt 工程 │ ├──────────┤ ├───────────────────┤  │
+│  │ (模板构建,  │ │ 网络同步  │ │   调度系统        │  │
+│  │  Token管理) │ │(Server   │ │  (限流, LOD,      │  │
+│  └────────────┘ │ Authority│ │   NpcScheduler)   │  │
+│  ┌────────────┐ └──────────┘ └───────────────────┘  │
+│  │ 记忆系统    │ ┌──────────┐ ┌───────────────────┐  │
+│  │ (三层记忆,  │ │ 情感关系  │ │   安全系统        │  │
+│  │  SQLite)   │ │ (VAD,    │ │  (Sanitizer,      │  │
+│  │[AINpcMemory]│ │  OCEAN)  │ │   Validator)      │  │
+│  └────────────┘ │[Immersion]│ │  [AINpcImmersion] │  │
+│                 └──────────┘ └───────────────────┘  │
 ├─────────────────────────────────────────────────────┤
 │              UE5 引擎标准模块                         │
-│  Core │ AIModule │ StateTree │ SmartObjects │ HTTP   │
-│  SQLiteCore │ GameplayTags │ Json │ UMG/Slate       │
+│  Core │ AIModule │ StateTree │ SmartObjects(可选) │  │
+│  HTTP │ SQLiteCore │ GameplayTags │ Json │ UMG/Slate│
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -44,11 +47,14 @@
 
 | 模块 | 类型 | 职责 | 依赖 | Phase |
 |------|------|------|------|-------|
-| AINpcRuntime | Runtime | 运行时核心 | Core, AIModule, HTTP, StateTree, SmartObjects, SQLiteCore, GameplayTags, Json | 1 |
-| AINpcUI | ClientOnly | 对话气泡、调试 HUD | AINpcRuntime, UMG, Slate | 1 |
-| AINpcEditor | Editor | PersonaEditor, MemoryDebugger | AINpcRuntime, UnrealEd | 5 |
+| AINpcCore | Runtime | LLM 通信、行为执行、感知、Prompt、网络同步、调度 | Core, AIModule, HTTP, StateTree, GameplayTags, Json | 1 |
+| AINpcMemory | Runtime（可选） | 记忆系统、冲突解决、反思 | AINpcCore, SQLiteCore | 3a |
+| AINpcImmersion | Runtime（可选） | 情感、关系、安全、自主行为、社交 | AINpcCore | 4 |
+| AINpcUI | ClientOnly | 对话气泡、调试 HUD | AINpcCore, UMG, Slate | 1 |
+| AINpcEditor | Editor | PersonaEditor, MemoryDebugger | AINpcCore, AINpcMemory, UnrealEd | 5 |
 
 > AINpcUI 与 Runtime 隔离，Dedicated Server 编译时排除 UMG/Slate 依赖（NFR-6）。
+> SmartObjects 为可选依赖，通过 Build.cs 的 `bUseSmartObjects` 开关控制条件编译（`#if WITH_SMARTOBJECTS`），未启用时相关功能不可用。
 > 最低引擎版本：UE5.4+（NFR-7，StateTree WeakExecutionContext 依赖），`.uplugin` 中设置 `"EngineVersion": "5.4.0"`。
 > Phase 6 沉浸感增强功能（日程、主动交互、NPC 社交、情感外化）可通过 `UAINpcSettings::bEnableImmersionPack` 开关独立启用/禁用。
 
@@ -134,10 +140,10 @@ GameThread (主线程)
 
 ## 二、模块内部结构
 
-### 2.1 AINpcRuntime 目录结构
+### 2.1 运行时目录结构（三模块拆分）
 
 ```
-AINpcRuntime/
+AINpcCore/                    # 必选模块
 ├── Public/
 │   ├── Core/
 │   │   ├── AINpcComponent.h              // UAINpcComponent
@@ -154,22 +160,12 @@ AINpcRuntime/
 │   │       ├── AnthropicProvider.h
 │   │       ├── LocalProvider.h          // Ollama
 │   │       └── CustomProvider.h
-│   ├── Memory/
-│   │   ├── MemorySubsystem.h            // UMemorySubsystem
-│   │   ├── MemoryTypes.h                // FMemoryEntry, EMemoryType
-│   │   ├── IRelevanceScorer.h           // 检索评分接口
-│   │   ├── IEmbeddingProvider.h         // 向量化接口
-│   │   └── MemoryConflictResolver.h     // 冲突解决器
-│   ├── Emotion/
-│   │   ├── EmotionTypes.h               // FVADState, FRelationshipData
-│   │   ├── AppraisalEngine.h            // 评价链计算
-│   │   └── EmotionDecayProcessor.h      // 情感衰减
 │   ├── Behavior/
 │   │   ├── StateTree/
 │   │   │   ├── StateTreeTask_LLMQuery.h        // FStateTreeTask_LLMQuery
-│   │   │   └── StateTreeTask_ExecuteSmartObject.h
-│   │   ├── SmartObjectBridge.h          // SmartObject 桥接
-│   │   ├── LLMResponseParser.h          // 三级降级解析
+│   │   │   └── StateTreeTask_ExecuteSmartObject.h  // #if WITH_SMARTOBJECTS
+│   │   ├── SmartObjectBridge.h          // #if WITH_SMARTOBJECTS
+│   │   ├── LLMResponseParser.h          // 四级降级解析
 │   │   └── ActionValidator.h            // IActionValidator 接口
 │   ├── Perception/
 │   │   ├── NpcEventSubsystem.h          // UNpcEventSubsystem
@@ -177,11 +173,30 @@ AINpcRuntime/
 │   ├── Prompt/
 │   │   ├── PromptBuilder.h              // Prompt 模板构建器
 │   │   └── PromptTypes.h               // EPromptLayer 枚举
-│   ├── Security/
-│   │   ├── InputSanitizer.h
-│   │   └── OutputValidator.h
 │   └── Network/
 │       └── AINpcNetworkComponent.h      // 网络同步组件
+└── Private/
+    └── (对应 .cpp 实现)
+
+AINpcMemory/                  # 可选模块（Phase 3a+）
+├── Public/
+│   ├── MemorySubsystem.h            // UMemorySubsystem
+│   ├── MemoryTypes.h                // FMemoryEntry, EMemoryType
+│   ├── IRelevanceScorer.h           // 检索评分接口
+│   ├── IEmbeddingProvider.h         // 向量化接口
+│   └── MemoryConflictResolver.h     // 冲突解决器
+└── Private/
+    └── (对应 .cpp 实现)
+
+AINpcImmersion/               # 可选模块（Phase 4+）
+├── Public/
+│   ├── Emotion/
+│   │   ├── EmotionTypes.h               // FVADState, FRelationshipData
+│   │   ├── AppraisalEngine.h            // 评价链计算
+│   │   └── EmotionDecayProcessor.h      // 情感衰减
+│   └── Security/
+│       ├── InputSanitizer.h
+│       └── OutputValidator.h
 └── Private/
     └── (对应 .cpp 实现)
 ```
@@ -507,7 +522,14 @@ public:
     TMap<EPromptLayer, FString> PromptTemplateOverrides;
 
     UPROPERTY(EditAnywhere, Category="Animation")
-    TMap<EDelayStrategy, TSoftObjectPtr<UAnimMontage>> DelayMaskingMontages;
+    TMap<EDelayStrategy, TArray<TSoftObjectPtr<UAnimMontage>>> DelayMaskingMontages;
+    // 同一策略类型支持多个变体，随机选取，避免重复播放被玩家识破
+
+    UPROPERTY(EditAnywhere, Category="Animation")
+    TArray<FText> DelayFillerTexts;  // 超时过渡文本（"嗯..."、"让我想想..."），FText 支持本地化
+
+    UPROPERTY(EditAnywhere, Category="Animation", meta=(ClampMin=0))
+    float DelayFillerThreshold = 3.0f;  // 超过此秒数未响应时显示过渡文本
 
     // ---- Phase 3a ----
     UPROPERTY(EditAnywhere, Category="Memory")
@@ -701,9 +723,9 @@ public:
     void CancelRequest(int32 RequestId);
 
 private:
-    // NFR-3：同帧总并发 ≤ 3（对话池2 + 维护池1）
-    static constexpr int32 MaxDialogueConcurrent = 2;
-    static constexpr int32 MaxMaintenanceConcurrent = 1;
+    // NFR-3：同帧总并发 ≤ 3（对话池2 + 维护池1），槽位数通过 UAINpcSettings 可配置
+    int32 MaxDialogueConcurrent;      // 默认 2，从 UAINpcSettings 读取
+    int32 MaxMaintenanceConcurrent;   // 默认 1，从 UAINpcSettings 读取
     int32 ActiveDialogueCount = 0;
     int32 ActiveMaintenanceCount = 0;
 
@@ -802,7 +824,8 @@ struct FStateTreeTask_LLMQuery : public FStateTreeTaskBase
 
 private:
     // EnterState 时：构建 Prompt → 提交 LLMRequestSubsystem
-    // 同时播放延迟掩盖动画：NpcPersonaDataAsset::DelayMaskingMontages[EDelayStrategy::Thinking]
+    // 同时播放延迟掩盖动画：NpcPersonaDataAsset::DelayMaskingMontages[EDelayStrategy::Thinking] 随机选取一个变体
+    // 超过 DelayFillerThreshold 未响应时显示过渡文本（DelayFillerTexts 随机选取）
     // Tick 时：检查响应是否到达，到达则解析并切换状态
 };
 ```
@@ -811,11 +834,16 @@ private:
 
 ```cpp
 // GameInstanceSubsystem，全局管理 SmartObject 交互
+// 注意：USmartObjectSubsystem 是 WorldSubsystem，关卡切换时会重建；
+// 本 Bridge 作为 GameInstanceSubsystem 跨关卡持久，必须处理生命周期差异
 UCLASS()
 class USmartObjectBridge : public UGameInstanceSubsystem
 {
     GENERATED_BODY()
 public:
+    virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+    virtual void Deinitialize() override;
+
     // 查询 NPC 周围可交互对象（FR-30，注入 Prompt）
     TArray<FSmartObjectCandidate> FindNearbyObjects(
         const FVector& Location, float Radius) const;
@@ -829,6 +857,14 @@ public:
 
     // 获取交互位置
     FTransform GetSlotTransform(const FSmartObjectClaimHandle& Handle) const;
+
+private:
+    // 关卡切换时清理所有活跃 ClaimHandle，防止悬空引用
+    // Initialize() 中监听 FWorldDelegates::OnWorldCleanup
+    // 回调中：释放所有 ActiveClaimHandles → 清空容器
+    // 新 World 初始化后通过 USmartObjectSubsystem::Get(World) 重新获取引用
+    void OnWorldCleanup(UWorld* World, bool bSessionEnded, bool bCleanupResources);
+    TArray<FSmartObjectClaimHandle> ActiveClaimHandles;
 };
 
 USTRUCT(BlueprintType)
@@ -1073,6 +1109,8 @@ class UMemoryConflictResolver : public UObject
     GENERATED_BODY()
 public:
     // 异步解决冲突，回调返回最终操作
+    // 仅使用 UAINpcSettings::EnabledConflictOperations 中启用的操作子集
+    // （默认全部启用；保守配置可仅启用 ADD/UPDATE/COEXIST）
     void ResolveAsync(
         const FMemoryEntry& NewEntry,
         const TArray<FMemoryEntry>& Candidates,
@@ -1127,6 +1165,23 @@ private:
 按 EvictionScore 降序排列，淘汰得分最高的条目
   ├─ Importance ≥ 5 的条目：迁移到长期记忆（SQLite）
   └─ Importance < 5 的条目：直接丢弃
+```
+
+#### 4.4.7 玩家提及记忆加权（FR-13A）
+
+```
+对话后记忆更新流程中，额外执行：
+  │
+  ▼
+FTS5 匹配玩家输入关键词 → 命中的记忆条目
+  │
+  ▼
+Importance += PlayerMentionBoost（默认 +3.0，UAINpcSettings 可配置）
+  Clamp[0, 10]
+
+目的：防止对玩家重要但情感变化小的记忆被淘汰
+（例：冷淡性格 NPC 帮玩家找猫，情感变化小导致 Importance 低，
+ 但玩家主动提及 = 玩家在意 = 该记忆应被保护）
 ```
 
 ### 4.5 情感与关系系统
@@ -1283,6 +1338,13 @@ private:
 
     // Token 预算管理：超限时按优先级截断
     void TruncateToFit(TArray<FLLMMessage>& Messages, int32 Budget) const;
+
+    // 人格重注入防漂移（FR-36 扩展）：
+    // 对话轮次 > PersonaReinjectThreshold（默认 8，UAINpcSettings 可配置）时，
+    // 在最近一条 system message 位置插入人格层摘要（OCEAN 数值 + 核心说话风格，约 100 tokens），
+    // 防止长对话中人格漂移（参考论文 2402.10962："LLM 8 轮对话内人格漂移"）
+    void InjectPersonaReinforcement(TArray<FLLMMessage>& Messages,
+        const UNpcPersonaDataAsset* Persona, int32 DialogueTurnCount) const;
 
     // 检查 DataAsset 是否有覆盖模板
     // 注意：System 和 Output 层硬编码忽略覆盖，即使 TMap 中存在也不生效

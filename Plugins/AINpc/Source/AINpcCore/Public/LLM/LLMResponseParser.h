@@ -3,6 +3,11 @@
 #include "CoreMinimal.h"
 #include "LLMResponseParser.generated.h"
 
+namespace AINpc::Actions
+{
+inline constexpr const TCHAR* DefaultTalkActionType = TEXT("Action.DefaultTalk");
+}
+
 UENUM(BlueprintType)
 enum class ELLMResponseParseTier : uint8
 {

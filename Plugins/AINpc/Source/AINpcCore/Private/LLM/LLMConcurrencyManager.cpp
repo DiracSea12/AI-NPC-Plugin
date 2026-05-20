@@ -188,7 +188,7 @@ void FLLMConcurrencyManager::CancelQueuedMemoryRequest(UAINpcComponent* Componen
 	});
 }
 
-#if WITH_EDITOR
+#if defined(WITH_DEV_AUTOMATION_TESTS) && WITH_DEV_AUTOMATION_TESTS
 void FLLMConcurrencyManager::ResetForTest()
 {
 	QueuedDialogueRequests.Reset();

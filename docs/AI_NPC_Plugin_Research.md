@@ -332,7 +332,7 @@ FNpcRelationship {
   Core, CoreUObject, Engine,
   GameplayStateTreeModule,  // AI专用StateTree组件（含UStateTreeAIComponent + AIComponentSchema）
   StateTreeModule,      // 现代化状态机/行为编排（被GameplayStateTree自动拉入）
-  SmartObjectsModule,    // 复杂环境交互目标处理（注意：传递依赖会拉入 GameplayAbilities/TargetingSystem/MassEntity/WorldConditions；需在项目.uproject中启用SmartObjects插件）
+  SmartObjectsModule,    // **可选依赖**，通过 Build.cs 的 `bUseSmartObjects` 开关控制条件编译（`#if WITH_SMARTOBJECTS`）；传递依赖会拉入 GameplayAbilities/TargetingSystem/MassEntity/WorldConditions；未启用时 SmartObjectBridge 相关功能不可用
   AIModule,              // AIController底层支持
   HTTP,                  // HTTP请求 + SSE流式响应（主要传输方式）
   WebSockets,            // WebSocket通信（可选，用于Realtime类接口）
@@ -378,19 +378,12 @@ AINpcUI 可选模块额外依赖（与 Runtime 隔离，保证 Dedicated Server 
 Plugins/AINpc/
 ├── AINpc.uplugin
 ├── Source/
-│   ├── AINpcRuntime/          # 运行时模块
+│   ├── AINpcCore/             # 核心模块（必选）：LLM通信/行为执行/感知/Prompt/网络/调度
 │   │   ├── LLM/              # LLM通信层
 │   │   │   ├── ILLMProvider.h
 │   │   │   ├── OpenAIProvider.cpp
 │   │   │   ├── AnthropicProvider.cpp
 │   │   │   └── LocalProvider.cpp
-│   │   ├── Memory/            # 记忆系统
-│   │   │   ├── NpcMemoryComponent.h
-│   │   │   ├── NpcMemoryEntry.h
-│   │   │   └── NpcMemoryStore.h    # SQLite封装
-│   │   ├── Emotion/           # 情感系统
-│   │   │   ├── NpcEmotionComponent.h
-│   │   │   └── NpcRelationshipComponent.h
 │   │   ├── Decision/          # 决策引擎
 │   │   │   ├── NpcDecisionEngine.h
 │   │   │   └── LLMResponseParser.h
@@ -398,26 +391,42 @@ Plugins/AINpc/
 │   │   │   ├── StateTreeTask_LLMQuery.h
 │   │   │   ├── StateTreeTask_SmartObjectAction.h
 │   │   │   └── StateTreeEvaluator_Perception.h
-│   │   ├── SmartObjectBridge/  # 自建桥接层（替代实验版GameplayInteractions）
-│   │   │   ├── SmartObjectBridgeContext.h    # 交互执行上下文
-│   │   │   ├── StateTreeTask_FindSlot.h      # 查找SmartObject槽位
-│   │   │   ├── StateTreeTask_ClaimSlot.h     # 占用/释放槽位
-│   │   │   └── StateTreeTask_UseSlot.h       # 在槽位执行交互
+│   │   ├── SmartObjectBridge/  # 自建桥接层（可选，#if WITH_SMARTOBJECTS）
+│   │   │   ├── SmartObjectBridgeContext.h
+│   │   │   ├── StateTreeTask_FindSlot.h
+│   │   │   ├── StateTreeTask_ClaimSlot.h
+│   │   │   └── StateTreeTask_UseSlot.h
 │   │   ├── Perception/        # 感知扩展
-│   │   │   └── NpcEventSubsystem.h # 基于 GameInstanceSubsystem 的解耦事件总线
-│   │   ├── ContentGuard/      # 内容安全（参考 OWASP LLM Top 10 2025）
-│   │   │   ├── InputSanitizer.h       # 提示注入防护（输入清洗+系统提示隔离，防 LLM07:2025 系统提示泄露）
-│   │   │   └── OutputValidator.h      # JSON Schema校验+动作白名单+人设边界检测+敏感内容过滤
+│   │   │   └── NpcEventSubsystem.h
+│   │   ├── Prompt/            # Prompt工程
+│   │   │   └── PromptBuilder.h
 │   │   └── Core/              # 核心类
 │   │       ├── AINpcController.h
-│   │       ├── AINpcComponent.h   # 一键挂载组件
-│   │       ├── AINpcSettings.h    # 项目设置
+│   │       ├── AINpcComponent.h
+│   │       ├── AINpcSettings.h
 │   │       └── NpcPersonaDataAsset.h
-│   ├── AINpcUI/                 # UI模块（可选，与Runtime隔离，DS可不编译）
+│   ├── AINpcMemory/           # 记忆模块（可选）：记忆系统/冲突解决/反思
+│   │   ├── NpcMemoryComponent.h
+│   │   ├── NpcMemoryEntry.h
+│   │   ├── NpcMemoryStore.h        # SQLite封装
+│   │   ├── MemoryConflictResolver.h # 冲突解决
+│   │   └── ReflectionEngine.h      # 反思机制
+│   ├── AINpcImmersion/        # 沉浸模块（可选）：情感/关系/安全/自主行为/社交
+│   │   ├── Emotion/
+│   │   │   ├── NpcEmotionComponent.h
+│   │   │   └── NpcRelationshipComponent.h
+│   │   ├── ContentGuard/
+│   │   │   ├── InputSanitizer.h
+│   │   │   └── OutputValidator.h
+│   │   └── Immersion/         # Phase 6：自主行为/主动交互/NPC社交
+│   │       ├── NpcScheduleExecutor.h
+│   │       ├── ProactiveInteractionEvaluator.h
+│   │       └── NpcSocialProtocol.h
+│   ├── AINpcUI/               # UI模块（可选，与Runtime隔离，DS可不编译）
 │   │   └── NpcDialogueBubble.h
 │   └── AINpcEditor/           # 编辑器模块
-│       ├── PersonaEditor.h    # 人设编辑器
-│       └── MemoryDebugger.h   # 记忆调试面板
+│       ├── PersonaEditor.h
+│       └── MemoryDebugger.h
 └── Content/
     ├── StateTrees/            # 默认状态树
     └── UI/                    # 默认UI资产

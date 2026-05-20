@@ -1,4 +1,5 @@
 ﻿#include "LLM/AnthropicProvider.h"
+#include "LLM/StructuredOutputPromptLibrary.h"
 #include "LLM/StructuredOutputSchemaHelpers.h"
 #include "LLM/SSEParser.h"
 #include "AINpcCoreLog.h"
@@ -14,56 +15,6 @@
 #include "Serialization/JsonWriter.h"
 
 using namespace StructuredOutputSchemaHelpers;
-
-namespace
-{
-TSharedRef<FJsonObject> BuildStructuredOutputInputSchema()
-{
-	const TSharedRef<FJsonObject> RootSchema = MakeShared<FJsonObject>();
-	RootSchema->SetStringField(TEXT("type"), TEXT("object"));
-
-	const TSharedRef<FJsonObject> RootProperties = MakeShared<FJsonObject>();
-	RootProperties->SetField(TEXT("dialogue"), MakeTypeOnlySchemaField(TEXT("string")));
-
-	const TSharedRef<FJsonObject> ActionItemSchema = MakeShared<FJsonObject>();
-	ActionItemSchema->SetStringField(TEXT("type"), TEXT("object"));
-	const TSharedRef<FJsonObject> ActionItemProperties = MakeShared<FJsonObject>();
-	ActionItemProperties->SetField(TEXT("type"), MakeTypeOnlySchemaField(TEXT("string")));
-	ActionItemProperties->SetField(TEXT("target"), MakeTypeOnlySchemaField(TEXT("string")));
-	ActionItemSchema->SetObjectField(TEXT("properties"), ActionItemProperties);
-	AddRequiredFieldList(*ActionItemSchema, { TEXT("type") });
-
-	const TSharedRef<FJsonObject> ActionsSchema = MakeShared<FJsonObject>();
-	ActionsSchema->SetStringField(TEXT("type"), TEXT("array"));
-	ActionsSchema->SetObjectField(TEXT("items"), ActionItemSchema);
-	RootProperties->SetObjectField(TEXT("actions"), ActionsSchema);
-
-	const TSharedRef<FJsonObject> EmotionDeltaSchema = MakeShared<FJsonObject>();
-	EmotionDeltaSchema->SetStringField(TEXT("type"), TEXT("object"));
-	const TSharedRef<FJsonObject> EmotionDeltaProperties = MakeShared<FJsonObject>();
-	EmotionDeltaProperties->SetField(TEXT("valence"), MakeTypeOnlySchemaField(TEXT("number")));
-	EmotionDeltaProperties->SetField(TEXT("arousal"), MakeTypeOnlySchemaField(TEXT("number")));
-	EmotionDeltaProperties->SetField(TEXT("dominance"), MakeTypeOnlySchemaField(TEXT("number")));
-	EmotionDeltaSchema->SetObjectField(TEXT("properties"), EmotionDeltaProperties);
-	AddRequiredFieldList(*EmotionDeltaSchema, { TEXT("valence"), TEXT("arousal"), TEXT("dominance") });
-	RootProperties->SetObjectField(TEXT("emotion_delta"), EmotionDeltaSchema);
-
-	const TSharedRef<FJsonObject> RelationshipDeltaSchema = MakeShared<FJsonObject>();
-	RelationshipDeltaSchema->SetStringField(TEXT("type"), TEXT("object"));
-	const TSharedRef<FJsonObject> RelationshipDeltaProperties = MakeShared<FJsonObject>();
-	RelationshipDeltaProperties->SetField(TEXT("affinity"), MakeTypeOnlySchemaField(TEXT("number")));
-	RelationshipDeltaProperties->SetField(TEXT("trust"), MakeTypeOnlySchemaField(TEXT("number")));
-	RelationshipDeltaProperties->SetField(TEXT("familiarity"), MakeTypeOnlySchemaField(TEXT("number")));
-	RelationshipDeltaSchema->SetObjectField(TEXT("properties"), RelationshipDeltaProperties);
-	AddRequiredFieldList(*RelationshipDeltaSchema, { TEXT("affinity"), TEXT("trust"), TEXT("familiarity") });
-	RootProperties->SetObjectField(TEXT("relationship_delta"), RelationshipDeltaSchema);
-
-	RootSchema->SetObjectField(TEXT("properties"), RootProperties);
-	AddRequiredFieldList(*RootSchema, { TEXT("dialogue"), TEXT("actions"), TEXT("emotion_delta"), TEXT("relationship_delta") });
-
-	return RootSchema;
-}
-} // namespace
 
 #if WITH_EDITOR
 TAtomic<float> FAnthropicProvider::PreDispatchDelaySecondsForTest(0.0f);
@@ -174,6 +125,11 @@ FString FAnthropicProvider::BuildRequestBodyForTest(const FLLMRequest& Request) 
 	FJsonSerializer::Serialize(JsonPayload, JsonWriter);
 	return RequestBody;
 }
+
+FString FAnthropicProvider::ResolveMessagesEndpointForTest(const FLLMRequest& Request) const
+{
+	return ResolveMessagesEndpoint(Request);
+}
 #endif
 
 void FAnthropicProvider::DispatchRequest(const FGuid& RequestId, FLLMRequest Request, FLLMResponseCallback CompletionCallback)
@@ -244,9 +200,7 @@ void FAnthropicProvider::DispatchRequest(const FGuid& RequestId, FLLMRequest Req
 	const TSharedRef<TJsonWriter<>> JsonWriter = TJsonWriterFactory<>::Create(&RequestBody);
 	FJsonSerializer::Serialize(JsonPayload, JsonWriter);
 
-	FString Endpoint = ResolveBaseUrl(Request);
-	Endpoint.RemoveFromEnd(TEXT("/"));
-	Endpoint += TEXT("/messages");
+	const FString Endpoint = ResolveMessagesEndpoint(Request);
 	UE_LOG(LogAINpc, Log, TEXT("Anthropic endpoint constructed: %s"), *Endpoint);
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
 	HttpRequest->SetURL(Endpoint);
@@ -499,6 +453,24 @@ FString FAnthropicProvider::ResolveBaseUrl(const FLLMRequest& Request) const
 	return Request.BaseUrl.IsEmpty() ? DefaultBaseUrl : Request.BaseUrl;
 }
 
+FString FAnthropicProvider::ResolveMessagesEndpoint(const FLLMRequest& Request) const
+{
+	FString Endpoint = ResolveBaseUrl(Request).TrimStartAndEnd();
+	Endpoint.RemoveFromEnd(TEXT("/"));
+
+	if (Endpoint.EndsWith(TEXT("/messages"), ESearchCase::IgnoreCase))
+	{
+		return Endpoint;
+	}
+
+	if (Endpoint.EndsWith(TEXT("/v1"), ESearchCase::IgnoreCase))
+	{
+		return Endpoint + TEXT("/messages");
+	}
+
+	return Endpoint + TEXT("/v1/messages");
+}
+
 TSharedRef<FJsonObject> FAnthropicProvider::BuildAnthropicMessagesPayload(const FLLMRequest& Request) const
 {
 	const TSharedRef<FJsonObject> JsonPayload = MakeShared<FJsonObject>();
@@ -517,8 +489,9 @@ TSharedRef<FJsonObject> FAnthropicProvider::BuildAnthropicMessagesPayload(const 
 	MessageArray.Reserve(Request.Messages.Num());
 
 	const FLLMProviderCapabilities Capabilities = GetCapabilities();
+	const bool bUsesStructuredToolOutput = Capabilities.bSupportsToolCalling;
 
-	if (Capabilities.bSupportsToolCalling)
+	if (bUsesStructuredToolOutput)
 	{
 		for (const FLLMMessage& Message : Request.Messages)
 		{
@@ -534,7 +507,7 @@ TSharedRef<FJsonObject> FAnthropicProvider::BuildAnthropicMessagesPayload(const 
 		ToolDefinition->SetStringField(TEXT("name"), StructuredOutputToolName);
 		ToolDefinition->SetStringField(
 			TEXT("description"),
-			TEXT("Return structured NPC dialogue, action intents, and state deltas."));
+			AINpc::StructuredOutputPrompts::GetToolDescription());
 		ToolDefinition->SetObjectField(TEXT("input_schema"), BuildStructuredOutputInputSchema());
 		ToolsArray.Add(MakeShared<FJsonValueObject>(ToolDefinition));
 		JsonPayload->SetArrayField(TEXT("tools"), ToolsArray);
@@ -548,12 +521,7 @@ TSharedRef<FJsonObject> FAnthropicProvider::BuildAnthropicMessagesPayload(const 
 	{
 		const TSharedRef<FJsonObject> SystemMessage = MakeShared<FJsonObject>();
 		SystemMessage->SetStringField(TEXT("role"), TEXT("system"));
-		SystemMessage->SetStringField(TEXT("content"),
-			TEXT("You must respond with valid JSON matching this schema: "
-			     "{\"dialogue\":string,\"actions\":[{\"type\":string,\"target\":string}],"
-			     "\"emotion_delta\":{\"valence\":number,\"arousal\":number,\"dominance\":number},"
-			     "\"relationship_delta\":{\"affinity\":number,\"trust\":number,\"familiarity\":number}}. "
-			     "Do not include any text outside the JSON object."));
+		SystemMessage->SetStringField(TEXT("content"), AINpc::StructuredOutputPrompts::GetStrictJsonInstruction());
 		MessageArray.Add(MakeShared<FJsonValueObject>(SystemMessage));
 
 		for (const FLLMMessage& Message : Request.Messages)
@@ -566,7 +534,7 @@ TSharedRef<FJsonObject> FAnthropicProvider::BuildAnthropicMessagesPayload(const 
 		JsonPayload->SetArrayField(TEXT("messages"), MessageArray);
 	}
 
-	if (Request.bUseStreaming)
+	if (Request.bUseStreaming && !bUsesStructuredToolOutput)
 	{
 		JsonPayload->SetBoolField(TEXT("stream"), true);
 	}

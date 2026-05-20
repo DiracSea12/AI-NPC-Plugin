@@ -1,7 +1,9 @@
 ﻿#include "LLM/LLMResponseParser.h"
 #include "Dom/JsonObject.h"
+#include "LLM/SSEParser.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogLLMParser, Log, All);
 
@@ -216,6 +218,26 @@ static bool TryParseFunctionCall(const TSharedPtr<FJsonObject>& JsonObject, FPar
 	return true;
 }
 
+static bool TryParseStructuredOutputToolInput(const TSharedPtr<FJsonObject>& ArgsObject, FParsedLLMResponse& OutParsedResponse)
+{
+	if (!ArgsObject.IsValid())
+	{
+		return false;
+	}
+
+	FString ArgumentsStr;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ArgumentsStr);
+	FJsonSerializer::Serialize(ArgsObject.ToSharedRef(), Writer);
+	if (!ParseFunctionArguments(ArgumentsStr, OutParsedResponse))
+	{
+		return false;
+	}
+
+	OutParsedResponse.bParsedAsJson = true;
+	OutParsedResponse.ParseTier = ELLMResponseParseTier::FunctionCalling;
+	return true;
+}
+
 // FR-27 Tier 2: ParseStrictJSON - strict schema validation
 static bool TryParseStrictJson(const FString& ContentStr, FParsedLLMResponse& OutParsedResponse)
 {
@@ -391,8 +413,142 @@ static void FallbackToPlainText(const FString& ContentStr, FParsedLLMResponse& O
 	OutParsedResponse.ParseTier = ELLMResponseParseTier::PlainText;
 
 	FNpcAction DefaultAction;
-	DefaultAction.ActionType = TEXT("Action.DefaultTalk");
+	DefaultAction.ActionType = AINpc::Actions::DefaultTalkActionType;
 	OutParsedResponse.Actions.Add(DefaultAction);
+}
+
+static bool TryBuildAnthropicMessageBodyFromEventStream(const FString& ResponseBody, FString& OutMessageBody)
+{
+	TSharedRef<FJsonObject> MessageObject = MakeShared<FJsonObject>();
+	TArray<TSharedPtr<FJsonValue>> ContentArray;
+	TSharedPtr<FJsonObject> ActiveContentBlock;
+	FString ActiveContentBlockType;
+	FString ActiveText;
+	FString ActiveInputJson;
+	bool bSawEvent = false;
+
+	auto FlushActiveContentBlock = [&]()
+	{
+		if (!ActiveContentBlock.IsValid())
+		{
+			return;
+		}
+
+		if (ActiveContentBlockType == TEXT("text"))
+		{
+			ActiveContentBlock->SetStringField(TEXT("text"), ActiveText);
+		}
+		else if (ActiveContentBlockType == TEXT("tool_use"))
+		{
+			TSharedPtr<FJsonObject> InputObject;
+			const TSharedRef<TJsonReader<>> InputReader = TJsonReaderFactory<>::Create(ActiveInputJson);
+			if (FJsonSerializer::Deserialize(InputReader, InputObject) && InputObject.IsValid())
+			{
+				ActiveContentBlock->SetObjectField(TEXT("input"), InputObject);
+			}
+		}
+
+		ContentArray.Add(MakeShared<FJsonValueObject>(ActiveContentBlock));
+		ActiveContentBlock.Reset();
+		ActiveContentBlockType.Reset();
+		ActiveText.Reset();
+		ActiveInputJson.Reset();
+	};
+
+	FSSEParser Parser;
+	Parser.OnData.BindLambda([&](const FString& Data)
+	{
+		TSharedPtr<FJsonObject> EventObject;
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Data);
+		if (!FJsonSerializer::Deserialize(Reader, EventObject) || !EventObject.IsValid())
+		{
+			return;
+		}
+
+		FString EventType;
+		if (!EventObject->TryGetStringField(TEXT("type"), EventType))
+		{
+			return;
+		}
+
+		bSawEvent = true;
+		if (EventType == TEXT("content_block_start"))
+		{
+			FlushActiveContentBlock();
+
+			const TSharedPtr<FJsonObject>* ContentBlockObject = nullptr;
+			if (!EventObject->TryGetObjectField(TEXT("content_block"), ContentBlockObject) ||
+				!ContentBlockObject ||
+				!ContentBlockObject->IsValid())
+			{
+				return;
+			}
+
+			ActiveContentBlock = MakeShared<FJsonObject>();
+			(*ContentBlockObject)->TryGetStringField(TEXT("type"), ActiveContentBlockType);
+			ActiveContentBlock->SetStringField(TEXT("type"), ActiveContentBlockType);
+
+			if (ActiveContentBlockType == TEXT("tool_use"))
+			{
+				FString ToolId;
+				FString ToolName;
+				if ((*ContentBlockObject)->TryGetStringField(TEXT("id"), ToolId))
+				{
+					ActiveContentBlock->SetStringField(TEXT("id"), ToolId);
+				}
+				if ((*ContentBlockObject)->TryGetStringField(TEXT("name"), ToolName))
+				{
+					ActiveContentBlock->SetStringField(TEXT("name"), ToolName);
+				}
+			}
+		}
+		else if (EventType == TEXT("content_block_delta"))
+		{
+			const TSharedPtr<FJsonObject>* DeltaObject = nullptr;
+			if (!EventObject->TryGetObjectField(TEXT("delta"), DeltaObject) ||
+				!DeltaObject ||
+				!DeltaObject->IsValid())
+			{
+				return;
+			}
+
+			FString DeltaType;
+			(*DeltaObject)->TryGetStringField(TEXT("type"), DeltaType);
+			if (DeltaType == TEXT("text_delta"))
+			{
+				FString Text;
+				if ((*DeltaObject)->TryGetStringField(TEXT("text"), Text))
+				{
+					ActiveText += Text;
+				}
+			}
+			else if (DeltaType == TEXT("input_json_delta"))
+			{
+				FString PartialJson;
+				if ((*DeltaObject)->TryGetStringField(TEXT("partial_json"), PartialJson))
+				{
+					ActiveInputJson += PartialJson;
+				}
+			}
+		}
+		else if (EventType == TEXT("content_block_stop"))
+		{
+			FlushActiveContentBlock();
+		}
+	});
+
+	Parser.ProcessChunk(ResponseBody);
+	FlushActiveContentBlock();
+
+	if (!bSawEvent)
+	{
+		return false;
+	}
+
+	MessageObject->SetArrayField(TEXT("content"), ContentArray);
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutMessageBody);
+	FJsonSerializer::Serialize(MessageObject, Writer);
+	return true;
 }
 
 bool FLLMResponseParser::ParseOpenAIChatCompletion(
@@ -481,6 +637,12 @@ bool FLLMResponseParser::ParseAnthropicMessages(
 	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseBody);
 	if (!FJsonSerializer::Deserialize(Reader, JsonObject) || !JsonObject.IsValid())
 	{
+		FString MessageBody;
+		if (TryBuildAnthropicMessageBodyFromEventStream(ResponseBody, MessageBody))
+		{
+			return ParseAnthropicMessages(MessageBody, OutParsedResponse, OutErrorMessage);
+		}
+
 		OutErrorMessage = TEXT("Failed to parse response as JSON");
 		return false;
 	}
@@ -506,6 +668,19 @@ bool FLLMResponseParser::ParseAnthropicMessages(
 				FString Text;
 				(*ContentObj)->TryGetStringField(TEXT("text"), Text);
 				ContentStr += Text;
+			}
+			else if (Type == TEXT("tool_use"))
+			{
+				FString ToolName;
+				(*ContentObj)->TryGetStringField(TEXT("name"), ToolName);
+				const TSharedPtr<FJsonObject>* InputObject = nullptr;
+				if (ToolName == TEXT("emit_npc_response") &&
+					(*ContentObj)->TryGetObjectField(TEXT("input"), InputObject) &&
+					InputObject &&
+					TryParseStructuredOutputToolInput(*InputObject, OutParsedResponse))
+				{
+					return true;
+				}
 			}
 		}
 	}

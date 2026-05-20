@@ -25,6 +25,7 @@ public:
 	static void SetPreProcessDelaySecondsForTest(float DelaySeconds);
 	static bool HasReachedPostInitialCancelGateForTest();
 	FString BuildRequestBodyForTest(const FLLMRequest& Request) const;
+	FString ResolveMessagesEndpointForTest(const FLLMRequest& Request) const;
 #endif
 
 private:
@@ -48,6 +49,7 @@ private:
 	FString ResolveApiKey(const FLLMRequest& Request) const;
 	FString ResolveModel(const FLLMRequest& Request) const;
 	FString ResolveBaseUrl(const FLLMRequest& Request) const;
+	FString ResolveMessagesEndpoint(const FLLMRequest& Request) const;
 	TSharedRef<FJsonObject> BuildAnthropicMessagesPayload(const FLLMRequest& Request) const;
 
 private:

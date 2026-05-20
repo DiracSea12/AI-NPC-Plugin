@@ -1,0 +1,1 @@
+A bright interaction pillar is next to you. Inspect it now and use the exact SmartObject target id "{SmartObjectTargetId}" from your system instructions if you choose an action. Then briefly say what you are doing.

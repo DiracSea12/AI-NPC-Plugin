@@ -4,16 +4,16 @@
 #include "Components/AINpcDialogueRequestBuilder.h"
 #include "AINpcCoreLog.h"
 #include "Async/Async.h"
+#include "LLM/ILLMProvider.h"
 #include "LLM/LLMConcurrencyManager.h"
 #include "LLM/LLMReliabilityManager.h"
-#include "LLM/OpenAIProvider.h"
 #include "Settings/AINpcSettings.h"
 #include "TimerManager.h"
 #include "Engine/World.h"
 
 namespace
 {
-#if WITH_EDITOR
+#if !UE_BUILD_SHIPPING
 	bool GBypassDialogueRequestDispatchForTests = false;
 #endif
 }
@@ -143,7 +143,7 @@ bool FAINpcDialogueLifecycleHandler::DispatchDialogueRequest(UAINpcComponent& Co
 
 bool FAINpcDialogueLifecycleHandler::DispatchDialogueRequestNow(UAINpcComponent& Component)
 {
-#if WITH_EDITOR
+#if !UE_BUILD_SHIPPING
 	if (GBypassDialogueRequestDispatchForTests)
 	{
 		Component.ActiveRequestId = FGuid::NewGuid();
@@ -427,7 +427,7 @@ void FAINpcDialogueLifecycleHandler::BroadcastError(UAINpcComponent& Component, 
 	Component.DialogueErrorNative.Broadcast(ErrorMessage);
 }
 
-#if WITH_EDITOR
+#if !UE_BUILD_SHIPPING
 void FAINpcDialogueLifecycleHandler::SetDispatchBypassForTest(const bool bBypass)
 {
 	GBypassDialogueRequestDispatchForTests = bBypass;

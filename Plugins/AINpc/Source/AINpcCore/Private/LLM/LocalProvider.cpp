@@ -1,4 +1,5 @@
 ﻿#include "LLM/LocalProvider.h"
+#include "LLM/StructuredOutputPromptLibrary.h"
 #include "LLM/StructuredOutputSchemaHelpers.h"
 
 #include "Async/Async.h"
@@ -88,6 +89,17 @@ FLLMProviderCapabilities FLocalProvider::GetCapabilities() const
 	Capabilities.bSupportsJsonMode = true;
 	return Capabilities;
 }
+
+#if WITH_EDITOR
+FString FLocalProvider::BuildRequestBodyForTest(const FLLMRequest& Request) const
+{
+	FString RequestBody;
+	const TSharedRef<FJsonObject> JsonPayload = BuildJsonPayload(Request);
+	const TSharedRef<TJsonWriter<>> JsonWriter = TJsonWriterFactory<>::Create(&RequestBody);
+	FJsonSerializer::Serialize(JsonPayload, JsonWriter);
+	return RequestBody;
+}
+#endif
 
 void FLocalProvider::DispatchRequest(const FGuid& RequestId, FLLMRequest Request, FLLMResponseCallback CompletionCallback)
 {
@@ -380,7 +392,7 @@ TSharedRef<FJsonObject> FLocalProvider::BuildJsonPayload(const FLLMRequest& Requ
 		FunctionDefinition->SetStringField(TEXT("name"), StructuredOutputToolName);
 		FunctionDefinition->SetStringField(
 			TEXT("description"),
-			TEXT("Return structured NPC dialogue, action intents, and state deltas."));
+			AINpc::StructuredOutputPrompts::GetToolDescription());
 		FunctionDefinition->SetObjectField(TEXT("parameters"), BuildStructuredOutputParametersSchema());
 
 		const TSharedRef<FJsonObject> ToolDefinition = MakeShared<FJsonObject>();
@@ -400,11 +412,7 @@ TSharedRef<FJsonObject> FLocalProvider::BuildJsonPayload(const FLLMRequest& Requ
 	{
 		const TSharedRef<FJsonObject> SystemMessage = MakeShared<FJsonObject>();
 		SystemMessage->SetStringField(TEXT("role"), TEXT("system"));
-		SystemMessage->SetStringField(TEXT("content"),
-			TEXT("You must respond with valid JSON matching this schema: "
-			     "{\"dialogue\":string,\"actions\":[{\"type\":string,\"target\":string}],"
-			     "\"emotion_delta\":{\"valence\":number,\"arousal\":number,\"dominance\":number},"
-			     "\"relationship_delta\":{\"affinity\":number,\"trust\":number,\"familiarity\":number}}"));
+		SystemMessage->SetStringField(TEXT("content"), AINpc::StructuredOutputPrompts::GetJsonInstruction());
 		MessageArray.Add(MakeShared<FJsonValueObject>(SystemMessage));
 
 		for (const FLLMMessage& Message : Request.Messages)
@@ -424,12 +432,7 @@ TSharedRef<FJsonObject> FLocalProvider::BuildJsonPayload(const FLLMRequest& Requ
 	{
 		const TSharedRef<FJsonObject> SystemMessage = MakeShared<FJsonObject>();
 		SystemMessage->SetStringField(TEXT("role"), TEXT("system"));
-		SystemMessage->SetStringField(TEXT("content"),
-			TEXT("You must respond with valid JSON matching this schema: "
-			     "{\"dialogue\":string,\"actions\":[{\"type\":string,\"target\":string}],"
-			     "\"emotion_delta\":{\"valence\":number,\"arousal\":number,\"dominance\":number},"
-			     "\"relationship_delta\":{\"affinity\":number,\"trust\":number,\"familiarity\":number}}. "
-			     "Do not include any text outside the JSON object."));
+		SystemMessage->SetStringField(TEXT("content"), AINpc::StructuredOutputPrompts::GetStrictJsonInstruction());
 		MessageArray.Add(MakeShared<FJsonValueObject>(SystemMessage));
 
 		for (const FLLMMessage& Message : Request.Messages)

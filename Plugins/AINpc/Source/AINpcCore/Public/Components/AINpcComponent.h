@@ -16,7 +16,7 @@ class FAINpcComponentStateHandler;
 class FAINpcDelayMaskingHandler;
 class FAINpcEventRoutingHandler;
 class FAINpcMemoryMaintenanceHandler;
-class FOpenAIProvider;
+class ILLMProvider;
 class UStateTree;
 class UAnimMontage;
 class UNpcEventSubsystem;
@@ -117,7 +117,7 @@ public:
 	FNpcDelayMaskingEndNative& OnDelayMaskingEndNative();
 	FNpcDialogueDegradedNative& OnDialogueDegradedNative();
 
-#if WITH_EDITOR
+#if defined(WITH_DEV_AUTOMATION_TESTS) && WITH_DEV_AUTOMATION_TESTS
 	void SetDialogueTestState(bool bSessionActive, bool bRequestInFlight, const FGuid& RequestId, int32 InRetryAttemptCount, ENpcDialogueState InDialogueState);
 	void HandleRequestCompletedForTest(const FLLMResponse& Response);
 	void HandleStateTreeTimeoutFailureForTest();
@@ -230,7 +230,7 @@ private:
 	friend class FAINpcEventRoutingHandler;
 	friend class FAINpcMemoryMaintenanceHandler;
 
-	TSharedPtr<FOpenAIProvider, ESPMode::ThreadSafe> Provider;
+	TSharedPtr<ILLMProvider, ESPMode::ThreadSafe> Provider;
 	TWeakObjectPtr<UNpcEventSubsystem> BoundEventSubsystem;
 	FDelegateHandle EventStageDispatchedHandle;
 	TArray<FLLMMessage> ConversationHistory;
@@ -250,7 +250,7 @@ private:
 	bool bOwnsMemoryMaintenanceSlot = false;
 	uint64 QueuedMemoryMaintenanceRequestToken = 0;
 
-#if WITH_EDITOR
+#if defined(WITH_DEV_AUTOMATION_TESTS) && WITH_DEV_AUTOMATION_TESTS
 	int32 DynamicDialogueResponseCountForTest = 0;
 	int32 DynamicDialogueErrorCountForTest = 0;
 #endif

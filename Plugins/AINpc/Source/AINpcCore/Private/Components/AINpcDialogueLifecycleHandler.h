@@ -31,7 +31,7 @@ public:
 	static void ClearRetryTimer(UAINpcComponent& Component);
 	static void BroadcastError(UAINpcComponent& Component, const FString& ErrorMessage);
 
-#if WITH_EDITOR
+#if !UE_BUILD_SHIPPING
 	static void SetDispatchBypassForTest(bool bBypass);
 #endif
 };

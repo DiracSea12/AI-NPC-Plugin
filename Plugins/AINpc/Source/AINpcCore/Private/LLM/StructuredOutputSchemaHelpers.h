@@ -81,4 +81,9 @@ namespace StructuredOutputSchemaHelpers
 
 		return RootSchema;
 	}
+
+	inline TSharedRef<FJsonObject> BuildStructuredOutputInputSchema()
+	{
+		return BuildStructuredOutputParametersSchema();
+	}
 }

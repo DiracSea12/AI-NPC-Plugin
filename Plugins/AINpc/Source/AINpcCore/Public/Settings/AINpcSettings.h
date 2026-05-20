@@ -23,7 +23,7 @@ public:
 	FString GlobalBaseUrl = TEXT("https://api.openai.com/v1");
 
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "LLM Provider")
-	FString GlobalModel = TEXT("gpt-4o-mini");
+	FString GlobalModel;
 
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Concurrency", meta = (ClampMin = "1", UIMin = "1"))
 	int32 DialogueRequestConcurrencyLimit = 2;

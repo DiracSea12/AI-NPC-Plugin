@@ -27,7 +27,7 @@ bool FOpenAIBaseURLTest::RunTest(const FString& Parameters)
 	// Test 1: Constructor BaseURL
 	TSharedPtr<FOpenAIProvider> Provider = MakeShared<FOpenAIProvider>(
 		TEXT("test-key"),
-		TEXT("gpt-4"),
+		TEXT("test-model"),
 		CustomBaseUrl
 	);
 

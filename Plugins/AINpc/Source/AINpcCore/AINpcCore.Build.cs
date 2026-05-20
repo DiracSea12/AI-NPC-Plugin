@@ -45,6 +45,25 @@ public class AINpcCore : ModuleRules
             });
         }
 
+        RuntimeDependencies.Add(
+            "$(ProjectDir)/Config/AINpcPromptTemplate.txt",
+            StagedFileType.NonUFS);
+        RuntimeDependencies.Add(
+            "$(ProjectDir)/Config/AINpcPromptFragments.txt",
+            StagedFileType.NonUFS);
+        RuntimeDependencies.Add(
+            "$(ProjectDir)/Config/AINpcStructuredOutputJsonInstruction.txt",
+            StagedFileType.NonUFS);
+        RuntimeDependencies.Add(
+            "$(ProjectDir)/Config/AINpcStructuredOutputStrictJsonInstruction.txt",
+            StagedFileType.NonUFS);
+        RuntimeDependencies.Add(
+            "$(ProjectDir)/Config/AINpcStructuredOutputToolDescription.txt",
+            StagedFileType.NonUFS);
+        RuntimeDependencies.Add(
+            "$(ProjectDir)/Config/AINpcVisualHarnessInitialPrompt.txt",
+            StagedFileType.NonUFS);
+
         // Automation tests need to be available in Development builds
         if (Target.Configuration != UnrealTargetConfiguration.Shipping)
         {

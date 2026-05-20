@@ -2,6 +2,7 @@
 
 #include "Components/AINpcComponent.h"
 #include "Engine/GameInstance.h"
+#include "SmartObjectBridge/AINpcSmartObjectRuntimeExecutor.h"
 #include "SmartObjectBridge/SmartObjectBridgeContext.h"
 #include "StateTree/Tasks/StateTreeTask_SmartObjectTaskUtils.h"
 #include "StateTreeExecutionContext.h"
@@ -66,43 +67,6 @@ USmartObjectBridgeContext* ResolveBridgeContext(const FStateTreeExecutionContext
 	InstanceData.BridgeContext = BridgeContext;
 	return BridgeContext;
 }
-
-bool ValidateSmartObjectAction(
-	const FNpcAction& ActionIntent,
-	const TArray<FString>& LegalTargets,
-	FString& OutRequestedTarget,
-	FString& OutFailureReason)
-{
-	OutRequestedTarget.Reset();
-	const FString ActionType = ActionIntent.ActionType.TrimStartAndEnd();
-	if (ActionType.IsEmpty() || ActionType.Equals(TEXT("Action.DefaultTalk"), ESearchCase::CaseSensitive))
-	{
-		OutFailureReason = TEXT("LLM action intent is missing or non-executable.");
-		return false;
-	}
-
-	const FString RequestedTarget = ActionIntent.Target.TrimStartAndEnd();
-	if (RequestedTarget.IsEmpty())
-	{
-		OutFailureReason = TEXT("SmartObject action intent is missing a target.");
-		return false;
-	}
-
-	for (const FString& LegalTarget : LegalTargets)
-	{
-		if (RequestedTarget.Equals(LegalTarget.TrimStartAndEnd(), ESearchCase::CaseSensitive))
-		{
-			OutRequestedTarget = RequestedTarget;
-			OutFailureReason.Reset();
-			return true;
-		}
-	}
-
-	OutFailureReason = FString::Printf(
-		TEXT("SmartObject action target '%s' is not in the legal runtime whitelist."),
-		*RequestedTarget);
-	return false;
-}
 }
 
 FStateTreeTask_ExecuteSmartObject::FStateTreeTask_ExecuteSmartObject()
@@ -121,37 +85,16 @@ EStateTreeRunStatus FStateTreeTask_ExecuteSmartObject::EnterState(FStateTreeExec
 		return EStateTreeRunStatus::Failed;
 	}
 
-	FNpcAction ActionIntent;
-	if (!NpcComponent->TryGetLatestActionIntent(ActionIntent))
-	{
-		return EStateTreeRunStatus::Failed;
-	}
-
-	const TArray<FString> LegalTargets = NpcComponent->GetAvailableSmartObjectTargetsForExecution();
-	FString RequestedTarget;
-	FString ValidationFailureReason;
-	if (!ValidateSmartObjectAction(ActionIntent, LegalTargets, RequestedTarget, ValidationFailureReason))
-	{
-		return EStateTreeRunStatus::Failed;
-	}
-
-	if (!BridgeContext->FindSlotWithPreferredTarget(UserActor, InstanceData.SearchRadius, RequestedTarget))
-	{
-		return EStateTreeRunStatus::Failed;
-	}
-
-	if (!BridgeContext->ClaimSlot(UserActor, InstanceData.ClaimPriority))
-	{
-		return EStateTreeRunStatus::Failed;
-	}
-
-	if (!BridgeContext->UseSlotForUser(UserActor))
-	{
-		BridgeContext->ReleaseSlotForUser(UserActor);
-		return EStateTreeRunStatus::Failed;
-	}
-
-	return EStateTreeRunStatus::Succeeded;
+	FAINpcSmartObjectRuntimeExecutionResult ExecutionResult;
+	return FAINpcSmartObjectRuntimeExecutor::TryExecuteLatestActionIntent(
+		*NpcComponent,
+		*UserActor,
+		*BridgeContext,
+		InstanceData.SearchRadius,
+		InstanceData.ClaimPriority,
+		ExecutionResult)
+		? EStateTreeRunStatus::Succeeded
+		: EStateTreeRunStatus::Failed;
 }
 
 void FStateTreeTask_ExecuteSmartObject::ExitState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const
@@ -172,6 +115,10 @@ bool FStateTreeTask_ExecuteSmartObject::ValidateSmartObjectActionForTest(
 	FString& OutFailureReason)
 {
 	FString RequestedTarget;
-	return ValidateSmartObjectAction(ActionIntent, LegalTargets, RequestedTarget, OutFailureReason);
+	return FAINpcSmartObjectRuntimeExecutor::ValidateSmartObjectActionIntent(
+		ActionIntent,
+		LegalTargets,
+		RequestedTarget,
+		OutFailureReason);
 }
 #endif

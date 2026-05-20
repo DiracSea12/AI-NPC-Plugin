@@ -1,0 +1,1 @@
+Return structured NPC dialogue, action intents, and state deltas.

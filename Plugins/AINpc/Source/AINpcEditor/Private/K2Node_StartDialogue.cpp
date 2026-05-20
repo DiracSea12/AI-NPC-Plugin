@@ -6,7 +6,7 @@
 #include "EdGraphSchema_K2.h"
 #include "K2Node_CallFunction.h"
 #include "KismetCompiler.h"
-#include "AINpcComponent.h"
+#include "Components/AINpcComponent.h"
 
 #define LOCTEXT_NAMESPACE "K2Node_StartDialogue"
 

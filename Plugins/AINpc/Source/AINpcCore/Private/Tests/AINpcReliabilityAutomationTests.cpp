@@ -10,6 +10,7 @@
 #include "HAL/PlatformProcess.h"
 #include "LLM/OpenAIProvider.h"
 #include "LLM/AnthropicProvider.h"
+#include "LLM/LocalProvider.h"
 #include "LLM/LLMResponseParser.h"
 #include "Misc/AutomationTest.h"
 #include "Prompt/PromptBuilder.h"
@@ -25,6 +26,7 @@
 #include "GameFramework/Pawn.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
+#include <initializer_list>
 
 #if WITH_EDITOR
 
@@ -210,6 +212,38 @@ bool JsonArrayContainsStringValue(const TArray<TSharedPtr<FJsonValue>>* Values, 
 	return false;
 }
 
+bool JsonObjectDisallowsAdditionalProperties(const TSharedPtr<FJsonObject>& SchemaObject)
+{
+	bool bAdditionalProperties = true;
+	return SchemaObject.IsValid() &&
+		SchemaObject->TryGetBoolField(TEXT("additionalProperties"), bAdditionalProperties) &&
+		!bAdditionalProperties;
+}
+
+bool JsonObjectRequiresFields(const TSharedPtr<FJsonObject>& SchemaObject, std::initializer_list<const TCHAR*> RequiredFieldNames)
+{
+	if (!SchemaObject.IsValid())
+	{
+		return false;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* RequiredFields = nullptr;
+	if (!SchemaObject->TryGetArrayField(TEXT("required"), RequiredFields) || !RequiredFields)
+	{
+		return false;
+	}
+
+	for (const TCHAR* RequiredFieldName : RequiredFieldNames)
+	{
+		if (!JsonArrayContainsStringValue(RequiredFields, RequiredFieldName))
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
 bool GetDistinctRoutingTestTags(FGameplayTag& OutMatchTag, FGameplayTag& OutNonMatchTag)
 {
 	OutMatchTag = FGameplayTag::RequestGameplayTag(FName(TEXT("AINpc.Tests.Route.Match")), false);
@@ -243,6 +277,126 @@ bool GetDistinctRoutingTestTags(FGameplayTag& OutMatchTag, FGameplayTag& OutNonM
 	}
 
 	return false;
+}
+
+FString SerializeJsonObjectForTest(const TSharedPtr<FJsonObject>& JsonObject)
+{
+	FString JsonText;
+	if (!JsonObject.IsValid())
+	{
+		return JsonText;
+	}
+
+	const TSharedRef<TJsonWriter<>> JsonWriter = TJsonWriterFactory<>::Create(&JsonText);
+	FJsonSerializer::Serialize(JsonObject.ToSharedRef(), JsonWriter);
+	return JsonText;
+}
+
+bool GetFirstToolObjectFromRequest(
+	const FString& RequestBody,
+	const TCHAR* ProviderName,
+	TSharedPtr<FJsonObject>& OutToolObject,
+	FString& OutErrorMessage)
+{
+	TSharedPtr<FJsonObject> RequestJson;
+	if (!DeserializeJsonObjectForTest(RequestBody, RequestJson) || !RequestJson.IsValid())
+	{
+		OutErrorMessage = FString::Printf(TEXT("%s request body did not deserialize."), ProviderName);
+		return false;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* ToolsArray = nullptr;
+	if (!RequestJson->TryGetArrayField(TEXT("tools"), ToolsArray) || !ToolsArray || ToolsArray->Num() == 0)
+	{
+		OutErrorMessage = FString::Printf(TEXT("%s request body did not include tools."), ProviderName);
+		return false;
+	}
+
+	OutToolObject = (*ToolsArray)[0].IsValid() ? (*ToolsArray)[0]->AsObject() : TSharedPtr<FJsonObject>();
+	if (!OutToolObject.IsValid())
+	{
+		OutErrorMessage = FString::Printf(TEXT("%s request body first tool was not an object."), ProviderName);
+		return false;
+	}
+
+	return true;
+}
+
+bool GetStructuredOutputParametersSchemaFromOpenAICompatibleRequest(
+	const FString& RequestBody,
+	const TCHAR* ProviderName,
+	TSharedPtr<FJsonObject>& OutSchemaObject,
+	FString& OutErrorMessage)
+{
+	TSharedPtr<FJsonObject> FirstToolObject;
+	if (!GetFirstToolObjectFromRequest(RequestBody, ProviderName, FirstToolObject, OutErrorMessage))
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject>* FunctionObject = nullptr;
+	const TSharedPtr<FJsonObject>* ParametersObject = nullptr;
+	if (!FirstToolObject->TryGetObjectField(TEXT("function"), FunctionObject) ||
+		!FunctionObject ||
+		!FunctionObject->IsValid() ||
+		!(*FunctionObject)->TryGetObjectField(TEXT("parameters"), ParametersObject) ||
+		!ParametersObject ||
+		!ParametersObject->IsValid())
+	{
+		OutErrorMessage = FString::Printf(TEXT("%s request body did not include structured-output parameters."), ProviderName);
+		return false;
+	}
+
+	OutSchemaObject = *ParametersObject;
+	return true;
+}
+
+bool GetStructuredOutputSchemaFromOpenAIRequest(
+	const FString& RequestBody,
+	TSharedPtr<FJsonObject>& OutSchemaObject,
+	FString& OutErrorMessage)
+{
+	return GetStructuredOutputParametersSchemaFromOpenAICompatibleRequest(
+		RequestBody,
+		TEXT("OpenAI"),
+		OutSchemaObject,
+		OutErrorMessage);
+}
+
+bool GetStructuredOutputSchemaFromLocalRequest(
+	const FString& RequestBody,
+	TSharedPtr<FJsonObject>& OutSchemaObject,
+	FString& OutErrorMessage)
+{
+	return GetStructuredOutputParametersSchemaFromOpenAICompatibleRequest(
+		RequestBody,
+		TEXT("Local"),
+		OutSchemaObject,
+		OutErrorMessage);
+}
+
+bool GetStructuredOutputSchemaFromAnthropicRequest(
+	const FString& RequestBody,
+	TSharedPtr<FJsonObject>& OutSchemaObject,
+	FString& OutErrorMessage)
+{
+	TSharedPtr<FJsonObject> FirstToolObject;
+	if (!GetFirstToolObjectFromRequest(RequestBody, TEXT("Anthropic"), FirstToolObject, OutErrorMessage))
+	{
+		return false;
+	}
+
+	const TSharedPtr<FJsonObject>* SchemaObject = nullptr;
+	if (!FirstToolObject->TryGetObjectField(TEXT("input_schema"), SchemaObject) ||
+		!SchemaObject ||
+		!SchemaObject->IsValid())
+	{
+		OutErrorMessage = TEXT("Anthropic request body did not include structured-output input_schema.");
+		return false;
+	}
+
+	OutSchemaObject = *SchemaObject;
+	return true;
 }
 }
 
@@ -1277,8 +1431,90 @@ bool FAINpcResponseParserFunctionCallingStructuredOutputRejectsMissingRequiredKe
 	TestTrue(TEXT("Downgraded structured-output function payload should still provide fallback action intent."), ParsedResponse.Actions.Num() > 0);
 	if (ParsedResponse.Actions.Num() > 0)
 	{
-		TestEqual(TEXT("Downgraded structured-output function payload should use default plain-text action."), ParsedResponse.Actions[0].ActionType, FString(TEXT("Action.DefaultTalk")));
+		TestEqual(TEXT("Downgraded structured-output function payload should use default plain-text action."), ParsedResponse.Actions[0].ActionType, FString(AINpc::Actions::DefaultTalkActionType));
 	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAINpcResponseParserAnthropicStreamingToolUseTest,
+	"AINpc.Core.Parser.AnthropicStreamingToolUseStructuredOutput",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcResponseParserAnthropicStreamingToolUseTest::RunTest(const FString& Parameters)
+{
+	const FString ResponseBody = TEXT(
+		"event: message_start\n"
+		"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n"
+		"\n"
+		"event: content_block_start\n"
+		"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"emit_npc_response\",\"input\":{}}}\n"
+		"\n"
+		"event: content_block_delta\n"
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"dialogue\\\":\\\"I will inspect the pillar.\\\",\\\"actions\\\":[{\\\"type\\\":\\\"Action.Inspect\\\",\\\"target\\\":\\\"SO_SLOT_Pillar\\\"}],\"}}\n"
+		"\n"
+		"event: content_block_delta\n"
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"emotion_delta\\\":{\\\"valence\\\":0.2,\\\"arousal\\\":0.1,\\\"dominance\\\":0.0},\\\"relationship_delta\\\":{\\\"affinity\\\":0.0,\\\"trust\\\":0.1,\\\"familiarity\\\":0.0}}\"}}\n"
+		"\n"
+		"event: content_block_stop\n"
+		"data: {\"type\":\"content_block_stop\",\"index\":0}\n"
+		"\n"
+		"event: message_stop\n"
+		"data: {\"type\":\"message_stop\"}\n"
+		"\n");
+
+	FParsedLLMResponse ParsedResponse;
+	FString ErrorMessage;
+	const bool bParsed = FLLMResponseParser::ParseAnthropicMessages(ResponseBody, ParsedResponse, ErrorMessage);
+
+	TestTrue(TEXT("Anthropic streaming tool_use response should parse successfully."), bParsed);
+	TestTrue(TEXT("Anthropic streaming tool_use response should not report parser errors."), ErrorMessage.IsEmpty());
+	TestEqual(TEXT("Anthropic streaming tool_use should select function-calling tier."), ParsedResponse.ParseTier, ELLMResponseParseTier::FunctionCalling);
+	TestEqual(TEXT("Anthropic streaming tool_use should extract dialogue from input_json_delta."), ParsedResponse.Dialogue, FString(TEXT("I will inspect the pillar.")));
+	TestEqual(TEXT("Anthropic streaming tool_use should extract one action."), ParsedResponse.Actions.Num(), 1);
+	if (ParsedResponse.Actions.Num() == 1)
+	{
+		TestEqual(TEXT("Anthropic streaming tool_use action type should match structured output."), ParsedResponse.Actions[0].ActionType, FString(TEXT("Action.Inspect")));
+		TestEqual(TEXT("Anthropic streaming tool_use action target should match structured output."), ParsedResponse.Actions[0].Target, FString(TEXT("SO_SLOT_Pillar")));
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAINpcAnthropicStructuredOutputDisablesStreamingRequestTest,
+	"AINpc.Core.Reliability.AnthropicStructuredOutputDisablesStreamingRequest",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcAnthropicStructuredOutputDisablesStreamingRequestTest::RunTest(const FString& Parameters)
+{
+	const TSharedRef<FAnthropicProvider> Provider =
+		MakeShared<FAnthropicProvider>(TEXT("test-key"), TEXT("test-model"), TEXT("https://example.test"));
+
+	FLLMRequest Request;
+	Request.bUseStreaming = true;
+	Request.Temperature = 0.2f;
+	Request.MaxTokens = 128;
+	FLLMMessage UserMessage;
+	UserMessage.Role = TEXT("user");
+	UserMessage.Content = TEXT("Respond with structured NPC output.");
+	Request.Messages.Add(MoveTemp(UserMessage));
+
+	const FString RequestBody = Provider->BuildRequestBodyForTest(Request);
+	TSharedPtr<FJsonObject> RequestJson;
+	const bool bParsedRequestJson = DeserializeJsonObjectForTest(RequestBody, RequestJson);
+	TestTrue(TEXT("Anthropic request payload should deserialize as JSON."), bParsedRequestJson);
+	if (!bParsedRequestJson || !RequestJson.IsValid())
+	{
+		return false;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* ToolsArray = nullptr;
+	TestTrue(TEXT("Anthropic structured-output request should include tools."), RequestJson->TryGetArrayField(TEXT("tools"), ToolsArray) && ToolsArray && ToolsArray->Num() > 0);
+	const TSharedPtr<FJsonObject>* ToolChoiceObject = nullptr;
+	TestTrue(TEXT("Anthropic structured-output request should force tool_choice."), RequestJson->TryGetObjectField(TEXT("tool_choice"), ToolChoiceObject) && ToolChoiceObject && ToolChoiceObject->IsValid());
+	TestFalse(TEXT("Anthropic structured-output request should not ask the endpoint for streaming."), RequestJson->HasField(TEXT("stream")));
 
 	return true;
 }
@@ -1441,7 +1677,7 @@ bool FAINpcResponseParserPlainTextTierTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Plain-text downgrade tier should provide default action intent."), ParsedResponse.Actions.Num() > 0);
 	if (ParsedResponse.Actions.Num() > 0)
 	{
-		TestEqual(TEXT("Plain-text downgrade tier should use the default action template."), ParsedResponse.Actions[0].ActionType, FString(TEXT("Action.DefaultTalk")));
+		TestEqual(TEXT("Plain-text downgrade tier should use the default action template."), ParsedResponse.Actions[0].ActionType, FString(AINpc::Actions::DefaultTalkActionType));
 	}
 
 	return true;
@@ -2397,6 +2633,84 @@ bool FAINpcRetryFallbackIntegrationTest::RunTest(const FString& Parameters)
 	UE_LOG(LogAINpc, Verbose, TEXT("Timeout degradation notification sent to blueprint"));
 	TestEqual(TEXT("Exhausted retries should trigger degradation."), DegradedCount, 1);
 	TestEqual(TEXT("Component should transition to speaking after fallback."), Component->GetDialogueState(), ENpcDialogueState::Speaking);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAINpcStructuredOutputSchemaParityTest,
+	"AINpc.Core.Reliability.StructuredOutputSchemaParity",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcStructuredOutputSchemaParityTest::RunTest(const FString& Parameters)
+{
+	const TSharedRef<FOpenAIProvider> OpenAIProvider =
+		MakeShared<FOpenAIProvider>(TEXT("test-key"), TEXT("test-model"), TEXT("https://example.test"));
+	const TSharedRef<FLocalProvider> LocalProvider =
+		MakeShared<FLocalProvider>(TEXT("test-model"), TEXT("http://localhost:11434/v1"));
+	const TSharedRef<FAnthropicProvider> AnthropicProvider =
+		MakeShared<FAnthropicProvider>(TEXT("test-key"), TEXT("test-model"), TEXT("https://example.test"));
+
+	FLLMRequest Request;
+	Request.Temperature = 0.2f;
+	Request.MaxTokens = 128;
+	FLLMMessage UserMessage;
+	UserMessage.Role = TEXT("user");
+	UserMessage.Content = TEXT("Respond with structured NPC output.");
+	Request.Messages.Add(MoveTemp(UserMessage));
+
+	const FString OpenAIRequestBody = OpenAIProvider->BuildRequestBodyForTest(Request);
+	const FString LocalRequestBody = LocalProvider->BuildRequestBodyForTest(Request);
+	const FString AnthropicRequestBody = AnthropicProvider->BuildRequestBodyForTest(Request);
+
+	TSharedPtr<FJsonObject> OpenAISchema;
+	TSharedPtr<FJsonObject> LocalSchema;
+	TSharedPtr<FJsonObject> AnthropicSchema;
+	FString ErrorMessage;
+	TestTrue(TEXT("OpenAI schema should be extractable from request body."), GetStructuredOutputSchemaFromOpenAIRequest(OpenAIRequestBody, OpenAISchema, ErrorMessage));
+	TestTrue(TEXT("Local schema should be extractable from request body."), GetStructuredOutputSchemaFromLocalRequest(LocalRequestBody, LocalSchema, ErrorMessage));
+	TestTrue(TEXT("Anthropic schema should be extractable from request body."), GetStructuredOutputSchemaFromAnthropicRequest(AnthropicRequestBody, AnthropicSchema, ErrorMessage));
+	if (!OpenAISchema.IsValid() || !LocalSchema.IsValid() || !AnthropicSchema.IsValid())
+	{
+		AddError(ErrorMessage);
+		return false;
+	}
+
+	const FString OpenAISchemaJson = SerializeJsonObjectForTest(OpenAISchema);
+	const FString LocalSchemaJson = SerializeJsonObjectForTest(LocalSchema);
+	const FString AnthropicSchemaJson = SerializeJsonObjectForTest(AnthropicSchema);
+	TestEqual(TEXT("OpenAI and Local structured-output schemas should match."), OpenAISchemaJson, LocalSchemaJson);
+	TestEqual(TEXT("Anthropic structured-output schema should match the shared schema contract."), OpenAISchemaJson, AnthropicSchemaJson);
+
+	TestTrue(TEXT("Shared structured-output schema should require all root fields."), JsonObjectRequiresFields(OpenAISchema, { TEXT("dialogue"), TEXT("actions"), TEXT("emotion_delta"), TEXT("relationship_delta") }));
+	TestTrue(TEXT("Shared structured-output schema should disallow extra top-level keys."), JsonObjectDisallowsAdditionalProperties(OpenAISchema));
+
+	const TSharedPtr<FJsonObject>* PropertiesObject = nullptr;
+	TestTrue(TEXT("Shared structured-output schema should include properties object."), OpenAISchema->TryGetObjectField(TEXT("properties"), PropertiesObject) && PropertiesObject && PropertiesObject->IsValid());
+	const TSharedPtr<FJsonObject>* ActionsSchemaObject = nullptr;
+	TestTrue(TEXT("Shared structured-output schema should include actions field."), PropertiesObject && (*PropertiesObject)->TryGetObjectField(TEXT("actions"), ActionsSchemaObject) && ActionsSchemaObject && ActionsSchemaObject->IsValid());
+	const TSharedPtr<FJsonObject>* ActionItemSchemaObject = nullptr;
+	TestTrue(TEXT("Shared structured-output schema should include action item schema."), ActionsSchemaObject && (*ActionsSchemaObject)->TryGetObjectField(TEXT("items"), ActionItemSchemaObject) && ActionItemSchemaObject && ActionItemSchemaObject->IsValid());
+	const TSharedPtr<FJsonObject> ActionItemSchema = ActionItemSchemaObject ? *ActionItemSchemaObject : TSharedPtr<FJsonObject>();
+	TestTrue(TEXT("Action item schema should require type field."), JsonObjectRequiresFields(ActionItemSchema, { TEXT("type") }));
+	TestTrue(TEXT("Action item schema should disallow extra keys."), JsonObjectDisallowsAdditionalProperties(ActionItemSchema));
+
+	const TSharedPtr<FJsonObject>* NestedPropertiesObject = nullptr;
+	TestTrue(TEXT("Action item schema should include properties object."), ActionItemSchema.IsValid() && ActionItemSchema->TryGetObjectField(TEXT("properties"), NestedPropertiesObject) && NestedPropertiesObject && NestedPropertiesObject->IsValid());
+	TestTrue(TEXT("Action item schema should declare type field."), NestedPropertiesObject && (*NestedPropertiesObject)->HasField(TEXT("type")));
+	TestTrue(TEXT("Action item schema should declare target field."), NestedPropertiesObject && (*NestedPropertiesObject)->HasField(TEXT("target")));
+
+	const TSharedPtr<FJsonObject>* EmotionDeltaSchemaObject = nullptr;
+	TestTrue(TEXT("Shared structured-output schema should include emotion_delta field."), PropertiesObject && (*PropertiesObject)->TryGetObjectField(TEXT("emotion_delta"), EmotionDeltaSchemaObject) && EmotionDeltaSchemaObject && EmotionDeltaSchemaObject->IsValid());
+	const TSharedPtr<FJsonObject> EmotionDeltaSchema = EmotionDeltaSchemaObject ? *EmotionDeltaSchemaObject : TSharedPtr<FJsonObject>();
+	TestTrue(TEXT("Emotion delta schema should require all fields."), JsonObjectRequiresFields(EmotionDeltaSchema, { TEXT("valence"), TEXT("arousal"), TEXT("dominance") }));
+	TestTrue(TEXT("Emotion delta schema should disallow extra keys."), JsonObjectDisallowsAdditionalProperties(EmotionDeltaSchema));
+
+	const TSharedPtr<FJsonObject>* RelationshipDeltaSchemaObject = nullptr;
+	TestTrue(TEXT("Shared structured-output schema should include relationship_delta field."), PropertiesObject && (*PropertiesObject)->TryGetObjectField(TEXT("relationship_delta"), RelationshipDeltaSchemaObject) && RelationshipDeltaSchemaObject && RelationshipDeltaSchemaObject->IsValid());
+	const TSharedPtr<FJsonObject> RelationshipDeltaSchema = RelationshipDeltaSchemaObject ? *RelationshipDeltaSchemaObject : TSharedPtr<FJsonObject>();
+	TestTrue(TEXT("Relationship delta schema should require all fields."), JsonObjectRequiresFields(RelationshipDeltaSchema, { TEXT("affinity"), TEXT("trust"), TEXT("familiarity") }));
+	TestTrue(TEXT("Relationship delta schema should disallow extra keys."), JsonObjectDisallowsAdditionalProperties(RelationshipDeltaSchema));
 
 	return true;
 }

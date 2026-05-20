@@ -40,7 +40,7 @@ public:
 	int32 GetQueuedDialogueCount() const { return QueuedDialogueRequests.Num(); }
 	int32 GetQueuedMemoryCount() const { return QueuedMemoryRequests.Num(); }
 
-#if WITH_EDITOR
+#if defined(WITH_DEV_AUTOMATION_TESTS) && WITH_DEV_AUTOMATION_TESTS
 	void ResetForTest();
 	void SetActiveDialogueSlotsForTest(int32 Slots) { ActiveDialogueSlots = FMath::Max(0, Slots); }
 	void SetActiveMemorySlotsForTest(int32 Slots) { ActiveMemorySlots = FMath::Max(0, Slots); }

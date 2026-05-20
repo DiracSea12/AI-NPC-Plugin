@@ -17,4 +17,6 @@ if (-not (Test-Path $uproject)) {
 }
 
 & $ubt VerifierHostEditor Win64 $Configuration "-Project=$uproject" -WaitMutex -FromMsBuild
-
+if ($LASTEXITCODE -ne 0) {
+    throw "UnrealBuildTool failed with exit code $LASTEXITCODE"
+}
