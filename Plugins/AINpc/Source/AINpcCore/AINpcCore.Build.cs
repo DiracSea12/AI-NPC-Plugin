@@ -1,9 +1,7 @@
-﻿using UnrealBuildTool;
+using UnrealBuildTool;
 
 public class AINpcCore : ModuleRules
 {
-    private bool bUseSmartObjects = true;
-
     public AINpcCore(ReadOnlyTargetRules Target) : base(Target)
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
@@ -27,23 +25,8 @@ public class AINpcCore : ModuleRules
             "StateTreeModule"
         });
 
-        if (bUseSmartObjects)
-        {
-            PrivateDependencyModuleNames.Add("SmartObjectsModule");
-            PublicDefinitions.Add("WITH_SMARTOBJECTS=1");
-        }
-        else
-        {
-            PublicDefinitions.Add("WITH_SMARTOBJECTS=0");
-        }
-
-        if (Target.Type == TargetType.Editor)
-        {
-            PrivateDependencyModuleNames.AddRange(new[]
-            {
-                "UnrealEd"
-            });
-        }
+        PublicDependencyModuleNames.Add("SmartObjectsModule");
+        PublicDefinitions.Add("WITH_SMARTOBJECTS=1");
 
         RuntimeDependencies.Add(
             "$(ProjectDir)/Config/AINpcPromptTemplate.txt",
@@ -61,7 +44,22 @@ public class AINpcCore : ModuleRules
             "$(ProjectDir)/Config/AINpcStructuredOutputToolDescription.txt",
             StagedFileType.NonUFS);
         RuntimeDependencies.Add(
+            "$(ProjectDir)/Config/AINpcExamplePersona.txt",
+            StagedFileType.NonUFS);
+        RuntimeDependencies.Add(
             "$(ProjectDir)/Config/AINpcVisualHarnessInitialPrompt.txt",
+            StagedFileType.NonUFS);
+        RuntimeDependencies.Add(
+            "$(ProjectDir)/Config/AINpcVisualHarnessDelayFiller.txt",
+            StagedFileType.NonUFS);
+        RuntimeDependencies.Add(
+            "$(ProjectDir)/Config/AINpcVisualHarnessUs2Prompt.txt",
+            StagedFileType.NonUFS);
+        RuntimeDependencies.Add(
+            "$(ProjectDir)/Config/AINpcVisualHarnessUs1Persona.txt",
+            StagedFileType.NonUFS);
+        RuntimeDependencies.Add(
+            "$(ProjectDir)/Config/AINpcVisualHarnessUs2Persona.txt",
             StagedFileType.NonUFS);
 
         // Automation tests need to be available in Development builds

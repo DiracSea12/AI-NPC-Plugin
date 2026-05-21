@@ -68,7 +68,6 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "AI NPC|Dialogue") void EndDialogue();
 	UFUNCTION(BlueprintCallable, Category = "AI NPC|Dialogue") FString GetNpcResponse() const;
 	UFUNCTION(BlueprintCallable, Category = "AI NPC|Dialogue") void SetPersonaData(UNpcPersonaDataAsset* NewPersonaData);
-	UFUNCTION(BlueprintCallable, Category = "AI NPC|Provider") void SetApiKey(const FString& NewApiKey);
 
 	UFUNCTION(BlueprintPure, Category = "AI NPC|Dialogue")
 	bool IsDialogueActive() const;
@@ -86,6 +85,10 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "AI NPC|Dialogue")
 	ENpcDialogueState GetDialogueState() const;
+
+	// Diagnostic-only: reports whether Pawn-based StateTree auto-controller support is available for this owner.
+	UFUNCTION(BlueprintPure, Category = "AI NPC|Diagnostics")
+	bool SupportsStateTreeAutoController() const;
 
 	UFUNCTION(BlueprintCallable, Category = "AI NPC|StateTree")
 	void SetDialogueStateFromStateTree(ENpcDialogueState NewState);
@@ -119,6 +122,7 @@ public:
 
 #if defined(WITH_DEV_AUTOMATION_TESTS) && WITH_DEV_AUTOMATION_TESTS
 	void SetDialogueTestState(bool bSessionActive, bool bRequestInFlight, const FGuid& RequestId, int32 InRetryAttemptCount, ENpcDialogueState InDialogueState);
+	void SeedConversationHistoryForTest(const TArray<FLLMMessage>& Messages);
 	void HandleRequestCompletedForTest(const FLLMResponse& Response);
 	void HandleStateTreeTimeoutFailureForTest();
 	void SetLatestParsedActionsForTest(const TArray<FNpcAction>& InActions);
@@ -134,6 +138,7 @@ public:
 	bool HasQueuedMemoryMaintenanceRequestForTest() const;
 	bool IsMemoryMaintenanceActiveForTest() const;
 	FLLMRequest BuildRequestForTest() const;
+	FLLMRequest BuildStreamingRequestForTest();
 	FGuid GetActiveRequestIdForTest() const;
 	void ResetDynamicDelegateCountersForTest();
 	int32 GetDynamicDialogueResponseCountForTest() const;
@@ -153,16 +158,6 @@ public:
 public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI NPC")
 	TObjectPtr<UNpcPersonaDataAsset> PersonaDataAsset = nullptr;
-
-	// Override environment variable `AINPC_OPENAI_API_KEY` if set. Leave empty to use environment variable.
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI NPC|Provider")
-	FString ApiKeyOverride;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI NPC|Provider")
-	FString BaseUrlOverride;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI NPC|Provider")
-	FString ModelOverride;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI NPC|StateTree")
 	TObjectPtr<UStateTree> DefaultStateTreeAsset = nullptr;

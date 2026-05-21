@@ -38,7 +38,7 @@
 │                 └──────────┘ └───────────────────┘  │
 ├─────────────────────────────────────────────────────┤
 │              UE5 引擎标准模块                         │
-│  Core │ AIModule │ StateTree │ SmartObjects(可选) │  │
+│  Core │ AIModule │ StateTree │ SmartObjects │  │
 │  HTTP │ SQLiteCore │ GameplayTags │ Json │ UMG/Slate│
 └─────────────────────────────────────────────────────┘
 ```
@@ -54,8 +54,8 @@
 | AINpcEditor | Editor | PersonaEditor, MemoryDebugger | AINpcCore, AINpcMemory, UnrealEd | 5 |
 
 > AINpcUI 与 Runtime 隔离，Dedicated Server 编译时排除 UMG/Slate 依赖（NFR-6）。
-> SmartObjects 为可选依赖，通过 Build.cs 的 `bUseSmartObjects` 开关控制条件编译（`#if WITH_SMARTOBJECTS`），未启用时相关功能不可用。
-> 最低引擎版本：UE5.4+（NFR-7，StateTree WeakExecutionContext 依赖），`.uplugin` 中设置 `"EngineVersion": "5.4.0"`。
+> SmartObjects 为 AINpcCore 硬依赖，Build.cs 无条件依赖 `SmartObjectsModule` 并定义 `WITH_SMARTOBJECTS=1`。
+> 最低引擎版本：UE5.4+（NFR-7，StateTree WeakExecutionContext 依赖）。
 > Phase 6 沉浸感增强功能（日程、主动交互、NPC 社交、情感外化）可通过 `UAINpcSettings::bEnableImmersionPack` 开关独立启用/禁用。
 
 ### 1.3 核心对象关系图
@@ -253,9 +253,6 @@ struct FLLMRequest
 
     UPROPERTY(BlueprintReadWrite)
     FString JsonSchema;     // 可选，强制 JSON 输出的 Schema
-
-    UPROPERTY()
-    FString ModelOverride;  // 可选，覆盖 Provider 默认模型
 };
 
 USTRUCT(BlueprintType)
@@ -498,11 +495,8 @@ class UNpcPersonaDataAsset : public UDataAsset
     GENERATED_BODY()
 public:
     // ---- Phase 1 ----
-    UPROPERTY(EditAnywhere, Category="LLM")
-    FString ApiKey;
-
-    UPROPERTY(EditAnywhere, Category="LLM")
-    TArray<FString> FallbackResponses;  // 降级模板响应池（FR-5），随机选取
+    UPROPERTY(EditAnywhere, Category="Dialogue")
+    TArray<FString> FallbackResponses;  // 对话模板响应池（FR-5），随机选取；不是 provider/source 配置
 
     UPROPERTY(EditAnywhere, Category="Persona")
     FString PersonaName;
@@ -608,7 +602,9 @@ struct FParsedLLMResponse
 
 ### 4.1 LLM 通信层
 
-#### 4.1.1 ILLMProvider 接口
+#### 4.1.1 Provider Source 决策与 ILLMProvider 接口
+
+Provider source 采用 JSON Provider 配置作为唯一权威。除本地部署模型外，Provider 类型、baseUrl、model、API key、fallback provider 均从 JSON Provider 配置读取；不得从 `UAINpcSettings`、`UNpcPersonaDataAsset`、环境变量、旧字段、双读兼容或静默迁移读取。`UAINpcSettings` 只描述 timeout、retry、template、concurrency 等非 provider-source 通用运行时参数。`UNpcPersonaDataAsset` 只描述人设、Prompt 层、动画/延迟掩盖、模板文本等 NPC 内容。CustomProvider 若保留产品承诺，只能通过 JSON 显式配置/注册 seam 接入实现了 `ILLMProvider` 的 provider。
 
 ```cpp
 class ILLMProvider
@@ -686,7 +682,7 @@ public:
     UPROPERTY(BlueprintAssignable, Category="AINpc|Dialogue")
     FOnLLMFallback OnLLMFallback;
 
-    // ---- 配置（核心流程①：配置 Key）----
+    // ---- 配置（核心流程①：绑定人设；Provider source 来自 JSON Provider 配置）----
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="AINpc|Config")
     UNpcPersonaDataAsset* PersonaData;
@@ -735,7 +731,7 @@ private:
     // 维护池优先级：ConflictResolve > Social
     TArray<FPendingLLMRequest> MaintenanceQueue;
 
-    // Provider 实例池（按配置创建）
+    // Provider 实例池（按 JSON Provider 配置创建）
     TMap<FName, TUniquePtr<ILLMProvider>> ProviderPool;
 
     void TryDispatchDialogue();
@@ -775,12 +771,12 @@ private:
 请求发出 → 超时/失败
   ├─ Phase 1: 预设模板响应 → 静默失败+蓝图通知
   └─ Phase 2+:
-       ├─ 本地 SLM（LocalProvider，若已配置）
-       ├─ 预设模板响应（NpcPersonaDataAsset 中配置）
+       ├─ JSON 显式配置的本地 SLM/fallback provider（LocalProvider，若已配置；本地部署模型例外）
+       ├─ 预设模板响应（非 provider-source runtime/template 配置或 Persona 内容模板中配置）
        └─ 静默失败 + OnLLMFallback 蓝图事件通知
 
 重试策略：最多 2 次，间隔 = BaseDelay × 2^attempt（1s, 2s）
-超时阈值：默认 4s（与 NFR-1 P95 对齐）
+超时阈值：默认 4s（与 NFR-1 P95 对齐），可由 UAINpcSettings 配置；Provider/source 字段不可由 UAINpcSettings 配置
 ```
 
 ### 4.2 行为执行层
@@ -2153,8 +2149,8 @@ CREATE TABLE IF NOT EXISTS npc_relationships (
 |---------|---------|---------|
 | UAINpcComponent | 核心入口，工作记忆，对话接口 | FR-8 |
 | AAINpcController | AIController 基类，持有 StateTree | FR-8 |
-| UNpcPersonaDataAsset | 人设配置（ApiKey/Persona/Style/Montages） | FR-6, FR-37 |
-| UAINpcSettings | 项目级设置（默认 Provider/超时/并发） | FR-6 |
+| UNpcPersonaDataAsset | 人设配置（Persona/Style/Montages/Prompt/模板文本；不配置 API key/provider/model/baseUrl） | FR-6, FR-37 |
+| UAINpcSettings | 项目级非 provider-source 运行时参数（超时/重试/并发/模板等；不配置 API key/provider/model/baseUrl） | FR-6 |
 | ILLMProvider | Provider 接口定义 | FR-1 |
 | UOpenAIProvider | 首个 Provider 实现 | FR-1 |
 | FLLMRequest/Response | 通信数据结构 | FR-2 |
@@ -2177,7 +2173,7 @@ CREATE TABLE IF NOT EXISTS npc_relationships (
 | FSSEParser | SSE 流式解析器 | FR-4 |
 | UAnthropicProvider | Anthropic 接入 | FR-1 |
 | ULocalProvider | Ollama 本地模型 | FR-1 |
-| UCustomProvider | 自定义 endpoint | FR-1 |
+| UCustomProvider | 通过 JSON 显式配置/注册 seam 接入的自定义 endpoint | FR-1 |
 | 降级链扩展 | SLM → 模板 → 静默失败 | FR-5 |
 
 ### Phase 3a — 记忆存储与检索

@@ -1,64 +1,214 @@
 #include "Test/AINpcTestGameMode.h"
-#include "Test/AINpcTestCharacter.h"
-#include "Test/AINpcTestSmartObjectActor.h"
-#include "Components/AINpcComponent.h"
-#include "Components/AINpcProviderConfigResolver.h"
+
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "Components/AINpcComponent.h"
+#include "Serialization/JsonWriter.h"
+#include "Serialization/JsonSerializer.h"
+#include "Misc/Paths.h"
+#include "Misc/FileHelper.h"
+#include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
 #include "GameFramework/DefaultPawn.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/PlatformMisc.h"
-#include "Misc/FileHelper.h"
-#include "Misc/Paths.h"
-#include "SmartObjectBridge/AINpcSmartObjectRuntimeExecutor.h"
+#include "HAL/PlatformProcess.h"
+#include "Misc/CommandLine.h"
+#include "Misc/DateTime.h"
+#include "Misc/Guid.h"
+#include "Misc/Parse.h"
 #include "SmartObjectBridge/SmartObjectBridgeContext.h"
+#include "Test/AINpcTestCharacter.h"
+#include "Test/AINpcTestSmartObjectActor.h"
+#include "Test/AINpcVisualTestRegistry.h"
 #include "TimerManager.h"
 
 namespace
 {
-	const float InitialDialogueDelaySeconds = 3.0f;
-	const float VerificationTimeoutSeconds = 45.0f;
+	const float PollSeconds = 0.1f;
 	const float SuccessExitDelaySeconds = 5.0f;
 	const float FailureExitDelaySeconds = 8.0f;
-	const float VisualVerificationPollSeconds = 0.1f;
-	const float SmartObjectSearchRadius = 1200.0f;
-	const int32 SmartObjectClaimPriority = 2;
-	const TCHAR* InitialPromptTemplateFileName = TEXT("AINpcVisualHarnessInitialPrompt.txt");
-	const TCHAR* SmartObjectTargetIdPlaceholder = TEXT("{SmartObjectTargetId}");
+	const float MaxVisibleHoldSeconds = 300.0f;
+	const TCHAR* DefaultVisualTestId = TEXT("us1.dialogue-action");
 
-	bool LoadInitialPromptTemplate(FString& OutPromptTemplate, FString& OutFailureReason)
+
+	FString RedactSensitiveText(const FString& Input)
 	{
-		const FString TemplatePath = FPaths::Combine(FPaths::ProjectConfigDir(), InitialPromptTemplateFileName);
-		FString LoadedTemplate;
-		if (!FFileHelper::LoadFileToString(LoadedTemplate, *TemplatePath))
+		FString Redacted = Input;
+		const TArray<FString> Keys = {
+			TEXT("Authorization"),
+			TEXT("x-api-key"),
+			TEXT("apiKey"),
+			TEXT("token"),
+			TEXT("password"),
+			TEXT("secret"),
+			TEXT("bearer")
+		};
+
+		for (const FString& Key : Keys)
 		{
-			OutFailureReason = FString::Printf(
-				TEXT("Failed to load visual harness initial prompt template from %s."),
-				*TemplatePath);
-			return false;
+			int32 SearchFrom = 0;
+			while (SearchFrom < Redacted.Len())
+			{
+				const int32 KeyIndex = Redacted.Find(Key, ESearchCase::IgnoreCase, ESearchDir::FromStart, SearchFrom);
+				if (KeyIndex == INDEX_NONE)
+				{
+					break;
+				}
+
+				int32 SeparatorIndex = INDEX_NONE;
+				const int32 MaxSeparatorScan = FMath::Min(Redacted.Len(), KeyIndex + Key.Len() + 16);
+				for (int32 Index = KeyIndex + Key.Len(); Index < MaxSeparatorScan; ++Index)
+				{
+					const TCHAR Char = Redacted[Index];
+					if (Char == TEXT(':') || Char == TEXT('='))
+					{
+						SeparatorIndex = Index;
+						break;
+					}
+					if (!FChar::IsWhitespace(Char) && Char != TEXT('"') && Char != TEXT('\''))
+					{
+						break;
+					}
+				}
+
+				int32 ValueStart = INDEX_NONE;
+				if (SeparatorIndex == INDEX_NONE)
+				{
+					ValueStart = KeyIndex + Key.Len();
+					while (ValueStart < Redacted.Len() && (FChar::IsWhitespace(Redacted[ValueStart]) || Redacted[ValueStart] == TEXT("-")[0] || Redacted[ValueStart] == TEXT("/")[0] || Redacted[ValueStart] == TCHAR(34) || Redacted[ValueStart] == TCHAR(39)))
+					{
+						++ValueStart;
+					}
+				}
+				else
+				{
+					ValueStart = SeparatorIndex + 1;
+				}
+				while (ValueStart < Redacted.Len() && (FChar::IsWhitespace(Redacted[ValueStart]) || Redacted[ValueStart] == TEXT('"') || Redacted[ValueStart] == TEXT('\'')))
+				{
+					++ValueStart;
+				}
+
+				if (Redacted.Mid(ValueStart, 6).Equals(TEXT("Bearer"), ESearchCase::IgnoreCase))
+				{
+					ValueStart += 6;
+					while (ValueStart < Redacted.Len() && FChar::IsWhitespace(Redacted[ValueStart]))
+					{
+						++ValueStart;
+					}
+				}
+
+				int32 ValueEnd = ValueStart;
+				while (ValueEnd < Redacted.Len())
+				{
+					const TCHAR Char = Redacted[ValueEnd];
+					if (FChar::IsWhitespace(Char) || Char == TEXT(',') || Char == TEXT(';') || Char == TEXT('}') || Char == TEXT(']') || Char == TEXT('"') || Char == TEXT('\''))
+					{
+						break;
+					}
+					++ValueEnd;
+				}
+
+				if (ValueEnd > ValueStart)
+				{
+					Redacted.RemoveAt(ValueStart, ValueEnd - ValueStart, EAllowShrinking::No);
+					Redacted.InsertAt(ValueStart, TEXT("<redacted>"));
+					SearchFrom = ValueStart + 10;
+				}
+				else
+				{
+					SearchFrom = ValueStart + 1;
+				}
+			}
 		}
 
-		LoadedTemplate.TrimStartAndEndInline();
-		if (LoadedTemplate.IsEmpty())
+		int32 BearerIndex = 0;
+		while ((BearerIndex = Redacted.Find(TEXT("Bearer "), ESearchCase::IgnoreCase, ESearchDir::FromStart, BearerIndex)) != INDEX_NONE)
 		{
-			OutFailureReason = FString::Printf(
-				TEXT("Visual harness initial prompt template was empty: %s."),
-				*TemplatePath);
-			return false;
+			const int32 ValueStart = BearerIndex + 7;
+			int32 ValueEnd = ValueStart;
+			while (ValueEnd < Redacted.Len())
+			{
+				const TCHAR Char = Redacted[ValueEnd];
+				if (FChar::IsWhitespace(Char) || Char == TEXT(',') || Char == TEXT(';') || Char == TEXT('}') || Char == TEXT(']') || Char == TEXT('"') || Char == TEXT('\''))
+				{
+					break;
+				}
+				++ValueEnd;
+			}
+			if (ValueEnd <= ValueStart)
+			{
+				BearerIndex = ValueStart + 1;
+				continue;
+			}
+			Redacted.RemoveAt(ValueStart, ValueEnd - ValueStart, EAllowShrinking::No);
+			Redacted.InsertAt(ValueStart, TEXT("<redacted>"));
+			BearerIndex = ValueStart + 10;
 		}
 
-		if (!LoadedTemplate.Contains(SmartObjectTargetIdPlaceholder))
+		return Redacted;
+	}
+
+
+	FString ToIsoUtc(const FDateTime& Time)
+	{
+		return Time.ToIso8601();
+	}
+
+	TArray<TSharedPtr<FJsonValue>> StringsToJsonArray(const TArray<FString>& Values)
+	{
+		TArray<TSharedPtr<FJsonValue>> JsonValues;
+		for (const FString& Value : Values)
 		{
-			OutFailureReason = FString::Printf(
-				TEXT("Visual harness initial prompt template %s is missing required placeholder %s."),
-				*TemplatePath,
-				SmartObjectTargetIdPlaceholder);
-			return false;
+			JsonValues.Add(MakeShared<FJsonValueString>(Value));
+		}
+		return JsonValues;
+	}
+
+	TSharedPtr<FJsonObject> BuildObservationJson(const FAINpcVisualTestObservations& Observations)
+	{
+		TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
+		for (const TPair<FString, bool>& Field : Observations.BooleanFields)
+		{
+			Json->SetBoolField(Field.Key, Field.Value);
+		}
+		for (const TPair<FString, int32>& Field : Observations.IntegerFields)
+		{
+			Json->SetNumberField(Field.Key, Field.Value);
+		}
+		for (const TPair<FString, double>& Field : Observations.NumberFields)
+		{
+			Json->SetNumberField(Field.Key, Field.Value);
+		}
+		for (const TPair<FString, FString>& Field : Observations.StringFields)
+		{
+			Json->SetStringField(Field.Key, RedactSensitiveText(Field.Value));
+		}
+		return Json;
+	}
+
+	float GetVisibleHoldSeconds(const float DefaultDelaySeconds)
+	{
+		float RequestedDelaySeconds = DefaultDelaySeconds;
+		if (FParse::Value(FCommandLine::Get(), TEXT("AINpcVisualHoldSeconds="), RequestedDelaySeconds))
+		{
+			return FMath::Clamp(RequestedDelaySeconds, 0.0f, MaxVisibleHoldSeconds);
 		}
 
-		OutPromptTemplate = MoveTemp(LoadedTemplate);
-		return true;
+		return DefaultDelaySeconds;
+	}
+
+	FString ResolveVisualLogPath()
+	{
+		FString RequestedPath;
+		if (FParse::Value(FCommandLine::Get(), TEXT("AbsLog="), RequestedPath) && !RequestedPath.IsEmpty())
+		{
+			return FPaths::ConvertRelativePathToFull(RequestedPath);
+		}
+
+		return FPaths::Combine(FPaths::ProjectLogDir(), TEXT("VerifierHost.log"));
 	}
 }
 
@@ -71,204 +221,199 @@ void AAINpcTestGameMode::BeginPlay()
 {
 	Super::BeginPlay();
 	UE_LOG(LogTemp, Warning, TEXT("=== AAINpcTestGameMode::BeginPlay CALLED ==="));
-	SpawnTestNpc();
+	VisualTestId = DefaultVisualTestId;
+	VisualStartTimeUtc = FDateTime::UtcNow();
+	VisualRunId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+	FParse::Value(FCommandLine::Get(), TEXT("AINpcVisualTestId="), VisualTestId);
+	VisualResultPath = ResolveVisualResultPath();
+	UE_LOG(LogTemp, Warning, TEXT("=== AINpc Visual Test START: %s ResultPath=%s ==="), *VisualTestId, *VisualResultPath);
 
-	if (GEngine)
-	{
-		GEngine->AddOnScreenDebugMessage(-1, 30.0f, FColor::Cyan,
-			TEXT("AAINpcTestGameMode::BeginPlay - NPC will spawn and auto-dialogue"));
-	}
-	UE_LOG(LogTemp, Warning, TEXT("=== AAINpcTestGameMode::BeginPlay FINISHED ==="));
+	StartHarness();
 }
 
 AActor* AAINpcTestGameMode::ChoosePlayerStart_Implementation(AController* Player)
 {
-	return nullptr; // spawn at origin
+	return nullptr;
 }
 
-void AAINpcTestGameMode::SpawnTestNpc()
+void AAINpcTestGameMode::StartHarness()
 {
-	UE_LOG(LogTemp, Warning, TEXT("=== SpawnTestNpc START ==="));
+	StartSelectedTest();
+}
+
+bool AAINpcTestGameMode::SpawnFixture(const EAINpcVisualTestFixtureKind FixtureKind, FString& OutFailureReason)
+{
+	SpawnedSmartObject = nullptr;
+
+	if (!SpawnNpc(OutFailureReason))
+	{
+		return false;
+	}
+
+	switch (FixtureKind)
+	{
+	case EAINpcVisualTestFixtureKind::NpcOnly:
+		break;
+
+	case EAINpcVisualTestFixtureKind::NpcWithSmartObject:
+		if (!SpawnSmartObject(OutFailureReason))
+		{
+			return false;
+		}
+		break;
+	}
+
+	if (!PositionObserverCamera(OutFailureReason))
+	{
+		return false;
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("=== Visual fixture spawned. TestId=%s Npc=%s SmartObject=%s ==="), *VisualTestId, *SpawnedNpc->GetName(), SpawnedSmartObject ? *SpawnedSmartObject->GetName() : TEXT("not requested"));
+	return true;
+}
+
+bool AAINpcTestGameMode::SpawnNpc(FString& OutFailureReason)
+{
 	UWorld* World = GetWorld();
 	if (!World)
 	{
-		RecordFailure(TEXT("SpawnTestNpc failed because World is null."));
-		return;
+		OutFailureReason = TEXT("Visual harness failed because World is null.");
+		return false;
 	}
 
 	const FVector SpawnLocation(500.0f, 0.0f, 100.0f);
-	const FVector SmartObjectLocation(900.0f, 0.0f, 40.0f);
-
-	FActorSpawnParameters Params;
-	Params.Name = TEXT("AutoTestNpc");
-	Params.SpawnCollisionHandlingOverride =
-		ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
-
-	FActorSpawnParameters SmartObjectParams;
-	SmartObjectParams.Name = TEXT("AutoTestSmartObject");
-	SmartObjectParams.SpawnCollisionHandlingOverride =
-		ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
-
-	SpawnedSmartObject = World->SpawnActor<AAINpcTestSmartObjectActor>(
-		AAINpcTestSmartObjectActor::StaticClass(),
-		SmartObjectLocation,
-		FRotator::ZeroRotator,
-		SmartObjectParams);
-	if (!SpawnedSmartObject)
-	{
-		RecordFailure(TEXT("Failed to spawn runtime SmartObject actor for the visual harness."));
-		return;
-	}
-
-	UE_LOG(LogTemp, Warning, TEXT("=== Spawning NPC at %s ==="), *SpawnLocation.ToString());
-	SpawnedNpc = World->SpawnActor<AAINpcTestCharacter>(
-		AAINpcTestCharacter::StaticClass(), SpawnLocation, FRotator::ZeroRotator, Params);
-
+	FActorSpawnParameters NpcParams;
+	NpcParams.Name = TEXT("AutoTestNpc");
+	NpcParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+	SpawnedNpc = World->SpawnActor<AAINpcTestCharacter>(AAINpcTestCharacter::StaticClass(), SpawnLocation, FRotator::ZeroRotator, NpcParams);
 	if (!SpawnedNpc || !SpawnedNpc->NpcComponent)
 	{
-		RecordFailure(TEXT("Failed to spawn NPC test character or its UAINpcComponent is null."));
-		return;
+		OutFailureReason = TEXT("Failed to spawn NPC test character or its UAINpcComponent is null.");
+		return false;
 	}
-	UE_LOG(LogTemp, Warning, TEXT("=== Humanoid NPC Character spawned successfully and is not the player pawn. ==="));
+	if (!SpawnedNpc->HasValidVisualMeshAndAnimation())
+	{
+		OutFailureReason = TEXT("Visual NPC is invalid because mannequin mesh or animation blueprint is missing.");
+		return false;
+	}
 
-	APlayerController* PC = World->GetFirstPlayerController();
+	return true;
+}
+
+bool AAINpcTestGameMode::SpawnSmartObject(FString& OutFailureReason)
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		OutFailureReason = TEXT("Visual harness failed because World is null.");
+		return false;
+	}
+
+	const FVector SmartObjectLocation(900.0f, 0.0f, 40.0f);
+	FActorSpawnParameters SmartObjectParams;
+	SmartObjectParams.Name = TEXT("AutoTestSmartObject");
+	SmartObjectParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+	SpawnedSmartObject = World->SpawnActor<AAINpcTestSmartObjectActor>(AAINpcTestSmartObjectActor::StaticClass(), SmartObjectLocation, FRotator::ZeroRotator, SmartObjectParams);
+	if (!SpawnedSmartObject)
+	{
+		OutFailureReason = TEXT("Failed to spawn runtime SmartObject actor for the visual harness.");
+		return false;
+	}
+
+	return true;
+}
+
+bool AAINpcTestGameMode::PositionObserverCamera(FString& OutFailureReason)
+{
+	UWorld* World = GetWorld();
+	APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
 	if (!PC)
 	{
-		RecordFailure(TEXT("Visual harness could not find a PlayerController for the observer camera."));
-		return;
+		OutFailureReason = TEXT("Visual harness could not find a PlayerController for the observer camera.");
+		return false;
 	}
 
 	APawn* ObserverPawn = PC->GetPawn();
 	if (!ObserverPawn)
 	{
-		RecordFailure(TEXT("Visual harness PlayerController has no observer pawn."));
-		return;
+		OutFailureReason = TEXT("Visual harness PlayerController has no observer pawn.");
+		return false;
 	}
 
 	if (ObserverPawn == SpawnedNpc)
 	{
-		RecordFailure(TEXT("Observer pawn incorrectly resolved to the spawned NPC."));
-		return;
+		OutFailureReason = TEXT("Observer pawn incorrectly resolved to the spawned NPC.");
+		return false;
 	}
 
-	const FVector FocusPoint = (SpawnLocation + SmartObjectLocation) * 0.5f + FVector(0.0f, 0.0f, 90.0f);
-	const FVector CameraLoc = SpawnLocation + FVector(-520.0f, -360.0f, 180.0f);
+	const FVector NpcLocation = SpawnedNpc->GetActorLocation();
+	const FVector FocusBase = SpawnedSmartObject ? (NpcLocation + SpawnedSmartObject->GetActorLocation()) * 0.5f : NpcLocation;
+	const FVector FocusPoint = FocusBase + FVector(0.0f, 0.0f, 90.0f);
+	const FVector CameraLoc = NpcLocation + FVector(-520.0f, -360.0f, 180.0f);
 	const FRotator CameraRot = (FocusPoint - CameraLoc).Rotation();
-
 	ObserverPawn->SetActorLocation(CameraLoc);
 	ObserverPawn->SetActorRotation(CameraRot);
 	PC->SetControlRotation(CameraRot);
 	PC->SetViewTarget(ObserverPawn);
-	UE_LOG(
-		LogTemp,
-		Warning,
-		TEXT("=== Observer camera active. ObserverPawn=%s Npc=%s Camera=%s Focus=%s ==="),
-		*ObserverPawn->GetName(),
-		*SpawnedNpc->GetName(),
-		*CameraLoc.ToString(),
-		*FocusPoint.ToString());
 
-	UAINpcComponent* const NpcComponent = SpawnedNpc->NpcComponent;
-	NpcComponent->OnDialogueSessionStarted.AddDynamic(this, &AAINpcTestGameMode::OnNpcSessionStarted);
-	NpcComponent->OnDialogueResponse.AddDynamic(this, &AAINpcTestGameMode::OnNpcResponse);
-	NpcComponent->OnPartialResponse.AddDynamic(this, &AAINpcTestGameMode::OnNpcPartialResponse);
-	NpcComponent->OnDialogueError.AddDynamic(this, &AAINpcTestGameMode::OnNpcError);
-	NpcComponent->OnDialogueSessionEnded.AddDynamic(this, &AAINpcTestGameMode::OnNpcSessionEnded);
-	NpcComponent->OnDialogueDegraded.AddDynamic(this, &AAINpcTestGameMode::OnNpcDegraded);
+	UE_LOG(LogTemp, Warning, TEXT("=== Observer camera active. ObserverPawn=%s Npc=%s SmartObject=%s Camera=%s Focus=%s ==="), *ObserverPawn->GetName(), *SpawnedNpc->GetName(), SpawnedSmartObject ? *SpawnedSmartObject->GetName() : TEXT("None"), *CameraLoc.ToString(), *FocusPoint.ToString());
+	return true;
+}
 
-	FString ProviderFailureReason;
-	if (!ValidateProviderConfiguration(*NpcComponent, ProviderFailureReason))
+void AAINpcTestGameMode::StartSelectedTest()
+{
+	ActiveDescriptor = FAINpcVisualTestRegistry::Find(VisualTestId);
+	const FAINpcVisualTestDescriptor* Descriptor = ActiveDescriptor;
+	if (!Descriptor || !Descriptor->CreateTest)
 	{
-		RecordFailure(ProviderFailureReason);
+		RecordFailure(FString::Printf(TEXT("Unknown AINpc visual TestId '%s'. Registered TestIds: %s."), *VisualTestId, *FAINpcVisualTestRegistry::GetRegisteredTestIds()));
 		return;
 	}
 
-	ShowStatus(TEXT("NPC and runtime SmartObject spawned. Starting real provider action verification in 3 seconds..."), FColor::Green, 15.0f);
-	World->GetTimerManager().SetTimer(
-		VerificationTimeoutTimerHandle,
-		this,
-		&AAINpcTestGameMode::HandleVerificationTimeout,
-		VerificationTimeoutSeconds,
-		false);
-	World->GetTimerManager().SetTimer(
-		InitialDialogueTimerHandle,
-		this,
-		&AAINpcTestGameMode::StartInitialDialogue,
-		InitialDialogueDelaySeconds,
-		false);
-}
-
-void AAINpcTestGameMode::ShowStatus(const FString& Message, const FColor& Color, const float DurationSeconds) const
-{
-	UE_LOG(LogTemp, Warning, TEXT("%s"), *Message);
-	if (GEngine)
+	FString FixtureFailureReason;
+	if (!SpawnFixture(Descriptor->FixtureKind, FixtureFailureReason))
 	{
-		GEngine->AddOnScreenDebugMessage(-1, DurationSeconds, Color, Message);
+		RecordFailure(FixtureFailureReason);
+		return;
+	}
+
+	FAINpcVisualTestFixture Fixture{SpawnedNpc, SpawnedSmartObject};
+	FAINpcVisualTestContext Context{Fixture};
+	ActiveTest = Descriptor->CreateTest(Context);
+	if (!ActiveTest)
+	{
+		RecordFailure(FString::Printf(TEXT("AINpc visual TestId '%s' factory returned null."), *VisualTestId));
+		return;
+	}
+	FString FailureReason;
+	if (!ActiveTest->Start(FailureReason))
+	{
+		RecordFailure(FailureReason);
+		return;
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().SetTimer(PollTimerHandle, this, &AAINpcTestGameMode::PollActiveTest, PollSeconds, true);
 	}
 }
 
-void AAINpcTestGameMode::StartInitialDialogue()
+void AAINpcTestGameMode::PollActiveTest()
 {
-	if (bTerminalOutcomeRecorded || !SpawnedNpc || !SpawnedNpc->NpcComponent)
+	if (bTerminalOutcomeRecorded || !ActiveTest)
 	{
 		return;
 	}
 
-	const TArray<FString> AvailableTargets = SpawnedNpc->NpcComponent->GetAvailableSmartObjectTargetsForExecution();
-	if (AvailableTargets.IsEmpty())
+	ActiveTest->Poll();
+	if (ActiveTest->HasFailed())
 	{
-		RecordFailure(TEXT("Runtime SmartObject target list was empty, so the harness could not ask for a legal action."));
+		RecordFailure(ActiveTest->GetFailureReason());
 		return;
 	}
-
-	const FString RequiredTargetId = AvailableTargets[0];
-	FString InitialPromptTemplate;
-	FString TemplateFailureReason;
-	if (!LoadInitialPromptTemplate(InitialPromptTemplate, TemplateFailureReason))
+	if (ActiveTest->IsComplete())
 	{
-		RecordFailure(TemplateFailureReason);
-		return;
-	}
-
-	const FString InitialPrompt = InitialPromptTemplate.Replace(
-		SmartObjectTargetIdPlaceholder,
-		*RequiredTargetId,
-		ESearchCase::CaseSensitive);
-
-	ShowStatus(FString::Printf(TEXT(">>> Player: %s"), *InitialPrompt), FColor::Cyan, 10.0f);
-	if (!SpawnedNpc->NpcComponent->StartDialogue(InitialPrompt))
-	{
-		RecordFailure(FString::Printf(
-			TEXT("Initial StartDialogue call was rejected before any real provider response or action verification. %s"),
-			*DescribeDialogueState(*SpawnedNpc->NpcComponent)));
-	}
-}
-
-void AAINpcTestGameMode::HandleVerificationTimeout()
-{
-	if (bTerminalOutcomeRecorded || !SpawnedNpc || !SpawnedNpc->NpcComponent)
-	{
-		return;
-	}
-
-	RecordFailure(FString::Printf(
-		TEXT("Timed out after %.1fs waiting for a real SmartObject action response and visible NPC movement. ActionObserved=%s DistanceToTarget=%.1f. %s"),
-		VerificationTimeoutSeconds,
-		bActionExecutionObserved ? TEXT("true") : TEXT("false"),
-		SpawnedNpc->GetVisualActionTargetDistance(),
-		*DescribeDialogueState(*SpawnedNpc->NpcComponent)));
-}
-
-void AAINpcTestGameMode::PollVisualVerification()
-{
-	if (bTerminalOutcomeRecorded || !SpawnedNpc)
-	{
-		return;
-	}
-
-	if (SpawnedNpc->HasReachedVisualActionTarget())
-	{
-		RecordSuccess();
+		RecordSuccess(ActiveTest->BuildSummary());
 	}
 }
 
@@ -282,20 +427,19 @@ void AAINpcTestGameMode::RecordFailure(const FString& Reason)
 	bTerminalOutcomeRecorded = true;
 	if (UWorld* World = GetWorld())
 	{
-		World->GetTimerManager().ClearTimer(InitialDialogueTimerHandle);
-		World->GetTimerManager().ClearTimer(VerificationTimeoutTimerHandle);
-		World->GetTimerManager().ClearTimer(VisualVerificationTimerHandle);
+		World->GetTimerManager().ClearTimer(PollTimerHandle);
 	}
 
 	ShowStatus(FString::Printf(TEXT("VISUAL QA FAILED: %s"), *Reason), FColor::Red, FailureExitDelaySeconds + 4.0f);
-	UE_LOG(LogTemp, Error, TEXT("=== NPC Dialogue Visual QA FAILED ==="));
-	UE_LOG(LogTemp, Error, TEXT("%s"), *Reason);
+	UE_LOG(LogTemp, Error, TEXT("=== AINpc Visual Test FAIL: %s ==="), *VisualTestId);
+	const FString Summary = ActiveTest ? ActiveTest->BuildSummary() : FString();
+	UE_LOG(LogTemp, Error, TEXT("AINpc visual test summary: %s Result=FAIL Reason=%s %s"), *VisualTestId, *Reason, *Summary);
+	WriteVisualResult(TEXT("FAIL"), TEXT("failure"), Reason, Summary);
 
 	if (SpawnedNpc && SpawnedNpc->NpcComponent && SpawnedNpc->NpcComponent->IsDialogueActive())
 	{
 		SpawnedNpc->NpcComponent->EndDialogue();
 	}
-
 	if (UGameInstance* GameInstance = GetGameInstance())
 	{
 		if (USmartObjectBridgeContext* BridgeContext = GameInstance->GetSubsystem<USmartObjectBridgeContext>())
@@ -303,24 +447,19 @@ void AAINpcTestGameMode::RecordFailure(const FString& Reason)
 			BridgeContext->ReleaseSlotForUser(SpawnedNpc);
 		}
 	}
-
 	if (SpawnedSmartObject)
 	{
 		SpawnedSmartObject->SetInteractionState(false);
 	}
 
+	ActiveTest.Reset();
 	if (UWorld* World = GetWorld())
 	{
-		World->GetTimerManager().SetTimer(
-			ExitTimerHandle,
-			this,
-			&AAINpcTestGameMode::RequestHarnessExit,
-			FailureExitDelaySeconds,
-			false);
+		World->GetTimerManager().SetTimer(ExitTimerHandle, this, &AAINpcTestGameMode::RequestHarnessExit, FailureExitDelaySeconds, false);
 	}
 }
 
-void AAINpcTestGameMode::RecordSuccess()
+void AAINpcTestGameMode::RecordSuccess(const FString& Summary)
 {
 	if (bTerminalOutcomeRecorded)
 	{
@@ -330,32 +469,25 @@ void AAINpcTestGameMode::RecordSuccess()
 	bTerminalOutcomeRecorded = true;
 	if (UWorld* World = GetWorld())
 	{
-		World->GetTimerManager().ClearTimer(InitialDialogueTimerHandle);
-		World->GetTimerManager().ClearTimer(VerificationTimeoutTimerHandle);
-		World->GetTimerManager().ClearTimer(VisualVerificationTimerHandle);
+		World->GetTimerManager().ClearTimer(PollTimerHandle);
 	}
 
-	UE_LOG(LogTemp, Warning, TEXT("=== NPC Action Visual QA VERIFIED WITH REAL PROVIDER ==="));
-	ShowStatus(
-		FString::Printf(
-			TEXT("VISUAL QA VERIFIED: action target %s claimed/used and NPC reached the claimed slot."),
-			*SpawnedNpc->GetVisualActionTargetId()),
-		FColor::Green,
-		SuccessExitDelaySeconds + 6.0f);
+	UE_LOG(LogTemp, Warning, TEXT("=== AINpc Visual Test PASS: %s ==="), *VisualTestId);
+	UE_LOG(LogTemp, Warning, TEXT("AINpc visual test summary: %s Result=PASS %s"), *VisualTestId, *Summary);
+	WriteVisualResult(TEXT("PASS"), TEXT("success"), FString(), Summary);
+	ShowStatus(FString::Printf(TEXT("AINpc visual test PASS: %s"), *VisualTestId), FColor::Green, GetVisibleHoldSeconds(SuccessExitDelaySeconds) + 6.0f);
 
 	if (SpawnedNpc && SpawnedNpc->NpcComponent && SpawnedNpc->NpcComponent->IsDialogueActive())
 	{
 		SpawnedNpc->NpcComponent->EndDialogue();
 	}
 
+	ActiveTest.Reset();
 	if (UWorld* World = GetWorld())
 	{
-		World->GetTimerManager().SetTimer(
-			ExitTimerHandle,
-			this,
-			&AAINpcTestGameMode::RequestHarnessExit,
-			SuccessExitDelaySeconds,
-			false);
+		const float VisibleHoldSeconds = GetVisibleHoldSeconds(SuccessExitDelaySeconds);
+		UE_LOG(LogTemp, Warning, TEXT("=== AINpc visual harness will hold success window for %.1f seconds before exit ==="), VisibleHoldSeconds);
+		World->GetTimerManager().SetTimer(ExitTimerHandle, this, &AAINpcTestGameMode::RequestHarnessExit, VisibleHoldSeconds, false);
 	}
 }
 
@@ -373,124 +505,94 @@ void AAINpcTestGameMode::RequestHarnessExit()
 	FPlatformMisc::RequestExit(false);
 }
 
-bool AAINpcTestGameMode::ValidateProviderConfiguration(const UAINpcComponent& NpcComponent, FString& OutFailureReason) const
+void AAINpcTestGameMode::ShowStatus(const FString& Message, const FColor& Color, const float DurationSeconds) const
 {
-	FLLMRequest RequestConfig;
-	FAINpcProviderConfigResolver::ApplyRequestConfig(NpcComponent, RequestConfig);
-	RequestConfig.BaseUrl = RequestConfig.BaseUrl.TrimStartAndEnd();
-	RequestConfig.ApiKey = RequestConfig.ApiKey.TrimStartAndEnd();
-	RequestConfig.Model = RequestConfig.Model.TrimStartAndEnd();
-
-	if (!RequestConfig.BaseUrl.IsEmpty())
+	UE_LOG(LogTemp, Warning, TEXT("%s"), *Message);
+	if (GEngine)
 	{
-		return true;
+		GEngine->AddOnScreenDebugMessage(-1, DurationSeconds, Color, Message);
+	}
+}
+
+FString AAINpcTestGameMode::ResolveVisualResultPath() const
+{
+	FString RequestedPath;
+	if (FParse::Value(FCommandLine::Get(), TEXT("AINpcVisualResultPath="), RequestedPath) && !RequestedPath.IsEmpty())
+	{
+		return FPaths::ConvertRelativePathToFull(RequestedPath);
 	}
 
-	OutFailureReason = FString::Printf(
-		TEXT("No real provider endpoint resolved for the visual harness. Resolved BaseUrl is empty after applying the existing provider/baseUrl override chain. ModelLength=%d ApiKeyLength=%d."),
-		RequestConfig.Model.Len(),
-		RequestConfig.ApiKey.Len());
-	return false;
+	return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("TestLogs"), TEXT("visual-game"), VisualRunId, TEXT("result.json"));
 }
 
-FString AAINpcTestGameMode::DescribeDialogueState(const UAINpcComponent& NpcComponent) const
+void AAINpcTestGameMode::WriteVisualResult(const FString& Status, const FString& ExitReason, const FString& FailureReason, const FString& DiagnosticSummary)
 {
-	const UEnum* const DialogueStateEnum = StaticEnum<ENpcDialogueState>();
-	const FString DialogueState = DialogueStateEnum
-		? DialogueStateEnum->GetValueAsString(NpcComponent.GetDialogueState())
-		: TEXT("Unknown");
+	const FDateTime EndTimeUtc = FDateTime::UtcNow();
+	const FTimespan Duration = EndTimeUtc - VisualStartTimeUtc;
 
-	return FString::Printf(
-		TEXT("DialogueState=%s RequestInFlight=%s SessionActive=%s Queued=%s"),
-		*DialogueState,
-		NpcComponent.IsRequestInFlight() ? TEXT("true") : TEXT("false"),
-		NpcComponent.IsDialogueActive() ? TEXT("true") : TEXT("false"),
-		NpcComponent.IsDialogueRequestQueued() ? TEXT("true") : TEXT("false"));
-}
+	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
+	Root->SetNumberField(TEXT("schemaVersion"), 1);
+	Root->SetStringField(TEXT("runId"), VisualRunId);
+	Root->SetStringField(TEXT("layer"), TEXT("visual-game"));
+	Root->SetStringField(TEXT("testId"), VisualTestId);
+	Root->SetArrayField(TEXT("storyIds"), ActiveDescriptor ? StringsToJsonArray(ActiveDescriptor->StoryIds) : TArray<TSharedPtr<FJsonValue>>());
+	Root->SetArrayField(TEXT("phaseIds"), ActiveDescriptor ? StringsToJsonArray(ActiveDescriptor->PhaseIds) : TArray<TSharedPtr<FJsonValue>>());
+	Root->SetStringField(TEXT("status"), Status);
+	Root->SetStringField(TEXT("startTimeUtc"), ToIsoUtc(VisualStartTimeUtc));
+	Root->SetStringField(TEXT("endTimeUtc"), ToIsoUtc(EndTimeUtc));
+	Root->SetNumberField(TEXT("durationMs"), Duration.GetTotalMilliseconds());
 
-void AAINpcTestGameMode::OnNpcSessionStarted()
-{
-	ShowStatus(TEXT("Dialogue session started through the real provider chain."), FColor::Green, 6.0f);
-}
+	TSharedPtr<FJsonObject> Command = MakeShared<FJsonObject>();
+	Command->SetStringField(TEXT("executable"), FPlatformProcess::ExecutablePath());
+	Command->SetNumberField(TEXT("processId"), static_cast<double>(FPlatformProcess::GetCurrentProcessId()));
+	Command->SetStringField(TEXT("workingDirectory"), FPaths::LaunchDir());
+	Command->SetStringField(TEXT("map"), GetWorld() ? GetWorld()->GetMapName() : FString());
+	Command->SetStringField(TEXT("testId"), VisualTestId);
+	Command->SetStringField(TEXT("resultPath"), VisualResultPath);
+	Command->SetStringField(TEXT("arguments"), RedactSensitiveText(FCommandLine::Get()));
+	Command->SetStringField(TEXT("display"), RedactSensitiveText(FString::Printf(TEXT("%s %s"), FPlatformProcess::ExecutablePath(), FCommandLine::Get())));
+	Root->SetObjectField(TEXT("command"), Command);
 
-void AAINpcTestGameMode::OnNpcResponse(const FString& Text)
-{
-	ShowStatus(FString::Printf(TEXT("<<< NPC: %s"), *Text.Left(160)), FColor::Yellow, 8.0f);
+	TSharedPtr<FJsonObject> Artifacts = MakeShared<FJsonObject>();
+	Artifacts->SetStringField(TEXT("resultPath"), VisualResultPath);
+	Artifacts->SetStringField(TEXT("logPath"), ResolveVisualLogPath());
+	Root->SetObjectField(TEXT("artifacts"), Artifacts);
 
-	if (!SpawnedNpc || !SpawnedNpc->NpcComponent)
+	TSharedPtr<FJsonObject> Diagnostics = MakeShared<FJsonObject>();
+	Diagnostics->SetStringField(TEXT("exitReason"), ExitReason);
+	Diagnostics->SetStringField(TEXT("summary"), RedactSensitiveText(DiagnosticSummary));
+	Diagnostics->SetStringField(TEXT("map"), GetWorld() ? GetWorld()->GetMapName() : FString());
+	Diagnostics->SetStringField(TEXT("resultPath"), VisualResultPath);
+	Root->SetObjectField(TEXT("diagnostics"), Diagnostics);
+
+	const FAINpcVisualTestObservations Observations = ActiveTest ? ActiveTest->BuildObservations() : FAINpcVisualTestObservations();
+	Root->SetObjectField(TEXT("observations"), BuildObservationJson(Observations));
+
+	TArray<TSharedPtr<FJsonValue>> Failures;
+	if (!FailureReason.IsEmpty())
 	{
-		RecordFailure(TEXT("Harness lost its NPC reference before action verification could start."));
+		TSharedPtr<FJsonObject> Failure = MakeShared<FJsonObject>();
+		Failure->SetStringField(TEXT("id"), VisualTestId);
+		Failure->SetStringField(TEXT("message"), RedactSensitiveText(FailureReason));
+		Failure->SetStringField(TEXT("artifact"), VisualResultPath);
+		Failures.Add(MakeShared<FJsonValueObject>(Failure));
+	}
+	Root->SetArrayField(TEXT("failures"), Failures);
+
+	FString JsonText;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&JsonText);
+	if (!FJsonSerializer::Serialize(Root.ToSharedRef(), Writer))
+	{
+		UE_LOG(LogTemp, Error, TEXT("Failed to serialize AINpc visual result JSON for %s."), *VisualTestId);
 		return;
 	}
 
-	UGameInstance* GameInstance = GetGameInstance();
-	USmartObjectBridgeContext* BridgeContext = GameInstance ? GameInstance->GetSubsystem<USmartObjectBridgeContext>() : nullptr;
-	if (!BridgeContext)
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(VisualResultPath), true);
+	if (!FFileHelper::SaveStringToFile(JsonText, *VisualResultPath))
 	{
-		RecordFailure(TEXT("SmartObject bridge subsystem was unavailable during visual action verification."));
+		UE_LOG(LogTemp, Error, TEXT("Failed to write AINpc visual result JSON to %s."), *VisualResultPath);
 		return;
 	}
 
-	FAINpcSmartObjectRuntimeExecutionResult ExecutionResult;
-	if (!FAINpcSmartObjectRuntimeExecutor::TryExecuteLatestActionIntent(
-		*SpawnedNpc->NpcComponent,
-		*SpawnedNpc,
-		*BridgeContext,
-		SmartObjectSearchRadius,
-		SmartObjectClaimPriority,
-		ExecutionResult))
-	{
-		RecordFailure(FString::Printf(
-			TEXT("Real provider response did not lead to an executable SmartObject action. %s"),
-			*ExecutionResult.FailureReason));
-		return;
-	}
-
-	bActionExecutionObserved = true;
-	if (SpawnedSmartObject)
-	{
-		SpawnedSmartObject->SetInteractionState(true);
-	}
-
-	SpawnedNpc->BeginVisualActionMove(ExecutionResult.ClaimedSlotTransform, ExecutionResult.RequestedTarget);
-	ShowStatus(
-		FString::Printf(
-			TEXT("SmartObject action verified: %s -> %s. NPC is moving to the claimed slot."),
-			*ExecutionResult.ActionType,
-			*ExecutionResult.RequestedTarget),
-		FColor::Green,
-		8.0f);
-
-	if (UWorld* World = GetWorld())
-	{
-		World->GetTimerManager().SetTimer(
-			VisualVerificationTimerHandle,
-			this,
-			&AAINpcTestGameMode::PollVisualVerification,
-			VisualVerificationPollSeconds,
-			true);
-	}
-}
-
-void AAINpcTestGameMode::OnNpcPartialResponse(const FString& Text)
-{
-	ShowStatus(FString::Printf(TEXT("[stream] %s"), *Text.Left(80)), FColor::Orange, 3.0f);
-}
-
-void AAINpcTestGameMode::OnNpcError(const FString& ErrorMessage)
-{
-	RecordFailure(FString::Printf(TEXT("Real provider chain reported an error: %s"), *ErrorMessage));
-}
-
-void AAINpcTestGameMode::OnNpcSessionEnded()
-{
-	ShowStatus(TEXT("Dialogue session ended."), FColor::Silver, 4.0f);
-}
-
-void AAINpcTestGameMode::OnNpcDegraded(const FString& FallbackResponse, const FString& FailureReason)
-{
-	RecordFailure(FString::Printf(
-		TEXT("Dialogue fell back instead of producing a real provider response. FailureReason=%s Fallback=%s"),
-		*FailureReason,
-		*FallbackResponse.Left(160)));
+	UE_LOG(LogTemp, Warning, TEXT("AINpc visual result JSON written: %s"), *VisualResultPath);
 }

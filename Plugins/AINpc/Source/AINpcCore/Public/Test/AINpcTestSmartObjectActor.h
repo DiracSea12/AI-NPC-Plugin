@@ -2,12 +2,12 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+
 #include "SmartObjectDefinition.h"
 #include "AINpcTestSmartObjectActor.generated.h"
 
 class UMaterialInstanceDynamic;
-class USmartObjectComponent;
-class USmartObjectDefinition;
+class USceneComponent;
 class UStaticMeshComponent;
 
 UCLASS()
@@ -37,7 +37,10 @@ private:
 
 private:
 	UPROPERTY(VisibleAnywhere)
-	TObjectPtr<USmartObjectComponent> SmartObjectComponent;
+	TObjectPtr<USceneComponent> RootSceneComponent;
+
+	UPROPERTY(VisibleAnywhere)
+	TObjectPtr<USceneComponent> SmartObjectComponent;
 
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UStaticMeshComponent> ObjectMesh;
@@ -46,7 +49,7 @@ private:
 	TObjectPtr<UStaticMeshComponent> SlotMarkerMesh;
 
 	UPROPERTY(Transient)
-	TObjectPtr<USmartObjectDefinition> RuntimeDefinition;
+	TObjectPtr<UObject> RuntimeDefinition;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> ObjectMeshMaterial;

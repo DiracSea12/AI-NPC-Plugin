@@ -20,7 +20,7 @@ struct FStateTreeTask_LLMQueryInstanceData
 	TObjectPtr<UAINpcComponent> NpcComponent = nullptr;
 
 	UPROPERTY(EditAnywhere, Category = Parameter)
-	FString PlayerInput = TEXT("Hello.");
+	FString PlayerInput;
 
 	UPROPERTY(EditAnywhere, Category = Parameter, meta = (ClampMin = "0.1", UIMin = "0.1"))
 	float TimeoutSeconds = 30.0f;
@@ -82,6 +82,10 @@ struct FStateTreeTask_LLMQuery : public FStateTreeTaskCommonBase
 		bool bIsRequestInFlight,
 		bool bIsDialogueRequestQueued,
 		bool& bOutShouldForceFailureCleanup);
+	UE_API static EStateTreeRunStatus AdvanceDialogueStateForTest(
+		FStateTreeTask_LLMQueryInstanceData& InstanceData,
+		UAINpcComponent* NpcComponent,
+		float DeltaTime);
 #endif
 };
 

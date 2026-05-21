@@ -12,8 +12,8 @@ class AINPCCORE_API FLocalProvider : public ILLMProvider, public TSharedFromThis
 {
 public:
 	explicit FLocalProvider(
-		FString InDefaultModel = TEXT("llama3.2"),
-		FString InBaseUrl = TEXT("http://localhost:11434/v1"));
+		FString InDefaultModel = FString(),
+		FString InBaseUrl = FString());
 
 	virtual FGuid SendRequest(const FLLMRequest& Request, FLLMResponseCallback CompletionCallback) override;
 	virtual bool CancelRequest(const FGuid& RequestId) override;

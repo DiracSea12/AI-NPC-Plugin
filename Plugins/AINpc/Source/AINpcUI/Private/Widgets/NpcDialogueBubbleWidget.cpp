@@ -304,7 +304,7 @@ void UNpcDialogueBubbleWidget::AdvanceTypewriterForTest(float DeltaTime)
 
 	int32 CharsToReveal = FMath::FloorToInt(DeltaTime * CharactersPerSecond);
 	CharsToReveal = FMath::Clamp(CharsToReveal, 0, CurrentText.Len() - VisibleText.Len());
-	CharsToReveal = FMath::Min(CharsToReveal, 3); // Clamp per-step reveal to keep hitch spikes visually stable.
+	CharsToReveal = FMath::Min(CharsToReveal, 2);
 
 	if (CharsToReveal > 0)
 	{

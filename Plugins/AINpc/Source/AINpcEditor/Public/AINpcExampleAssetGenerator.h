@@ -18,8 +18,13 @@ class AINPCEDITOR_API UAINpcExampleAssetGenerator : public UObject
 public:
 	/** Generate example Blueprint and DataAsset files */
 	static bool GenerateExampleAssets(FString& OutMessage);
+	static bool GenerateExampleAssetsForStateTree(class UStateTree* DefaultStateTreeAsset, FString& OutMessage);
 
 private:
 	static bool CreateExamplePersonaDataAsset(const FString& AssetPath, class UNpcPersonaDataAsset*& OutPersonaAsset, FString& OutMessage);
-	static bool CreateExampleNpcBlueprint(const FString& AssetPath, class UNpcPersonaDataAsset* PersonaAsset, FString& OutMessage);
+	static bool CreateExampleNpcBlueprint(
+		const FString& AssetPath,
+		class UNpcPersonaDataAsset* PersonaAsset,
+		class UStateTree* DefaultStateTreeAsset,
+		FString& OutMessage);
 };

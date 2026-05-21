@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
+#include "Test/AINpcVisualTest.h"
 #include "AINpcTestGameMode.generated.h"
 
 UCLASS()
@@ -23,39 +24,27 @@ private:
 	UPROPERTY()
 	TObjectPtr<class AAINpcTestSmartObjectActor> SpawnedSmartObject;
 
-	FTimerHandle InitialDialogueTimerHandle;
-	FTimerHandle VerificationTimeoutTimerHandle;
-	FTimerHandle VisualVerificationTimerHandle;
+	FTimerHandle PollTimerHandle;
 	FTimerHandle ExitTimerHandle;
+	TUniquePtr<IAINpcVisualTest> ActiveTest;
+	FString VisualTestId;
+	FString VisualRunId;
+	FString VisualResultPath;
+	FDateTime VisualStartTimeUtc;
+	const FAINpcVisualTestDescriptor* ActiveDescriptor = nullptr;
 	bool bTerminalOutcomeRecorded = false;
-	bool bActionExecutionObserved = false;
 
-	void SpawnTestNpc();
-	void ShowStatus(const FString& Message, const FColor& Color, float DurationSeconds) const;
-	void StartInitialDialogue();
-	void HandleVerificationTimeout();
-	void PollVisualVerification();
+	void StartHarness();
+	bool SpawnFixture(EAINpcVisualTestFixtureKind FixtureKind, FString& OutFailureReason);
+	bool SpawnNpc(FString& OutFailureReason);
+	bool SpawnSmartObject(FString& OutFailureReason);
+	bool PositionObserverCamera(FString& OutFailureReason);
+	void StartSelectedTest();
+	void PollActiveTest();
 	void RecordFailure(const FString& Reason);
-	void RecordSuccess();
+	void RecordSuccess(const FString& Summary);
+	void WriteVisualResult(const FString& Status, const FString& ExitReason, const FString& FailureReason, const FString& DiagnosticSummary);
+	FString ResolveVisualResultPath() const;
 	void RequestHarnessExit();
-	bool ValidateProviderConfiguration(const class UAINpcComponent& NpcComponent, FString& OutFailureReason) const;
-	FString DescribeDialogueState(const class UAINpcComponent& NpcComponent) const;
-
-	UFUNCTION()
-	void OnNpcSessionStarted();
-
-	UFUNCTION()
-	void OnNpcResponse(const FString& Text);
-
-	UFUNCTION()
-	void OnNpcPartialResponse(const FString& Text);
-
-	UFUNCTION()
-	void OnNpcError(const FString& ErrorMessage);
-
-	UFUNCTION()
-	void OnNpcSessionEnded();
-
-	UFUNCTION()
-	void OnNpcDegraded(const FString& FallbackResponse, const FString& FailureReason);
+	void ShowStatus(const FString& Message, const FColor& Color, float DurationSeconds) const;
 };

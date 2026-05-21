@@ -332,7 +332,7 @@ FNpcRelationship {
   Core, CoreUObject, Engine,
   GameplayStateTreeModule,  // AI专用StateTree组件（含UStateTreeAIComponent + AIComponentSchema）
   StateTreeModule,      // 现代化状态机/行为编排（被GameplayStateTree自动拉入）
-  SmartObjectsModule,    // **可选依赖**，通过 Build.cs 的 `bUseSmartObjects` 开关控制条件编译（`#if WITH_SMARTOBJECTS`）；传递依赖会拉入 GameplayAbilities/TargetingSystem/MassEntity/WorldConditions；未启用时 SmartObjectBridge 相关功能不可用
+  SmartObjectsModule,    // **硬依赖**，Build.cs 无条件依赖并定义 WITH_SMARTOBJECTS=1；传递依赖会拉入 GameplayAbilities/TargetingSystem/MassEntity/WorldConditions
   AIModule,              // AIController底层支持
   HTTP,                  // HTTP请求 + SSE流式响应（主要传输方式）
   WebSockets,            // WebSocket通信（可选，用于Realtime类接口）

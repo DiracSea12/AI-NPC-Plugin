@@ -7,7 +7,7 @@ class AINPCCORE_API FOllamaProvider : public FOpenAIProvider
 public:
 	explicit FOllamaProvider(
 		FString InDefaultModel = FString(),
-		FString InBaseUrl = TEXT("http://localhost:11434/v1"));
+		FString InBaseUrl = FString());
 
 	virtual FLLMProviderCapabilities GetCapabilities() const override;
 };

@@ -19,14 +19,28 @@
   `pwsh ./scripts/dev/clean-generated.ps1`
 - Fast AI-coding verification:
   `pwsh ./scripts/dev/test-fast.ps1`
+- Full static verification:
+  `pwsh ./scripts/dev/test-static.ps1`
+- Full editor-context automation:
+  `pwsh ./scripts/dev/test-editor-context.ps1`
+- Game tests:
+  `pwsh ./scripts/dev/test-game.ps1`
+- LLM connectivity diagnostic:
+  `pwsh ./scripts/dev/test-llm-connectivity.ps1`
+- Full verification (static + editor-context automation + game tests):
+  `pwsh ./scripts/dev/test-all.ps1`
 
 ## Local Provider Config
 
 - Repo-local real-provider config lives in:
   `Config/AINpcLocalProvider.json`
+- This file is the only source for provider, apiKey, baseUrl, model, and effortLevel.
+- Do not reintroduce provider settings on UE settings, Persona assets, components, Blueprint nodes, environment variables, or fallback chains.
 - This file is intentionally local-only and ignored by git.
 - The example template is:
   `Config/AINpcLocalProvider.example.json`
+- `scripts/dev/test-llm-connectivity.ps1` sends one real minimal provider request using this config and only verifies provider reachability/auth/JSON response.
+- LLM connectivity is not EditorContext Automation and is not NPC in-game behavior acceptance.
 
 ### Packaged visual QA
 
@@ -36,6 +50,14 @@
   into:
   `TestResults/Packaged/VerifierHostAutomation/Windows/VerifierHostAutomation/Config/AINpcLocalProvider.json`
 - This is only for local acceptance on your own machine. Do not commit secrets, and do not claim packaged real-provider verification unless the packaged build is using a real local provider config.
+
+## Test Discovery Rules
+
+- Static verification scripts live in `scripts/dev/verify-*.ps1`; `test-static.ps1` discovers and runs them automatically.
+- Unreal Automation tests live under `Plugins/AINpc/Source/**/Private/Tests/*.cpp`; `test-editor-context.ps1` discovers quoted test paths starting with `AINpc.`.
+- Game tests live in `scripts/dev/game/test-*.ps1`; `test-game.ps1` discovers and runs them automatically.
+- New tests must follow those naming/location rules to enter the aggregate runners without editing the runners.
+- Game test scripts use the shared `/Game/Maps/AINpcTestMap` and `AAINpcTestGameMode` harness by default; each script owns only its scenario parameters and acceptance scope, while the aggregate runner only discovers and executes scripts.
 
 ## Runtime Verification Standard
 

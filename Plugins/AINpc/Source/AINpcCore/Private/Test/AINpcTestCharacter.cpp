@@ -6,6 +6,7 @@
 #include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"
 #include "Engine/SkeletalMesh.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -23,6 +24,13 @@ AAINpcTestCharacter::AAINpcTestCharacter()
 		Capsule->InitCapsuleSize(42.0f, 96.0f);
 	}
 
+	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+	{
+		Movement->MaxWalkSpeed = VisualActionMoveSpeed;
+		Movement->bOrientRotationToMovement = true;
+		Movement->RotationRate = FRotator(0.0f, 360.0f, 0.0f);
+	}
+
 	USkeletalMeshComponent* const MeshComponent = GetMesh();
 	if (MeshComponent)
 	{
@@ -34,7 +42,8 @@ AAINpcTestCharacter::AAINpcTestCharacter()
 	}
 
 	static ConstructorHelpers::FObjectFinder<USkeletalMesh> MannequinMeshFinder(StandardMannequinMeshPath);
-	if (MannequinMeshFinder.Succeeded() && MeshComponent)
+	bVisualMeshLoaded = MannequinMeshFinder.Succeeded() && MeshComponent;
+	if (bVisualMeshLoaded)
 	{
 		MeshComponent->SetSkeletalMesh(MannequinMeshFinder.Object);
 		UE_LOG(LogTemp, Warning, TEXT("=== UE template Mannequin skeletal mesh loaded: %s ==="), StandardMannequinMeshPath);
@@ -45,7 +54,8 @@ AAINpcTestCharacter::AAINpcTestCharacter()
 	}
 
 	static ConstructorHelpers::FClassFinder<UAnimInstance> MannequinAnimFinder(StandardMannequinAnimBlueprintPath);
-	if (MannequinAnimFinder.Succeeded() && MeshComponent)
+	bVisualAnimLoaded = MannequinAnimFinder.Succeeded() && MeshComponent;
+	if (bVisualAnimLoaded)
 	{
 		MeshComponent->SetAnimInstanceClass(MannequinAnimFinder.Class);
 		UE_LOG(LogTemp, Warning, TEXT("=== UE template Mannequin animation blueprint loaded: %s ==="), StandardMannequinAnimBlueprintPath);
@@ -63,10 +73,6 @@ void AAINpcTestCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 
-	FDateTime Now = FDateTime::Now();
-	UE_LOG(LogTemp, Warning, TEXT("=== AAINpcTestCharacter::BeginPlay START [%s] ==="),
-		*Now.ToString(TEXT("%Y-%m-%d %H:%M:%S")));
-
 	USkeletalMeshComponent* const MeshComponent = GetMesh();
 	if (MeshComponent)
 	{
@@ -74,24 +80,21 @@ void AAINpcTestCharacter::BeginPlay()
 		MeshComponent->SetHiddenInGame(false);
 	}
 
-	const bool bHasTemplateMesh = MeshComponent && MeshComponent->GetSkeletalMeshAsset();
-	if (!bHasTemplateMesh)
-	{
-		UE_LOG(LogTemp, Error, TEXT("=== UE template Mannequin skeletal mesh is missing at BeginPlay! ==="));
-	}
-
-	UE_LOG(LogTemp, Warning, TEXT("=== UE template Mannequin NPC Character ready. SkeletalMesh=%s ObserverControlled=false ==="),
-		bHasTemplateMesh ? *MeshComponent->GetSkeletalMeshAsset()->GetName() : TEXT("MISSING"));
+	const bool bHasMesh = MeshComponent && MeshComponent->GetSkeletalMeshAsset();
+	UE_LOG(LogTemp, Warning, TEXT("=== UE template Mannequin NPC Character ready. SkeletalMesh=%s AnimClass=%s ObserverControlled=false ==="),
+		bHasMesh ? *MeshComponent->GetSkeletalMeshAsset()->GetName() : TEXT("MISSING"),
+		MeshComponent && MeshComponent->GetAnimClass() ? *MeshComponent->GetAnimClass()->GetName() : TEXT("MISSING"));
 
 	DrawDebugString(GetWorld(), GetActorLocation() + FVector(0, 0, 230),
 		TEXT("UE TEMPLATE MANNEQUIN AINPC"), nullptr, FColor::White, 30.0f, true);
 
 	if (GEngine)
 	{
-		GEngine->AddOnScreenDebugMessage(-1, 30.0f, FColor::Red,
-			FString::Printf(TEXT("UE template Mannequin NPC spawned at %s, SkeletalMesh=%s, separate from observer pawn"),
+		GEngine->AddOnScreenDebugMessage(-1, 30.0f, HasValidVisualMeshAndAnimation() ? FColor::Red : FColor::Yellow,
+			FString::Printf(TEXT("UE template Mannequin NPC spawned at %s, SkeletalMesh=%s, Anim=%s, separate from observer pawn"),
 				*GetActorLocation().ToString(),
-				bHasTemplateMesh ? *MeshComponent->GetSkeletalMeshAsset()->GetName() : TEXT("MISSING")));
+				bHasMesh ? *MeshComponent->GetSkeletalMeshAsset()->GetName() : TEXT("MISSING"),
+				MeshComponent && MeshComponent->GetAnimClass() ? *MeshComponent->GetAnimClass()->GetName() : TEXT("MISSING")));
 	}
 }
 
@@ -102,21 +105,16 @@ void AAINpcTestCharacter::Tick(float DeltaTime)
 	if (bVisualActionMoveActive && !bVisualActionTargetReached)
 	{
 		const FVector CurrentLocation = GetActorLocation();
-		const FVector NextLocation = FMath::VInterpConstantTo(
-			CurrentLocation,
-			VisualActionTargetLocation,
-			DeltaTime,
-			VisualActionMoveSpeed);
+		const FVector NextLocation = FMath::VInterpConstantTo(CurrentLocation, VisualActionTargetLocation, DeltaTime, VisualActionMoveSpeed);
 		SetActorLocation(NextLocation);
 
 		const FVector ToTarget = VisualActionTargetLocation - NextLocation;
 		if (!ToTarget.IsNearlyZero())
 		{
-			SetActorRotation(ToTarget.Rotation());
+			SetActorRotation(FVector(ToTarget.X, ToTarget.Y, 0.0f).Rotation());
 		}
 
-		if (FVector::DistSquared(NextLocation, VisualActionTargetLocation)
-			<= FMath::Square(VisualActionAcceptanceDistance))
+		if (FVector::DistSquared2D(NextLocation, VisualActionTargetLocation) <= FMath::Square(VisualActionAcceptanceDistance))
 		{
 			bVisualActionMoveActive = false;
 			bVisualActionTargetReached = true;
@@ -125,21 +123,23 @@ void AAINpcTestCharacter::Tick(float DeltaTime)
 
 	const FColor SphereColor = bVisualActionTargetReached ? FColor::Green : (bVisualActionMoveActive ? FColor::Yellow : FColor::Red);
 	DrawDebugSphere(GetWorld(), GetActorLocation() + FVector(0, 0, 220), 16.0f, 12, SphereColor, false, 0.0f);
-	DrawDebugString(GetWorld(), GetActorLocation() + FVector(0, 0, 245),
-		TEXT("UE TEMPLATE MANNEQUIN AINPC"), nullptr, FColor::White, 0.0f, true);
+	DrawDebugString(GetWorld(), GetActorLocation() + FVector(0, 0, 245), TEXT("UE TEMPLATE MANNEQUIN AINPC"), nullptr, FColor::White, 0.0f, true);
+	if (!VisibleStateText.IsEmpty())
+	{
+		DrawDebugString(GetWorld(), GetActorLocation() + FVector(0, 0, 275), FString::Printf(TEXT("NPC State: %s"), *VisibleStateText), nullptr, FColor::Cyan, 0.0f, true);
+	}
+	if (!VisibleDelayMaskingText.IsEmpty())
+	{
+		DrawDebugString(GetWorld(), GetActorLocation() + FVector(0, 0, 305), FString::Printf(TEXT("Delay masking debug: %s"), *VisibleDelayMaskingText), nullptr, FColor::Orange, 0.0f, true);
+	}
+	if (!VisibleDialogueText.IsEmpty())
+	{
+		DrawDebugString(GetWorld(), GetActorLocation() + FVector(0, 0, 335), FString::Printf(TEXT("NPC says: %s"), *VisibleDialogueText.Left(140)), nullptr, FColor::Yellow, 0.0f, true);
+	}
 
 	if (bVisualActionMoveActive || bVisualActionTargetReached)
 	{
-		DrawDebugSphere(
-			GetWorld(),
-			VisualActionTargetLocation,
-			40.0f,
-			16,
-			bVisualActionTargetReached ? FColor::Green : FColor::Yellow,
-			false,
-			0.0f,
-			0,
-			2.0f);
+		DrawDebugSphere(GetWorld(), VisualActionTargetLocation, 40.0f, 16, bVisualActionTargetReached ? FColor::Green : FColor::Yellow, false, 0.0f, 0, 2.0f);
 		DrawDebugLine(GetWorld(), GetActorLocation(), VisualActionTargetLocation, FColor::Yellow, false, 0.0f, 0, 2.0f);
 	}
 }
@@ -156,6 +156,21 @@ void AAINpcTestCharacter::BeginVisualActionMove(const FTransform& ClaimedSlotTra
 	bVisualActionTargetReached = false;
 }
 
+void AAINpcTestCharacter::SetVisibleDialogueText(const FString& InText)
+{
+	VisibleDialogueText = InText;
+}
+
+void AAINpcTestCharacter::SetVisibleDelayMaskingText(const FString& InText)
+{
+	VisibleDelayMaskingText = InText;
+}
+
+void AAINpcTestCharacter::SetVisibleStateText(const FString& InText)
+{
+	VisibleStateText = InText;
+}
+
 bool AAINpcTestCharacter::HasReachedVisualActionTarget() const
 {
 	return bVisualActionTargetReached;
@@ -164,6 +179,12 @@ bool AAINpcTestCharacter::HasReachedVisualActionTarget() const
 bool AAINpcTestCharacter::IsVisualActionMoveActive() const
 {
 	return bVisualActionMoveActive;
+}
+
+bool AAINpcTestCharacter::HasValidVisualMeshAndAnimation() const
+{
+	USkeletalMeshComponent* MeshComponent = GetMesh();
+	return bVisualMeshLoaded && bVisualAnimLoaded && MeshComponent && MeshComponent->GetSkeletalMeshAsset() && MeshComponent->GetAnimClass();
 }
 
 float AAINpcTestCharacter::GetVisualActionTargetDistance() const

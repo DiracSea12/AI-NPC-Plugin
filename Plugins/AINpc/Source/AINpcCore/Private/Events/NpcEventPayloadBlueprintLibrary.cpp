@@ -80,6 +80,23 @@ FNpcEventMessage UNpcEventPayloadBlueprintLibrary::MakeTradeEventMessage(
 	return NpcEventPayload::MakeMessage(EventTag, RoutingTags, Payload);
 }
 
+FNpcEventMessage UNpcEventPayloadBlueprintLibrary::MakeLLMDegradationEventMessage(
+	const FGameplayTag EventTag,
+	const FGameplayTagContainer& RoutingTags,
+	AActor* NpcActor,
+	const FString& Reason,
+	const int32 RetryCount,
+	const bool bUsedTemplate)
+{
+	FNpcLLMDegradationEventPayload Payload;
+	Payload.NpcActor = NpcActor;
+	Payload.Reason = Reason;
+	Payload.RetryCount = RetryCount;
+	Payload.bUsedTemplate = bUsedTemplate;
+
+	return NpcEventPayload::MakeMessage(EventTag, RoutingTags, Payload);
+}
+
 bool UNpcEventPayloadBlueprintLibrary::TryGetAttackPayloadFromMessage(const FNpcEventMessage& EventMessage, FNpcAttackEventPayload& OutPayload)
 {
 	return NpcEventPayload::TryExtractPayload(EventMessage, OutPayload);
@@ -91,6 +108,11 @@ bool UNpcEventPayloadBlueprintLibrary::TryGetGiftPayloadFromMessage(const FNpcEv
 }
 
 bool UNpcEventPayloadBlueprintLibrary::TryGetTradePayloadFromMessage(const FNpcEventMessage& EventMessage, FNpcTradeEventPayload& OutPayload)
+{
+	return NpcEventPayload::TryExtractPayload(EventMessage, OutPayload);
+}
+
+bool UNpcEventPayloadBlueprintLibrary::TryGetLLMDegradationPayloadFromMessage(const FNpcEventMessage& EventMessage, FNpcLLMDegradationEventPayload& OutPayload)
 {
 	return NpcEventPayload::TryExtractPayload(EventMessage, OutPayload);
 }

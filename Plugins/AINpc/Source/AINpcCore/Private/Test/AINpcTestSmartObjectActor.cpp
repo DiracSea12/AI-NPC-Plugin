@@ -6,15 +6,24 @@
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Components/SceneComponent.h"
+
+#if defined(WITH_SMARTOBJECTS) && WITH_SMARTOBJECTS
 #include "SmartObjectComponent.h"
 #include "SmartObjectDefinition.h"
+#endif
 
 AAINpcTestSmartObjectActor::AAINpcTestSmartObjectActor()
 {
 	PrimaryActorTick.bCanEverTick = true;
 
+#if defined(WITH_SMARTOBJECTS) && WITH_SMARTOBJECTS
 	SmartObjectComponent = CreateDefaultSubobject<USmartObjectComponent>(TEXT("SmartObjectComponent"));
 	RootComponent = SmartObjectComponent;
+#else
+	RootSceneComponent = CreateDefaultSubobject<USceneComponent>(TEXT("RootSceneComponent"));
+	RootComponent = RootSceneComponent;
+#endif
 
 	ObjectMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ObjectMesh"));
 	ObjectMesh->SetupAttachment(RootComponent);
@@ -93,20 +102,31 @@ void AAINpcTestSmartObjectActor::SetInteractionState(const bool bInInteractionAc
 
 void AAINpcTestSmartObjectActor::InitializeRuntimeDefinition()
 {
+#if defined(WITH_SMARTOBJECTS) && WITH_SMARTOBJECTS
 	if (RuntimeDefinition || !SmartObjectComponent)
 	{
 		return;
 	}
 
-	RuntimeDefinition = NewObject<USmartObjectDefinition>(this, TEXT("RuntimeSmartObjectDefinition"));
-	UAINpcTestSmartObjectBehaviorDefinition* BehaviorDefinition =
-		NewObject<UAINpcTestSmartObjectBehaviorDefinition>(RuntimeDefinition, TEXT("RuntimeBehaviorDefinition"));
+	USmartObjectComponent* RuntimeSmartObjectComponent = Cast<USmartObjectComponent>(SmartObjectComponent);
+	if (!RuntimeSmartObjectComponent)
+	{
+		return;
+	}
 
-	FSmartObjectSlotDefinition& Slot = RuntimeDefinition->DebugAddSlot();
+	USmartObjectDefinition* SmartObjectDefinition = NewObject<USmartObjectDefinition>(this, TEXT("RuntimeSmartObjectDefinition"));
+	USmartObjectBehaviorDefinition* BehaviorDefinition =
+		NewObject<UAINpcTestSmartObjectBehaviorDefinition>(SmartObjectDefinition, TEXT("RuntimeBehaviorDefinition"));
+
+	FSmartObjectSlotDefinition& Slot = SmartObjectDefinition->DebugAddSlot();
 	Slot.Offset = FVector3f(SlotOffset);
 	Slot.BehaviorDefinitions.Add(BehaviorDefinition);
 
-	SmartObjectComponent->SetDefinition(RuntimeDefinition);
+	RuntimeSmartObjectComponent->SetDefinition(SmartObjectDefinition);
+	RuntimeDefinition = SmartObjectDefinition;
+#else
+	RuntimeDefinition = nullptr;
+#endif
 }
 
 void AAINpcTestSmartObjectActor::UpdateMaterialColors()

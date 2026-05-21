@@ -4,6 +4,7 @@
 #include "Components/AINpcDialogueRequestBuilder.h"
 #include "AINpcCoreLog.h"
 #include "Async/Async.h"
+#include "LLM/AINpcLLMDiagnostics.h"
 #include "LLM/ILLMProvider.h"
 #include "LLM/LLMConcurrencyManager.h"
 #include "LLM/LLMReliabilityManager.h"
@@ -161,7 +162,12 @@ bool FAINpcDialogueLifecycleHandler::DispatchDialogueRequestNow(UAINpcComponent&
 	}
 
 	FLLMRequest Request = Component.BuildRequest();
-	FAINpcDialogueRequestBuilder::ConfigureStreamingRequest(Component, Request);
+	const FLLMProviderCapabilities ProviderCapabilities = Component.Provider->GetCapabilities();
+	if (ProviderCapabilities.bSupportsStreaming)
+	{
+		FAINpcDialogueRequestBuilder::ConfigureStreamingRequest(Component, Request);
+	}
+
 	Component.ActiveRequestId = Component.Provider->SendRequest(
 		Request,
 		[WeakThis = TWeakObjectPtr<UAINpcComponent>(&Component)](const FLLMResponse& Response)
@@ -263,6 +269,16 @@ void FAINpcDialogueLifecycleHandler::HandleRequestCompleted(UAINpcComponent& Com
 	ClearRetryTimer(Component);
 	Component.ClearDelayMaskingTimer();
 	Component.EndDelayMasking();
+
+	UE_LOG(LogAINpc, Log, TEXT("Dialogue provider callback requestId=%s success=%s httpStatus=%d parseTier=%s parsedAsJson=%s dialogueLen=%d actionCount=%d error=%s"),
+		*Response.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		Response.bSuccess ? TEXT("true") : TEXT("false"),
+		Response.HttpStatusCode,
+		AINpc::LLMDiagnostics::DescribeParseTier(Response.ParsedResponse.ParseTier),
+		Response.ParsedResponse.bParsedAsJson ? TEXT("true") : TEXT("false"),
+		Response.Content.Len(),
+		Response.ParsedResponse.Actions.Num(),
+		Response.ErrorMessage.IsEmpty() ? TEXT("<none>") : *Response.ErrorMessage);
 
 	if (Response.bSuccess)
 	{

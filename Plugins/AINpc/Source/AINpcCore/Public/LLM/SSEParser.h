@@ -34,6 +34,10 @@ public:
 
 private:
 	FString Buffer;
+	FString CurrentEventName;
+	TArray<FString> CurrentDataLines;
+	bool bTerminalReceived = false;
 
 	void ProcessLine(const FString& Line);
+	void FlushCurrentEvent();
 };

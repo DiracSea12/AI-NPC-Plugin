@@ -62,11 +62,6 @@ void UAINpcComponent::SetPersonaData(UNpcPersonaDataAsset* NewPersonaData)
 	PersonaDataAsset = NewPersonaData;
 }
 
-void UAINpcComponent::SetApiKey(const FString& NewApiKey)
-{
-	ApiKeyOverride = NewApiKey;
-}
-
 bool UAINpcComponent::IsDialogueActive() const
 {
 	return bIsDialogueSessionActive;
@@ -95,6 +90,11 @@ bool UAINpcComponent::IsDialogueRequestQueued() const
 ENpcDialogueState UAINpcComponent::GetDialogueState() const
 {
 	return CurrentDialogueState;
+}
+
+bool UAINpcComponent::SupportsStateTreeAutoController() const
+{
+	return FAINpcComponentStateHandler::SupportsStateTreeAutoController(*this);
 }
 
 void UAINpcComponent::SetDialogueStateFromStateTree(const ENpcDialogueState NewState)
@@ -204,6 +204,11 @@ void UAINpcComponent::SetDialogueTestState(
 	DialogueStateEnterTimeSeconds = FPlatformTime::Seconds();
 }
 
+void UAINpcComponent::SeedConversationHistoryForTest(const TArray<FLLMMessage>& Messages)
+{
+	ConversationHistory = Messages;
+}
+
 void UAINpcComponent::HandleRequestCompletedForTest(const FLLMResponse& Response)
 {
 	FAINpcDialogueLifecycleHandler::HandleRequestCompleted(*this, Response);
@@ -278,6 +283,13 @@ bool UAINpcComponent::IsMemoryMaintenanceActiveForTest() const
 FLLMRequest UAINpcComponent::BuildRequestForTest() const
 {
 	return BuildRequest();
+}
+
+FLLMRequest UAINpcComponent::BuildStreamingRequestForTest()
+{
+	FLLMRequest Request = BuildRequest();
+	FAINpcDialogueRequestBuilder::ConfigureStreamingRequest(*this, Request);
+	return Request;
 }
 
 FGuid UAINpcComponent::GetActiveRequestIdForTest() const

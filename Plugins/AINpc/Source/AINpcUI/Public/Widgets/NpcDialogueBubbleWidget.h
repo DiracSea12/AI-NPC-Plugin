@@ -54,6 +54,8 @@ public:
 	FText GetDisplayedText() const { return FText::FromString(VisibleText); }
 	void AdvanceTypewriterForTest(float DeltaTime);
 	FOnPartialResponseNative& OnPartialResponseNative() { return OnPartialResponseNativeDelegate; }
+
+	UFUNCTION(BlueprintCallable, Category = "Dialogue")
 	void BindToNpcComponent(class UAINpcComponent* Component);
 
 protected:

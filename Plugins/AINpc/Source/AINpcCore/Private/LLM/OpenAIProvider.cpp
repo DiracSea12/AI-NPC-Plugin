@@ -1,7 +1,9 @@
 ﻿#include "LLM/OpenAIProvider.h"
+#include "LLM/AINpcLLMDiagnostics.h"
 #include "LLM/StructuredOutputPromptLibrary.h"
 #include "LLM/StructuredOutputSchemaHelpers.h"
 #include "LLM/SSEParser.h"
+#include "AINpcCoreLog.h"
 
 #include "Async/Async.h"
 #include "Dom/JsonObject.h"
@@ -20,6 +22,148 @@ TAtomic<float> FOpenAIProvider::PreDispatchDelaySecondsForTest(0.0f);
 TAtomic<float> FOpenAIProvider::PreProcessDelaySecondsForTest(0.0f);
 TAtomic<bool> FOpenAIProvider::bReachedPostInitialCancelGateForTest(false);
 #endif
+
+struct FOpenAIStreamingState
+{
+	explicit FOpenAIStreamingState(const FGuid& InRequestId, FLLMStreamCallback InStreamCallback)
+		: RequestId(InRequestId)
+		, StreamCallback(MoveTemp(InStreamCallback))
+	{
+		Parser.OnData.BindRaw(this, &FOpenAIStreamingState::HandleData);
+		Parser.OnDone.BindRaw(this, &FOpenAIStreamingState::HandleDone);
+		Parser.OnError.BindRaw(this, &FOpenAIStreamingState::HandleError);
+	}
+
+	void AppendBytes(const void* Data, int64 Length)
+	{
+		if (!Data || Length <= 0)
+		{
+			return;
+		}
+
+		FScopeLock Lock(&Mutex);
+		const FUTF8ToTCHAR ConvertedBytes(reinterpret_cast<const ANSICHAR*>(Data), static_cast<int32>(Length));
+		const FString ChunkString(ConvertedBytes.Length(), ConvertedBytes.Get());
+		RawResponse += ChunkString;
+		Parser.ProcessChunk(ChunkString);
+	}
+
+	FString GetResponseBody() const
+	{
+		FScopeLock Lock(&Mutex);
+		return RawResponse;
+	}
+
+	FString GetErrorMessage() const
+	{
+		FScopeLock Lock(&Mutex);
+		return StreamErrorMessage;
+	}
+
+	FString GetAccumulatedContent() const
+	{
+		FScopeLock Lock(&Mutex);
+		return AccumulatedContent;
+	}
+
+private:
+	void HandleData(const FString& Data)
+	{
+		TSharedPtr<FJsonObject> JsonObject;
+		const TSharedRef<TJsonReader<>> JsonReader = TJsonReaderFactory<>::Create(Data);
+		if (!FJsonSerializer::Deserialize(JsonReader, JsonObject) || !JsonObject.IsValid())
+		{
+			HandleError(FString::Printf(TEXT("OpenAI stream chunk JSON parse failed: %s"), *Data.Left(256)));
+			return;
+		}
+
+		const TSharedPtr<FJsonObject>* ErrorObject = nullptr;
+		if (JsonObject->TryGetObjectField(TEXT("error"), ErrorObject) && ErrorObject && ErrorObject->IsValid())
+		{
+			FString Message;
+			if (!(*ErrorObject)->TryGetStringField(TEXT("message"), Message) || Message.IsEmpty())
+			{
+				Message = TEXT("OpenAI stream returned an error object.");
+			}
+			HandleError(Message);
+			return;
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* ChoicesArray = nullptr;
+		if (!JsonObject->TryGetArrayField(TEXT("choices"), ChoicesArray) || !ChoicesArray || ChoicesArray->Num() == 0)
+		{
+			return;
+		}
+
+		const TSharedPtr<FJsonObject>* ChoiceObject = nullptr;
+		if (!(*ChoicesArray)[0]->TryGetObject(ChoiceObject) || !ChoiceObject || !ChoiceObject->IsValid())
+		{
+			return;
+		}
+
+		const TSharedPtr<FJsonObject>* DeltaObject = nullptr;
+		if ((*ChoiceObject)->TryGetObjectField(TEXT("delta"), DeltaObject) && DeltaObject && DeltaObject->IsValid())
+		{
+			FString Content;
+			if ((*DeltaObject)->TryGetStringField(TEXT("content"), Content) && !Content.IsEmpty())
+			{
+				AccumulatedContent += Content;
+				FLLMStreamChunk Chunk;
+				Chunk.RequestId = RequestId;
+				Chunk.Content = Content;
+				StreamCallback(Chunk);
+			}
+		}
+
+		FString FinishReason;
+		if ((*ChoiceObject)->TryGetStringField(TEXT("finish_reason"), FinishReason) && !FinishReason.IsEmpty())
+		{
+			HandleDone();
+		}
+	}
+
+	void HandleDone()
+	{
+		if (bFinalSent)
+		{
+			return;
+		}
+		bFinalSent = true;
+
+		FLLMStreamChunk FinalChunk;
+		FinalChunk.RequestId = RequestId;
+		FinalChunk.Content = AccumulatedContent;
+		FinalChunk.bIsFinal = true;
+		StreamCallback(FinalChunk);
+	}
+
+	void HandleError(const FString& Error)
+	{
+		if (bErrorSent)
+		{
+			return;
+		}
+		bErrorSent = true;
+		StreamErrorMessage = Error.IsEmpty() ? TEXT("OpenAI stream error.") : Error;
+
+		FLLMStreamChunk ErrorChunk;
+		ErrorChunk.RequestId = RequestId;
+		ErrorChunk.ErrorMessage = StreamErrorMessage;
+		ErrorChunk.bIsError = true;
+		ErrorChunk.bIsFinal = true;
+		StreamCallback(ErrorChunk);
+	}
+
+	FGuid RequestId;
+	FLLMStreamCallback StreamCallback;
+	FSSEParser Parser;
+	FString RawResponse;
+	FString AccumulatedContent;
+	FString StreamErrorMessage;
+	bool bFinalSent = false;
+	bool bErrorSent = false;
+	mutable FCriticalSection Mutex;
+};
 
 FOpenAIProvider::FOpenAIProvider(FString InDefaultApiKey, FString InDefaultModel, FString InBaseUrl)
 	: DefaultApiKey(MoveTemp(InDefaultApiKey))
@@ -211,9 +355,20 @@ void FOpenAIProvider::DispatchRequest(const FGuid& RequestId, FLLMRequest Reques
 	const TSharedRef<TJsonWriter<>> JsonWriter = TJsonWriterFactory<>::Create(&RequestBody);
 	FJsonSerializer::Serialize(JsonPayload, JsonWriter);
 
-	FString Endpoint = ResolveBaseUrl(Request);
+	FString BaseUrl = ResolveBaseUrl(Request).TrimStartAndEnd();
+	FString Endpoint = BaseUrl;
 	Endpoint.RemoveFromEnd(TEXT("/"));
 	Endpoint += TEXT("/chat/completions");
+	const float EffectiveTimeoutSeconds = Request.TimeoutSeconds > 0.0f ? Request.TimeoutSeconds : RequestTimeoutSeconds;
+	UE_LOG(LogAINpc, Log, TEXT("LLM request dispatch provider=openai requestId=%s baseUrl=%s model=%s effortLevel=%s endpoint=%s timeout=%.1f apiKey=%s retry=%d"),
+		*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		*BaseUrl,
+		*Model,
+		Request.EffortLevel.IsEmpty() ? TEXT("<empty>") : *Request.EffortLevel,
+		*Endpoint,
+		EffectiveTimeoutSeconds,
+		ApiKey.IsEmpty() ? TEXT("missing") : TEXT("present"),
+		RetryCount);
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
 	HttpRequest->SetURL(Endpoint); // BaseURL per-request override: uses Request.BaseUrl if not empty
 	HttpRequest->SetVerb(TEXT("POST"));
@@ -237,6 +392,11 @@ void FOpenAIProvider::DispatchRequest(const FGuid& RequestId, FLLMRequest Reques
 	{
 		StreamCallbackPtr = MakeShared<FLLMStreamCallback, ESPMode::ThreadSafe>(Request.StreamCallback);
 	}
+	TSharedPtr<FOpenAIStreamingState, ESPMode::ThreadSafe> StreamingState;
+	if (Request.bUseStreaming && StreamCallbackPtr)
+	{
+		ConfigureStreamingReceive(RequestId, HttpRequest, StreamCallbackPtr, StreamingState);
+	}
 
 	HttpRequest->OnProcessRequestComplete().BindLambda(
 		[
@@ -245,17 +405,18 @@ void FOpenAIProvider::DispatchRequest(const FGuid& RequestId, FLLMRequest Reques
 			CompletionCallbackRef,
 			StreamCallbackPtr,
 			bUseStreaming = Request.bUseStreaming,
+			StreamingState,
 			RequestCopy = Request,
 			RetryCount
 		](FHttpRequestPtr RequestPtr, FHttpResponsePtr ResponsePtr, bool bRequestSucceeded)
 		{
 			if (const TSharedPtr<FOpenAIProvider, ESPMode::ThreadSafe> Provider = WeakProvider.Pin())
 			{
-				if (bUseStreaming && StreamCallbackPtr && bRequestSucceeded && ResponsePtr.IsValid())
+				if (bUseStreaming && StreamCallbackPtr && bRequestSucceeded && ResponsePtr.IsValid() && !StreamingState.IsValid())
 				{
 					Provider->ProcessStreamResponse(RequestId, ResponsePtr->GetContentAsString(), *StreamCallbackPtr);
 				}
-				Provider->CompleteRequest(RequestId, bRequestSucceeded, ResponsePtr, RequestPtr, CompletionCallbackRef, RequestCopy, RetryCount);
+				Provider->CompleteRequest(RequestId, bRequestSucceeded, ResponsePtr, RequestPtr, CompletionCallbackRef, RequestCopy, RetryCount, StreamingState);
 				return;
 			}
 
@@ -359,7 +520,8 @@ void FOpenAIProvider::CompleteRequest(
 	const FHttpRequestPtr& HttpRequest,
 	const TSharedRef<FLLMResponseCallback, ESPMode::ThreadSafe>& CompletionCallback,
 	const FLLMRequest& OriginalRequest,
-	int32 RetryCount)
+	int32 RetryCount,
+	const TSharedPtr<FOpenAIStreamingState, ESPMode::ThreadSafe>& StreamingState)
 {
 	{
 		FScopeLock Lock(&ActiveRequestsMutex);
@@ -374,6 +536,15 @@ void FOpenAIProvider::CompleteRequest(
 	Response.HttpStatusCode = HttpResponse.IsValid() ? HttpResponse->GetResponseCode() : 0;
 
 	bool bShouldRetry = false;
+
+	const double RequestDurationMs = HttpRequest.IsValid() ? HttpRequest->GetElapsedTime() * 1000.0 : 0.0;
+	FString ResponseBody;
+	FString SafeResponseSummary;
+	if (HttpResponse.IsValid())
+	{
+		ResponseBody = StreamingState.IsValid() ? StreamingState->GetResponseBody() : HttpResponse->GetContentAsString();
+		SafeResponseSummary = AINpc::LLMDiagnostics::BuildSafeResponseSummary(ResponseBody);
+	}
 
 	if (!bRequestSucceeded || !HttpResponse.IsValid())
 	{
@@ -407,6 +578,16 @@ void FOpenAIProvider::CompleteRequest(
 			Response.ErrorMessage = TEXT("OpenAI request failed before receiving a response.");
 		}
 
+		UE_LOG(LogAINpc, Warning, TEXT("LLM request failed provider=openai requestId=%s httpStatus=%d durationMs=%.1f requestSucceeded=%s failureReason=%d retry=%d error=%s responseSummary=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			Response.HttpStatusCode,
+			RequestDurationMs,
+			bRequestSucceeded ? TEXT("true") : TEXT("false"),
+			HttpRequest.IsValid() ? static_cast<int32>(HttpRequest->GetFailureReason()) : -1,
+			RetryCount,
+			*Response.ErrorMessage,
+			SafeResponseSummary.IsEmpty() ? TEXT("<empty>") : *SafeResponseSummary);
+
 		if (bShouldRetry)
 		{
 			const float BackoffDelay = RetryBackoffBaseSeconds * FMath::Pow(2.0f, static_cast<float>(RetryCount));
@@ -438,12 +619,26 @@ void FOpenAIProvider::CompleteRequest(
 	}
 	else
 	{
-		const FString ResponseBody = HttpResponse->GetContentAsString();
 		FString ParsedContent;
 		FParsedLLMResponse ParsedResponse;
-		FString ParseError;
+		FString ParseError = StreamingState.IsValid() ? StreamingState->GetErrorMessage() : FString();
 
-		const bool bParsed = TryExtractContent(ResponseBody, ParsedContent, ParsedResponse, ParseError);
+		bool bParsed = false;
+		if (ParseError.IsEmpty() && !ResponseBody.IsEmpty())
+		{
+			bParsed = TryExtractContent(ResponseBody, ParsedContent, ParsedResponse, ParseError);
+		}
+		if (ParseError.IsEmpty() && StreamingState.IsValid() && !bParsed)
+		{
+			ParsedContent = StreamingState->GetAccumulatedContent();
+			if (!ParsedContent.IsEmpty())
+			{
+				ParsedResponse.Dialogue = ParsedContent;
+				ParsedResponse.bParsedAsJson = false;
+				ParsedResponse.ParseTier = ELLMResponseParseTier::PlainText;
+				bParsed = true;
+			}
+		}
 		const bool bIsHttpSuccess = EHttpResponseCodes::IsOk(Response.HttpStatusCode);
 
 		if (bParsed && bIsHttpSuccess)
@@ -458,6 +653,31 @@ void FOpenAIProvider::CompleteRequest(
 				? FString::Printf(TEXT("OpenAI request failed with HTTP %d."), Response.HttpStatusCode)
 				: MoveTemp(ParseError);
 		}
+	}
+
+	if (Response.bSuccess)
+	{
+		UE_LOG(LogAINpc, Log, TEXT("LLM request completed provider=openai requestId=%s httpStatus=%d durationMs=%.1f parseTier=%s parsedAsJson=%s dialogueLen=%d actionCount=%d retry=%d"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			Response.HttpStatusCode,
+			RequestDurationMs,
+			AINpc::LLMDiagnostics::DescribeParseTier(Response.ParsedResponse.ParseTier),
+			Response.ParsedResponse.bParsedAsJson ? TEXT("true") : TEXT("false"),
+			Response.Content.Len(),
+			Response.ParsedResponse.Actions.Num(),
+			RetryCount);
+	}
+	else if (bRequestSucceeded && HttpResponse.IsValid())
+	{
+		UE_LOG(LogAINpc, Warning, TEXT("LLM response rejected provider=openai requestId=%s httpStatus=%d durationMs=%.1f parseTier=%s parsedAsJson=%s retry=%d error=%s responseSummary=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			Response.HttpStatusCode,
+			RequestDurationMs,
+			AINpc::LLMDiagnostics::DescribeParseTier(Response.ParsedResponse.ParseTier),
+			Response.ParsedResponse.bParsedAsJson ? TEXT("true") : TEXT("false"),
+			RetryCount,
+			*Response.ErrorMessage,
+			SafeResponseSummary.IsEmpty() ? TEXT("<empty>") : *SafeResponseSummary);
 	}
 
 	Async(EAsyncExecution::ThreadPool, [CompletionCallback, Response = MoveTemp(Response)]() mutable
@@ -517,6 +737,10 @@ TSharedRef<FJsonObject> FOpenAIProvider::BuildJsonPayload(const FLLMRequest& Req
 	const TSharedRef<FJsonObject> JsonPayload = MakeShared<FJsonObject>();
 	JsonPayload->SetStringField(TEXT("model"), ResolveModel(Request));
 	JsonPayload->SetNumberField(TEXT("temperature"), Request.Temperature);
+	if (!Request.EffortLevel.IsEmpty())
+	{
+		JsonPayload->SetStringField(TEXT("effortLevel"), Request.EffortLevel);
+	}
 	if (Request.MaxTokens > 0)
 	{
 		JsonPayload->SetNumberField(TEXT("max_tokens"), Request.MaxTokens);
@@ -622,27 +846,52 @@ void FOpenAIProvider::ProcessStreamResponse(
 	{
 		TSharedPtr<FJsonObject> JsonObject;
 		const TSharedRef<TJsonReader<>> JsonReader = TJsonReaderFactory<>::Create(Data);
-		if (FJsonSerializer::Deserialize(JsonReader, JsonObject) && JsonObject.IsValid())
+		if (!FJsonSerializer::Deserialize(JsonReader, JsonObject) || !JsonObject.IsValid())
 		{
-			const TArray<TSharedPtr<FJsonValue>>* ChoicesArray;
-			if (JsonObject->TryGetArrayField(TEXT("choices"), ChoicesArray) && ChoicesArray->Num() > 0)
+			FLLMStreamChunk ErrorChunk;
+			ErrorChunk.RequestId = RequestId;
+			ErrorChunk.ErrorMessage = FString::Printf(TEXT("OpenAI stream chunk JSON parse failed: %s"), *Data.Left(256));
+			ErrorChunk.bIsError = true;
+			ErrorChunk.bIsFinal = true;
+			StreamCallback(ErrorChunk);
+			return;
+		}
+
+		const TSharedPtr<FJsonObject>* ErrorObject = nullptr;
+		if (JsonObject->TryGetObjectField(TEXT("error"), ErrorObject) && ErrorObject && ErrorObject->IsValid())
+		{
+			FString Message;
+			if (!(*ErrorObject)->TryGetStringField(TEXT("message"), Message) || Message.IsEmpty())
 			{
-				const TSharedPtr<FJsonObject>* ChoiceObject = nullptr;
-				if ((*ChoicesArray)[0]->TryGetObject(ChoiceObject) && ChoiceObject && ChoiceObject->IsValid())
+				Message = TEXT("OpenAI stream returned an error object.");
+			}
+			FLLMStreamChunk ErrorChunk;
+			ErrorChunk.RequestId = RequestId;
+			ErrorChunk.ErrorMessage = Message;
+			ErrorChunk.bIsError = true;
+			ErrorChunk.bIsFinal = true;
+			StreamCallback(ErrorChunk);
+			return;
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* ChoicesArray;
+		if (JsonObject->TryGetArrayField(TEXT("choices"), ChoicesArray) && ChoicesArray->Num() > 0)
+		{
+			const TSharedPtr<FJsonObject>* ChoiceObject = nullptr;
+			if ((*ChoicesArray)[0]->TryGetObject(ChoiceObject) && ChoiceObject && ChoiceObject->IsValid())
+			{
+				const TSharedPtr<FJsonObject>* DeltaObject = nullptr;
+				if ((*ChoiceObject)->TryGetObjectField(TEXT("delta"), DeltaObject) && DeltaObject && DeltaObject->IsValid())
 				{
-					const TSharedPtr<FJsonObject>* DeltaObject = nullptr;
-					if ((*ChoiceObject)->TryGetObjectField(TEXT("delta"), DeltaObject) && DeltaObject && DeltaObject->IsValid())
+					FString Content;
+					if ((*DeltaObject)->TryGetStringField(TEXT("content"), Content))
 					{
-						FString Content;
-						if ((*DeltaObject)->TryGetStringField(TEXT("content"), Content))
-						{
-							AccumulatedContent += Content;
-							FLLMStreamChunk Chunk;
-							Chunk.RequestId = RequestId;
-							Chunk.Content = Content;
-							Chunk.bIsFinal = false;
-							StreamCallback(Chunk);
-						}
+						AccumulatedContent += Content;
+						FLLMStreamChunk Chunk;
+						Chunk.RequestId = RequestId;
+						Chunk.Content = Content;
+						Chunk.bIsFinal = false;
+						StreamCallback(Chunk);
 					}
 				}
 			}
@@ -658,5 +907,42 @@ void FOpenAIProvider::ProcessStreamResponse(
 		StreamCallback(FinalChunk);
 	});
 
+	Parser.OnError.BindLambda([&](const FString& ErrorMessage)
+	{
+		FLLMStreamChunk ErrorChunk;
+		ErrorChunk.RequestId = RequestId;
+		ErrorChunk.ErrorMessage = ErrorMessage.IsEmpty() ? TEXT("OpenAI stream error.") : ErrorMessage;
+		ErrorChunk.bIsError = true;
+		ErrorChunk.bIsFinal = true;
+		StreamCallback(ErrorChunk);
+	});
+
 	Parser.ProcessChunk(ResponseBody);
+}
+
+void FOpenAIProvider::ConfigureStreamingReceive(
+	const FGuid& RequestId,
+	const TSharedRef<IHttpRequest, ESPMode::ThreadSafe>& HttpRequest,
+	const TSharedPtr<FLLMStreamCallback, ESPMode::ThreadSafe>& StreamCallback,
+	TSharedPtr<FOpenAIStreamingState, ESPMode::ThreadSafe>& OutStreamingState) const
+{
+	if (!StreamCallback || !*StreamCallback)
+	{
+		return;
+	}
+
+	const TSharedRef<FOpenAIStreamingState, ESPMode::ThreadSafe> StreamingState =
+		MakeShared<FOpenAIStreamingState, ESPMode::ThreadSafe>(RequestId, *StreamCallback);
+
+	const bool bStreamConfigured = HttpRequest->SetResponseBodyReceiveStreamDelegateV2(
+		FHttpRequestStreamDelegateV2::CreateLambda(
+			[StreamingState](void* Data, int64& InOutLength)
+			{
+				StreamingState->AppendBytes(Data, InOutLength);
+			}));
+
+	if (bStreamConfigured)
+	{
+		OutStreamingState = StreamingState;
+	}
 }

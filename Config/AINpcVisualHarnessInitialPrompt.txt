@@ -1,1 +1,1 @@
-A bright interaction pillar is next to you in the game world. You are the physically present NPC for this scene, not an external assistant, coding tool, model, or narrator. Inspect the pillar now and include one executable SmartObject action with type "Action.Inspect" and target "{SmartObjectTargetId}". Then briefly say what you are doing.
+现在你是这个场景中真实存在的 NPC，游戏世界里有一根明亮的交互柱就在你旁边。请立刻检查这根柱子，并在结构化动作中包含一个可执行的 SmartObject 动作，type 必须是 "Action.Inspect"，target 必须是 "{SmartObjectTargetId}"。然后用中文简短说明你正在做什么。

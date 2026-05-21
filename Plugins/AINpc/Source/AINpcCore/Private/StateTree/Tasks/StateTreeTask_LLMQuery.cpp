@@ -120,6 +120,60 @@ EStateTreeRunStatus TickWaitingForLlmState(
 
 	return EStateTreeRunStatus::Running;
 }
+
+EStateTreeRunStatus AdvanceDialogueState(
+	FStateTreeTask_LLMQueryInstanceData& InstanceData,
+	UAINpcComponent& NpcComponent,
+	const float DeltaTime)
+{
+	ENpcDialogueState DialogueState = NpcComponent.GetDialogueState();
+	if (DialogueState == ENpcDialogueState::WaitingForLLM)
+	{
+		bool bShouldForceFailureCleanup = false;
+		const EStateTreeRunStatus WaitingStatus = TickWaitingForLlmState(
+			InstanceData,
+			DeltaTime,
+			NpcComponent.IsRequestInFlight(),
+			NpcComponent.IsDialogueRequestQueued(),
+			bShouldForceFailureCleanup);
+		if (bShouldForceFailureCleanup)
+		{
+			NpcComponent.HandleStateTreeTimeoutFailure();
+		}
+		return WaitingStatus;
+	}
+
+	InstanceData.ElapsedSeconds = 0.0f;
+	InstanceData.bTimeoutExceeded = false;
+	InstanceData.TimeoutExceededAtSeconds = 0.0f;
+
+	if (DialogueState == ENpcDialogueState::Speaking)
+	{
+		InstanceData.SpeakingElapsedSeconds += DeltaTime;
+		if (InstanceData.SpeakingElapsedSeconds < FMath::Max(0.0f, InstanceData.SpeakingDurationSeconds))
+		{
+			return EStateTreeRunStatus::Running;
+		}
+
+		NpcComponent.SetDialogueStateFromStateTree(ENpcDialogueState::Cooldown);
+		InstanceData.CooldownElapsedSeconds = 0.0f;
+		return EStateTreeRunStatus::Running;
+	}
+
+	if (DialogueState == ENpcDialogueState::Cooldown)
+	{
+		InstanceData.CooldownElapsedSeconds += DeltaTime;
+		if (InstanceData.CooldownElapsedSeconds < FMath::Max(0.0f, InstanceData.CooldownDurationSeconds))
+		{
+			return EStateTreeRunStatus::Running;
+		}
+
+		NpcComponent.SetDialogueStateFromStateTree(ENpcDialogueState::Idle);
+		return EStateTreeRunStatus::Succeeded;
+	}
+
+	return (DialogueState == ENpcDialogueState::Idle) ? EStateTreeRunStatus::Failed : EStateTreeRunStatus::Running;
+}
 }
 
 FStateTreeTask_LLMQuery::FStateTreeTask_LLMQuery()
@@ -168,52 +222,7 @@ EStateTreeRunStatus FStateTreeTask_LLMQuery::Tick(FStateTreeExecutionContext& Co
 		return EStateTreeRunStatus::Failed;
 	}
 
-	ENpcDialogueState DialogueState = NpcComponent->GetDialogueState();
-	if (DialogueState == ENpcDialogueState::WaitingForLLM)
-	{
-		bool bShouldForceFailureCleanup = false;
-		const EStateTreeRunStatus WaitingStatus = TickWaitingForLlmState(
-			InstanceData,
-			DeltaTime,
-			NpcComponent->IsRequestInFlight(),
-			NpcComponent->IsDialogueRequestQueued(),
-			bShouldForceFailureCleanup);
-		if (bShouldForceFailureCleanup)
-		{
-			NpcComponent->HandleStateTreeTimeoutFailure();
-		}
-		return WaitingStatus;
-	}
-
-	InstanceData.ElapsedSeconds = 0.0f;
-	InstanceData.bTimeoutExceeded = false;
-	InstanceData.TimeoutExceededAtSeconds = 0.0f;
-
-	if (DialogueState == ENpcDialogueState::Speaking)
-	{
-		InstanceData.SpeakingElapsedSeconds += DeltaTime;
-		if (InstanceData.SpeakingElapsedSeconds < FMath::Max(0.0f, InstanceData.SpeakingDurationSeconds))
-		{
-			return EStateTreeRunStatus::Running;
-		}
-
-		NpcComponent->SetDialogueStateFromStateTree(ENpcDialogueState::Cooldown);
-		DialogueState = ENpcDialogueState::Cooldown;
-	}
-
-	if (DialogueState == ENpcDialogueState::Cooldown)
-	{
-		InstanceData.CooldownElapsedSeconds += DeltaTime;
-		if (InstanceData.CooldownElapsedSeconds < FMath::Max(0.0f, InstanceData.CooldownDurationSeconds))
-		{
-			return EStateTreeRunStatus::Running;
-		}
-
-		NpcComponent->SetDialogueStateFromStateTree(ENpcDialogueState::Idle);
-		return EStateTreeRunStatus::Succeeded;
-	}
-
-	return (DialogueState == ENpcDialogueState::Idle) ? EStateTreeRunStatus::Failed : EStateTreeRunStatus::Running;
+	return AdvanceDialogueState(InstanceData, *NpcComponent, DeltaTime);
 }
 
 void FStateTreeTask_LLMQuery::ExitState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const
@@ -241,5 +250,18 @@ EStateTreeRunStatus FStateTreeTask_LLMQuery::EvaluateWaitingStateForTest(
 		bIsRequestInFlight,
 		bIsDialogueRequestQueued,
 		bOutShouldForceFailureCleanup);
+}
+
+EStateTreeRunStatus FStateTreeTask_LLMQuery::AdvanceDialogueStateForTest(
+	FStateTreeTask_LLMQueryInstanceData& InstanceData,
+	UAINpcComponent* NpcComponent,
+	const float DeltaTime)
+{
+	if (!NpcComponent)
+	{
+		return EStateTreeRunStatus::Failed;
+	}
+
+	return AdvanceDialogueState(InstanceData, *NpcComponent, DeltaTime);
 }
 #endif

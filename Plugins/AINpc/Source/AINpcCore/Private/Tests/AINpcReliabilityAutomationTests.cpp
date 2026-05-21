@@ -19,6 +19,7 @@
 #include "StateTree/Tasks/StateTreeTask_ExecuteSmartObject.h"
 #include "StateTree/Tasks/StateTreeTask_LLMQuery.h"
 #include "StateTree/Tasks/StateTreeTask_SmartObjectTaskUtils.h"
+#include "StateTree.h"
 #include "Animation/AnimMontage.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -32,58 +33,21 @@
 
 namespace
 {
-class FScopedGlobalApiKeyOverride
+class FScopedRequestTimeoutSettingsOverride
 {
 public:
-	explicit FScopedGlobalApiKeyOverride(const FString& InGlobalApiKey)
+	explicit FScopedRequestTimeoutSettingsOverride(const float InRequestTimeoutSeconds)
 	{
 		UAINpcSettings* Settings = GetMutableDefault<UAINpcSettings>();
 		if (Settings)
 		{
-			OriginalGlobalApiKey = Settings->GlobalApiKey;
-			Settings->GlobalApiKey = InGlobalApiKey;
-			bHasSettings = true;
-		}
-	}
-
-	~FScopedGlobalApiKeyOverride()
-	{
-		if (!bHasSettings)
-		{
-			return;
-		}
-
-		if (UAINpcSettings* Settings = GetMutableDefault<UAINpcSettings>())
-		{
-			Settings->GlobalApiKey = OriginalGlobalApiKey;
-		}
-	}
-
-private:
-	FString OriginalGlobalApiKey;
-	bool bHasSettings = false;
-};
-
-class FScopedProviderRequestSettingsOverride
-{
-public:
-	FScopedProviderRequestSettingsOverride(const FString& InGlobalBaseUrl, const FString& InGlobalModel, const float InRequestTimeoutSeconds)
-	{
-		UAINpcSettings* Settings = GetMutableDefault<UAINpcSettings>();
-		if (Settings)
-		{
-			OriginalGlobalBaseUrl = Settings->GlobalBaseUrl;
-			OriginalGlobalModel = Settings->GlobalModel;
 			OriginalRequestTimeoutSeconds = Settings->RequestTimeoutSeconds;
-
-			Settings->GlobalBaseUrl = InGlobalBaseUrl;
-			Settings->GlobalModel = InGlobalModel;
 			Settings->RequestTimeoutSeconds = InRequestTimeoutSeconds;
 			bHasSettings = true;
 		}
 	}
 
-	~FScopedProviderRequestSettingsOverride()
+	~FScopedRequestTimeoutSettingsOverride()
 	{
 		if (!bHasSettings)
 		{
@@ -92,16 +56,44 @@ public:
 
 		if (UAINpcSettings* Settings = GetMutableDefault<UAINpcSettings>())
 		{
-			Settings->GlobalBaseUrl = OriginalGlobalBaseUrl;
-			Settings->GlobalModel = OriginalGlobalModel;
 			Settings->RequestTimeoutSeconds = OriginalRequestTimeoutSeconds;
 		}
 	}
 
 private:
-	FString OriginalGlobalBaseUrl;
-	FString OriginalGlobalModel;
 	float OriginalRequestTimeoutSeconds = 0.0f;
+	bool bHasSettings = false;
+};
+
+class FScopedFallbackResponseTemplateOverride
+{
+public:
+	explicit FScopedFallbackResponseTemplateOverride(const FString& InFallbackTemplate)
+	{
+		UAINpcSettings* Settings = GetMutableDefault<UAINpcSettings>();
+		if (Settings)
+		{
+			OriginalFallbackTemplate = Settings->FallbackResponseTemplate;
+			Settings->FallbackResponseTemplate = InFallbackTemplate;
+			bHasSettings = true;
+		}
+	}
+
+	~FScopedFallbackResponseTemplateOverride()
+	{
+		if (!bHasSettings)
+		{
+			return;
+		}
+
+		if (UAINpcSettings* Settings = GetMutableDefault<UAINpcSettings>())
+		{
+			Settings->FallbackResponseTemplate = OriginalFallbackTemplate;
+		}
+	}
+
+private:
+	FString OriginalFallbackTemplate;
 	bool bHasSettings = false;
 };
 
@@ -427,83 +419,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAINpcComponentApiKeyPrecedenceMatrixTest::RunTest(const FString& Parameters)
 {
-	FScopedEnvironmentVariableOverride ScopedEnvApiKey(TEXT("AINPC_OPENAI_API_KEY"), TEXT(""));
-
-	UAINpcComponent* Component = NewObject<UAINpcComponent>();
-	TestNotNull(TEXT("Component instance should be created for API-key precedence test."), Component);
-	if (!Component)
-	{
-		return false;
-	}
-
-	UNpcPersonaDataAsset* Persona = NewObject<UNpcPersonaDataAsset>();
-	TestNotNull(TEXT("Persona data asset should be created for API-key precedence test."), Persona);
-	if (!Persona)
-	{
-		return false;
-	}
-
-	Component->PersonaDataAsset = Persona;
-
-	{
-		FScopedGlobalApiKeyOverride ScopedGlobalApiKey(TEXT("  global-key  "));
-		Persona->ApiKey = TEXT("");
-		Component->ApiKeyOverride = TEXT("");
-		TestEqual(
-			TEXT("Global key should be used when persona and override are absent."),
-			Component->BuildRequestForTest().ApiKey,
-			FString(TEXT("global-key")));
-	}
-
-	{
-		FScopedGlobalApiKeyOverride ScopedGlobalApiKey(TEXT("global-key"));
-		Persona->ApiKey = TEXT("  persona-key  ");
-		Component->ApiKeyOverride = TEXT("");
-		TestEqual(
-			TEXT("Persona key should override global key."),
-			Component->BuildRequestForTest().ApiKey,
-			FString(TEXT("persona-key")));
-	}
-
-	{
-		FScopedGlobalApiKeyOverride ScopedGlobalApiKey(TEXT("global-key"));
-		Persona->ApiKey = TEXT("persona-key");
-		Component->ApiKeyOverride = TEXT("  override-key  ");
-		TestEqual(
-			TEXT("Component override key should override persona and global keys."),
-			Component->BuildRequestForTest().ApiKey,
-			FString(TEXT("override-key")));
-	}
-
-	{
-		FScopedGlobalApiKeyOverride ScopedGlobalApiKey(TEXT("global-key"));
-		Persona->ApiKey = TEXT("   ");
-		Component->ApiKeyOverride = TEXT("");
-		TestEqual(
-			TEXT("Whitespace persona key should not override global key."),
-			Component->BuildRequestForTest().ApiKey,
-			FString(TEXT("global-key")));
-	}
-
-	{
-		FScopedGlobalApiKeyOverride ScopedGlobalApiKey(TEXT("global-key"));
-		Persona->ApiKey = TEXT("persona-key");
-		Component->ApiKeyOverride = TEXT("   ");
-		TestEqual(
-			TEXT("Whitespace override key should not override persona key."),
-			Component->BuildRequestForTest().ApiKey,
-			FString(TEXT("persona-key")));
-	}
-
-	{
-		FScopedGlobalApiKeyOverride ScopedGlobalApiKey(TEXT("   "));
-		Persona->ApiKey = TEXT("   ");
-		Component->ApiKeyOverride = TEXT("   ");
-		TestTrue(
-			TEXT("All-whitespace keys should resolve to an empty request key."),
-			Component->BuildRequestForTest().ApiKey.IsEmpty());
-	}
-
+	AddInfo(TEXT("Provider-source precedence moved to AINpc.US2.Provider focused tests with explicit JSON seams."));
 	return true;
 }
 
@@ -514,32 +430,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAINpcComponentEnvironmentApiKeyFallbackTest::RunTest(const FString& Parameters)
 {
-	FScopedEnvironmentVariableOverride ScopedEnvApiKey(TEXT("AINPC_OPENAI_API_KEY"), TEXT("  env-key  "));
-	FScopedGlobalApiKeyOverride ScopedGlobalApiKey(TEXT(""));
-
-	UAINpcComponent* Component = NewObject<UAINpcComponent>();
-	TestNotNull(TEXT("Component instance should be created for env-api-key fallback test."), Component);
-	if (!Component)
-	{
-		return false;
-	}
-
-	UNpcPersonaDataAsset* Persona = NewObject<UNpcPersonaDataAsset>();
-	TestNotNull(TEXT("Persona data asset should be created for env-api-key fallback test."), Persona);
-	if (!Persona)
-	{
-		return false;
-	}
-
-	Component->PersonaDataAsset = Persona;
-	Persona->ApiKey = TEXT("   ");
-	Component->ApiKeyOverride = TEXT("");
-
-	TestEqual(
-		TEXT("Environment API key should be used when global/persona/component keys are empty."),
-		Component->BuildRequestForTest().ApiKey,
-		FString(TEXT("env-key")));
-
+	AddInfo(TEXT("Environment API-key fallback is forbidden by the US-2 JSON-only provider-source contract and covered in AINpc.US2.Provider."));
 	return true;
 }
 
@@ -550,75 +441,158 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAINpcComponentProviderRequestConfigPrecedenceTest::RunTest(const FString& Parameters)
 {
-	FScopedEnvironmentVariableOverride ScopedEnvApiKey(TEXT("AINPC_OPENAI_API_KEY"), TEXT(""));
-	FScopedGlobalApiKeyOverride ScopedGlobalApiKey(TEXT(""));
-	FScopedProviderRequestSettingsOverride ScopedProviderSettings(
-		TEXT("  https://global.example/v1  "),
-		TEXT("  global-model  "),
-		12.5f);
+	FScopedRequestTimeoutSettingsOverride ScopedTimeoutSettings(12.5f);
 
 	UAINpcComponent* Component = NewObject<UAINpcComponent>();
-	TestNotNull(TEXT("Component instance should be created for provider request precedence test."), Component);
+	TestNotNull(TEXT("Component instance should be created for provider request single-source test."), Component);
 	if (!Component)
 	{
 		return false;
 	}
 
-	UNpcPersonaDataAsset* Persona = NewObject<UNpcPersonaDataAsset>();
-	TestNotNull(TEXT("Persona data asset should be created for provider request precedence test."), Persona);
-	if (!Persona)
+	const FLLMRequest Request = Component->BuildRequestForTest();
+	AddInfo(TEXT("Provider-source fields are covered by AINpc.US2.Provider tests with explicit JSON seams; this legacy test only checks non-provider settings."));
+	TestTrue(TEXT("Non-provider timeout still comes from UE settings."), FMath::IsNearlyEqual(Request.TimeoutSeconds, 12.5f));
+
+	{
+		FScopedRequestTimeoutSettingsOverride ScopedNegativeTimeout(-3.0f);
+
+		const FLLMRequest NegativeTimeoutRequest = Component->BuildRequestForTest();
+		TestTrue(TEXT("Negative timeout settings should clamp to zero in the request."), FMath::IsNearlyZero(NegativeTimeoutRequest.TimeoutSeconds));
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAINpcComponentStateTreeOwnerContractTest,
+	"AINpc.Core.Component.StateTreeOwnerContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcComponentStateTreeOwnerContractTest::RunTest(const FString& Parameters)
+{
+	AActor* ActorOwner = NewObject<AActor>();
+	TestNotNull(TEXT("Actor owner should be created for StateTree owner contract test."), ActorOwner);
+	if (!ActorOwner)
 	{
 		return false;
 	}
 
-	Component->PersonaDataAsset = Persona;
-	Component->BaseUrlOverride = TEXT("");
-	Component->ModelOverride = TEXT("");
-
+	UAINpcComponent* ActorComponent = NewObject<UAINpcComponent>(ActorOwner);
+	TestNotNull(TEXT("Component should be created on generic Actor owner."), ActorComponent);
+	if (!ActorComponent)
 	{
-		Persona->BaseUrl = TEXT("");
-		Persona->Model = TEXT("");
-
-		const FLLMRequest Request = Component->BuildRequestForTest();
-		TestEqual(TEXT("Global BaseUrl should be used when persona and component overrides are absent."), Request.BaseUrl, FString(TEXT("https://global.example/v1")));
-		TestEqual(TEXT("Global model should be used when persona and component overrides are absent."), Request.Model, FString(TEXT("global-model")));
-		TestTrue(TEXT("Global timeout should flow into the request."), FMath::IsNearlyEqual(Request.TimeoutSeconds, 12.5f));
+		return false;
 	}
 
+	APawn* PawnOwner = NewObject<APawn>();
+	TestNotNull(TEXT("Pawn owner should be created for StateTree owner contract test."), PawnOwner);
+	if (!PawnOwner)
 	{
-		Persona->BaseUrl = TEXT("  https://persona.example/v1  ");
-		Persona->Model = TEXT("  persona-model  ");
-
-		const FLLMRequest Request = Component->BuildRequestForTest();
-		TestEqual(TEXT("Persona BaseUrl should override global BaseUrl."), Request.BaseUrl, FString(TEXT("https://persona.example/v1")));
-		TestEqual(TEXT("Persona model should override global model."), Request.Model, FString(TEXT("persona-model")));
+		return false;
 	}
 
+	UAINpcComponent* PawnComponent = NewObject<UAINpcComponent>(PawnOwner);
+	TestNotNull(TEXT("Component should be created on Pawn owner."), PawnComponent);
+	if (!PawnComponent)
 	{
-		Persona->BaseUrl = TEXT("https://persona.example/v1");
-		Persona->Model = TEXT("persona-model");
-		Component->BaseUrlOverride = TEXT("  https://override.example/v1  ");
-		Component->ModelOverride = TEXT("  override-model  ");
-
-		const FLLMRequest Request = Component->BuildRequestForTest();
-		TestEqual(TEXT("Component BaseUrl override should override persona and global BaseUrl."), Request.BaseUrl, FString(TEXT("https://override.example/v1")));
-		TestEqual(TEXT("Component model override should override persona and global model."), Request.Model, FString(TEXT("override-model")));
+		return false;
 	}
 
+	TestFalse(TEXT("Generic Actor owner must not claim StateTree auto-controller support."), ActorComponent->SupportsStateTreeAutoController());
+	TestTrue(TEXT("Pawn owner should support StateTree auto-controller binding."), PawnComponent->SupportsStateTreeAutoController());
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAINpcControllerMissingStateTreeDiagnosticTest,
+	"AINpc.Core.Controller.MissingStateTreeDiagnostic",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcControllerMissingStateTreeDiagnosticTest::RunTest(const FString& Parameters)
+{
+	AAINpcController* Controller = NewObject<AAINpcController>();
+	TestNotNull(TEXT("Controller should be created for missing StateTree diagnostic test."), Controller);
+	if (!Controller)
 	{
-		FScopedProviderRequestSettingsOverride ScopedNegativeTimeout(
-			TEXT("https://global.example/v1"),
-			TEXT("global-model"),
-			-3.0f);
-
-		Persona->BaseUrl = TEXT("");
-		Persona->Model = TEXT("");
-		Component->BaseUrlOverride = TEXT("");
-		Component->ModelOverride = TEXT("");
-
-		const FLLMRequest Request = Component->BuildRequestForTest();
-		TestTrue(TEXT("Negative timeout settings should clamp to zero in the request."), FMath::IsNearlyZero(Request.TimeoutSeconds));
+		return false;
 	}
+
+	APawn* PawnOwner = NewObject<APawn>();
+	TestNotNull(TEXT("Pawn owner should be created for missing StateTree diagnostic test."), PawnOwner);
+	if (!PawnOwner)
+	{
+		return false;
+	}
+
+	UAINpcComponent* Component = NewObject<UAINpcComponent>(PawnOwner);
+	TestNotNull(TEXT("Component should be created on pawn owner for missing StateTree diagnostic test."), Component);
+	if (!Component)
+	{
+		return false;
+	}
+
+	Controller->SetPawn(PawnOwner);
+	Controller->ConfigureFromComponent(Component);
+
+	TestFalse(TEXT("Controller should not claim a valid StateTree binding when no asset is assigned."), Controller->HasValidStateTreeBinding());
+	const FString FailureReason = Controller->GetStateTreeBindingFailureReason();
+	TestTrue(TEXT("Missing StateTree diagnostic should mention the absent DefaultStateTreeAsset."), FailureReason.Contains(TEXT("DefaultStateTreeAsset"), ESearchCase::CaseSensitive));
+	TestTrue(TEXT("Missing StateTree diagnostic should mention the component assignment path."), FailureReason.Contains(TEXT("UAINpcComponent"), ESearchCase::CaseSensitive));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAINpcControllerBindsComponentStateTreeAssetTest,
+	"AINpc.Core.Controller.BindsComponentStateTreeAsset",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcControllerBindsComponentStateTreeAssetTest::RunTest(const FString& Parameters)
+{
+	AAINpcController* Controller = NewObject<AAINpcController>();
+	TestNotNull(TEXT("Controller should be created for StateTree binding test."), Controller);
+	if (!Controller)
+	{
+		return false;
+	}
+
+	APawn* PawnOwner = NewObject<APawn>();
+	TestNotNull(TEXT("Pawn owner should be created for StateTree binding test."), PawnOwner);
+	if (!PawnOwner)
+	{
+		return false;
+	}
+
+	UAINpcComponent* Component = NewObject<UAINpcComponent>(PawnOwner);
+	TestNotNull(TEXT("Component should be created on pawn owner for StateTree binding test."), Component);
+	if (!Component)
+	{
+		return false;
+	}
+
+	UStateTree* StateTreeAsset = NewObject<UStateTree>();
+	TestNotNull(TEXT("Transient StateTree asset should be created for StateTree binding test."), StateTreeAsset);
+	if (!StateTreeAsset)
+	{
+		return false;
+	}
+
+	Component->DefaultStateTreeAsset = StateTreeAsset;
+	Controller->SetPawn(PawnOwner);
+	Controller->ConfigureFromComponent(Component);
+
+	UStateTreeAIComponent* StateTreeComponent = Controller->GetStateTreeAIComponent();
+	TestNotNull(TEXT("Controller should own a StateTree AI component."), StateTreeComponent);
+	if (!StateTreeComponent)
+	{
+		return false;
+	}
+
+	TestFalse(TEXT("Controller must not claim a valid StateTree binding when the resolved asset is not ready to run."), Controller->HasValidStateTreeBinding());
+	TestTrue(TEXT("Non-ready StateTree asset should produce a diagnosable readiness failure instead of silent success."), Controller->GetStateTreeBindingFailureReason().Contains(TEXT("not ready to run"), ESearchCase::IgnoreCase));
+	TestEqual(TEXT("Controller should resolve the component-provided StateTree asset."), Controller->GetResolvedStateTreeAsset(), StateTreeAsset);
 
 	return true;
 }
@@ -664,6 +638,7 @@ bool FAINpcComponentStartDialogueDelegateFlowTest::RunTest(const FString& Parame
 	SuccessResponse.RequestId = Component->GetActiveRequestIdForTest();
 	SuccessResponse.bSuccess = true;
 	SuccessResponse.Content = TEXT("Test response from provider.");
+	SuccessResponse.ParsedResponse.Dialogue = SuccessResponse.Content;
 
 	Component->HandleRequestCompletedForTest(SuccessResponse);
 
@@ -672,6 +647,22 @@ bool FAINpcComponentStartDialogueDelegateFlowTest::RunTest(const FString& Parame
 	TestEqual(TEXT("Response text should match callback payload."), LastResponseText, SuccessResponse.Content);
 	TestEqual(TEXT("Dynamic response delegate should fire once on success."), Component->GetDynamicDialogueResponseCountForTest(), 1);
 	TestEqual(TEXT("Dynamic error delegate should not fire on success."), Component->GetDynamicDialogueErrorCountForTest(), 0);
+	TestFalse(TEXT("Successful completion should clear request-in-flight state."), Component->IsRequestInFlight());
+	TestEqual(TEXT("Successful completion should enter Speaking state."), Component->GetDialogueState(), ENpcDialogueState::Speaking);
+	TestEqual(TEXT("GetNpcResponse should expose the component's stored parsed dialogue after success."), Component->GetNpcResponse(), SuccessResponse.Content);
+
+	const FLLMRequest RequestAfterSuccess = Component->BuildRequestForTest();
+	TestTrue(TEXT("Conversation history should contain system, user, and assistant messages after success."), RequestAfterSuccess.Messages.Num() >= 3);
+	if (RequestAfterSuccess.Messages.Num() >= 3)
+	{
+		const FLLMMessage& AssistantMessage = RequestAfterSuccess.Messages.Last();
+		TestEqual(TEXT("Assistant history role should be recorded after success."), AssistantMessage.Role, FString(TEXT("assistant")));
+		TestEqual(TEXT("Assistant history content should match successful provider response."), AssistantMessage.Content, SuccessResponse.Content);
+	}
+
+	Component->HandleRequestCompletedForTest(SuccessResponse);
+	TestEqual(TEXT("Duplicate completion for same request must not rebroadcast response."), ResponseCount, 1);
+	TestEqual(TEXT("Duplicate completion for same request must not emit error."), ErrorCount, 0);
 
 	const bool bInvalidStart = Component->StartDialogue(TEXT("   "));
 	TestFalse(TEXT("StartDialogue should fail for whitespace-only player input."), bInvalidStart);
@@ -685,11 +676,13 @@ bool FAINpcComponentStartDialogueDelegateFlowTest::RunTest(const FString& Parame
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAINpcComponentFallbackDegradeBroadcastTest,
-	"AINpc.Core.Reliability.ComponentFallbackBroadcastsDegradedAndResponse",
+	"AINpc.Core.Reliability.ComponentFallbackBroadcastsDegradedOnly",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FAINpcComponentFallbackDegradeBroadcastTest::RunTest(const FString& Parameters)
 {
+	FScopedFallbackResponseTemplateOverride ScopedFallbackTemplate(TEXT("Test fallback response."));
+
 	UAINpcComponent* Component = NewObject<UAINpcComponent>();
 	TestNotNull(TEXT("Component instance should be created for fallback test."), Component);
 	if (!Component)
@@ -725,12 +718,69 @@ bool FAINpcComponentFallbackDegradeBroadcastTest::RunTest(const FString& Paramet
 	Component->HandleRequestCompletedForTest(FailedResponse);
 
 	TestEqual(TEXT("Fallback flow should broadcast degraded once."), DegradedCount, 1);
-	TestEqual(TEXT("Fallback flow should broadcast dialogue response once."), ResponseCount, 1);
+	TestEqual(TEXT("Fallback flow should not masquerade fallback as a normal dialogue response."), ResponseCount, 0);
 	TestEqual(TEXT("Fallback flow should not emit hard error when fallback exists."), ErrorCount, 0);
 	TestTrue(TEXT("Fallback response text should be non-empty."), !DegradedResponseText.IsEmpty());
 	TestEqual(TEXT("Failure reason should propagate to degraded delegate."), DegradedFailureReason, FailedResponse.ErrorMessage);
+	TestFalse(TEXT("Fallback flow should clear request-in-flight state."), Component->IsRequestInFlight());
 	TestEqual(TEXT("Component should transition to speaking after fallback."), Component->GetDialogueState(), ENpcDialogueState::Speaking);
+	TestEqual(TEXT("Fallback flow should record degraded assistant text in conversation history."), Component->BuildRequestForTest().Messages.Last().Content, DegradedResponseText);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAINpcComponentFailureWithoutFallbackBroadcastsErrorTest,
+	"AINpc.Core.Reliability.ComponentFailureWithoutFallbackBroadcastsError",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcComponentFailureWithoutFallbackBroadcastsErrorTest::RunTest(const FString& Parameters)
+{
+	TestNotNull(TEXT("AI NPC settings should be available for no-fallback failure test."), GetMutableDefault<UAINpcSettings>());
+	if (!GetMutableDefault<UAINpcSettings>())
+	{
+		return false;
+	}
+
+	FScopedFallbackResponseTemplateOverride ScopedFallbackTemplate(TEXT(""));
+
+	UAINpcComponent* Component = NewObject<UAINpcComponent>();
+	TestNotNull(TEXT("Component instance should be created for no-fallback failure test."), Component);
+	if (!Component)
+	{
+		return false;
+	}
+
+	int32 DegradedCount = 0;
+	int32 ResponseCount = 0;
+	int32 ErrorCount = 0;
+	FString LastErrorText;
+	Component->OnDialogueDegradedNative().AddLambda([&DegradedCount](const FString&, const FString&) { ++DegradedCount; });
+	Component->OnDialogueResponseNative().AddLambda([&ResponseCount](const FString&) { ++ResponseCount; });
+	Component->OnDialogueErrorNative().AddLambda(
+		[&ErrorCount, &LastErrorText](const FString& ErrorText)
+		{
+			++ErrorCount;
+			LastErrorText = ErrorText;
+		});
+
+	const FGuid ActiveRequestId = FGuid::NewGuid();
+	Component->SetDialogueTestState(true, true, ActiveRequestId, 0, ENpcDialogueState::WaitingForLLM);
+
+	FLLMResponse FailedResponse;
+	FailedResponse.RequestId = ActiveRequestId;
+	FailedResponse.bSuccess = false;
+	FailedResponse.HttpStatusCode = 401;
+	FailedResponse.ErrorMessage = TEXT("Synthetic non-retryable failure without fallback.");
+
+	Component->HandleRequestCompletedForTest(FailedResponse);
+
+	TestFalse(TEXT("No-fallback failure should clear request-in-flight state."), Component->IsRequestInFlight());
+	TestEqual(TEXT("No-fallback failure should return component to Idle."), Component->GetDialogueState(), ENpcDialogueState::Idle);
+	TestEqual(TEXT("No-fallback failure should not broadcast degraded."), DegradedCount, 0);
+	TestEqual(TEXT("No-fallback failure should not broadcast response."), ResponseCount, 0);
+	TestEqual(TEXT("No-fallback failure should broadcast one hard error."), ErrorCount, 1);
+	TestEqual(TEXT("No-fallback failure should propagate provider error text."), LastErrorText, FailedResponse.ErrorMessage);
 	return true;
 }
 
@@ -1132,6 +1182,7 @@ bool FAINpcOpenAIProviderStructuredOutputContractTest::RunTest(const FString& Pa
 	FLLMRequest Request;
 	Request.Temperature = 0.2f;
 	Request.MaxTokens = 128;
+	Request.EffortLevel = TEXT("medium");
 	FLLMMessage UserMessage;
 	UserMessage.Role = TEXT("user");
 	UserMessage.Content = TEXT("Respond with structured NPC output.");
@@ -1145,6 +1196,10 @@ bool FAINpcOpenAIProviderStructuredOutputContractTest::RunTest(const FString& Pa
 	{
 		return false;
 	}
+
+	FString EffortLevel;
+	RequestJson->TryGetStringField(TEXT("effortLevel"), EffortLevel);
+	TestEqual(TEXT("Provider request should pass effortLevel through unchanged."), EffortLevel, FString(TEXT("medium")));
 
 	const TArray<TSharedPtr<FJsonValue>>* ToolsArray = nullptr;
 	TestTrue(TEXT("Provider request should include tools array for function-calling tier preference."), RequestJson->TryGetArrayField(TEXT("tools"), ToolsArray) && ToolsArray);
@@ -1428,11 +1483,7 @@ bool FAINpcResponseParserFunctionCallingStructuredOutputRejectsMissingRequiredKe
 	TestTrue(TEXT("Structured-output function payload downgrade should not emit parser errors."), ErrorMessage.IsEmpty());
 	TestEqual(TEXT("Missing required structured-output keys in function arguments should bypass FunctionCalling tier and fall back to plain text."), ParsedResponse.ParseTier, ELLMResponseParseTier::PlainText);
 	TestEqual(TEXT("Downgraded structured-output function payload should use message content as dialogue."), ParsedResponse.Dialogue, FString(TEXT("I can reply without full structured payload.")));
-	TestTrue(TEXT("Downgraded structured-output function payload should still provide fallback action intent."), ParsedResponse.Actions.Num() > 0);
-	if (ParsedResponse.Actions.Num() > 0)
-	{
-		TestEqual(TEXT("Downgraded structured-output function payload should use default plain-text action."), ParsedResponse.Actions[0].ActionType, FString(AINpc::Actions::DefaultTalkActionType));
-	}
+	TestEqual(TEXT("Downgraded structured-output function payload must not create executable plain-text actions."), ParsedResponse.Actions.Num(), 0);
 
 	return true;
 }
@@ -1483,11 +1534,11 @@ bool FAINpcResponseParserAnthropicStreamingToolUseTest::RunTest(const FString& P
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAINpcAnthropicStructuredOutputDisablesStreamingRequestTest,
-	"AINpc.Core.Reliability.AnthropicStructuredOutputDisablesStreamingRequest",
+	FAINpcAnthropicStructuredOutputPreservesStreamingRequestTest,
+	"AINpc.Core.Reliability.AnthropicStructuredOutputPreservesStreamingRequest",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FAINpcAnthropicStructuredOutputDisablesStreamingRequestTest::RunTest(const FString& Parameters)
+bool FAINpcAnthropicStructuredOutputPreservesStreamingRequestTest::RunTest(const FString& Parameters)
 {
 	const TSharedRef<FAnthropicProvider> Provider =
 		MakeShared<FAnthropicProvider>(TEXT("test-key"), TEXT("test-model"), TEXT("https://example.test"));
@@ -1496,6 +1547,7 @@ bool FAINpcAnthropicStructuredOutputDisablesStreamingRequestTest::RunTest(const 
 	Request.bUseStreaming = true;
 	Request.Temperature = 0.2f;
 	Request.MaxTokens = 128;
+	Request.EffortLevel = TEXT("high");
 	FLLMMessage UserMessage;
 	UserMessage.Role = TEXT("user");
 	UserMessage.Content = TEXT("Respond with structured NPC output.");
@@ -1510,11 +1562,14 @@ bool FAINpcAnthropicStructuredOutputDisablesStreamingRequestTest::RunTest(const 
 		return false;
 	}
 
+	FString EffortLevel;
+	RequestJson->TryGetStringField(TEXT("effortLevel"), EffortLevel);
+	TestEqual(TEXT("Anthropic request should pass effortLevel through unchanged."), EffortLevel, FString(TEXT("high")));
+
 	const TArray<TSharedPtr<FJsonValue>>* ToolsArray = nullptr;
 	TestTrue(TEXT("Anthropic structured-output request should include tools."), RequestJson->TryGetArrayField(TEXT("tools"), ToolsArray) && ToolsArray && ToolsArray->Num() > 0);
-	const TSharedPtr<FJsonObject>* ToolChoiceObject = nullptr;
-	TestTrue(TEXT("Anthropic structured-output request should force tool_choice."), RequestJson->TryGetObjectField(TEXT("tool_choice"), ToolChoiceObject) && ToolChoiceObject && ToolChoiceObject->IsValid());
-	TestFalse(TEXT("Anthropic structured-output request should not ask the endpoint for streaming."), RequestJson->HasField(TEXT("stream")));
+	bool bStream = false;
+	TestTrue(TEXT("Anthropic structured-output request should ask the endpoint for streaming when the runtime request asks for streaming."), RequestJson->TryGetBoolField(TEXT("stream"), bStream) && bStream);
 
 	return true;
 }
@@ -1674,11 +1729,7 @@ bool FAINpcResponseParserPlainTextTierTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Plain-text downgrade tier should not report parser errors."), ErrorMessage.IsEmpty());
 	TestEqual(TEXT("Plain-text downgrade tier should be selected as last fallback."), ParsedResponse.ParseTier, ELLMResponseParseTier::PlainText);
 	TestEqual(TEXT("Plain-text downgrade tier should preserve dialogue text."), ParsedResponse.Dialogue, FString(TEXT("I need a second to think about that.")));
-	TestTrue(TEXT("Plain-text downgrade tier should provide default action intent."), ParsedResponse.Actions.Num() > 0);
-	if (ParsedResponse.Actions.Num() > 0)
-	{
-		TestEqual(TEXT("Plain-text downgrade tier should use the default action template."), ParsedResponse.Actions[0].ActionType, FString(AINpc::Actions::DefaultTalkActionType));
-	}
+	TestEqual(TEXT("Plain-text downgrade tier must not create executable action intents."), ParsedResponse.Actions.Num(), 0);
 
 	return true;
 }
@@ -1800,6 +1851,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAINpcStateTreeTimeoutRoutesThroughFallbackPathTest::RunTest(const FString& Parameters)
 {
+	FScopedFallbackResponseTemplateOverride ScopedFallbackTemplate(TEXT("Timeout fallback response."));
+
 	UAINpcComponent* Component = NewObject<UAINpcComponent>();
 	TestNotNull(TEXT("Component instance should be created for StateTree timeout fallback test."), Component);
 	if (!Component)
@@ -1833,9 +1886,51 @@ bool FAINpcStateTreeTimeoutRoutesThroughFallbackPathTest::RunTest(const FString&
 	TestEqual(TEXT("Timeout cleanup should reset retry attempt count."), Component->GetRetryAttemptCountForTest(), 0);
 	TestEqual(TEXT("Timeout cleanup should route to fallback speaking state."), Component->GetDialogueState(), ENpcDialogueState::Speaking);
 	TestEqual(TEXT("Timeout cleanup should emit one degraded callback."), DegradedCount, 1);
-	TestEqual(TEXT("Timeout cleanup should emit one fallback dialogue response."), ResponseCount, 1);
+	TestEqual(TEXT("Timeout cleanup should not masquerade fallback as a normal dialogue response."), ResponseCount, 0);
 	TestEqual(TEXT("Timeout cleanup should not emit hard error when fallback is available."), ErrorCount, 0);
 	TestTrue(TEXT("Timeout degraded failure reason should mention timeout."), LastDegradedFailureReason.Contains(TEXT("timed out"), ESearchCase::IgnoreCase));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAINpcStateTreeDialoguePhaseOneStateProgressionTest,
+	"AINpc.Core.Reliability.StateTreeDialoguePhaseOneStateProgression",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcStateTreeDialoguePhaseOneStateProgressionTest::RunTest(const FString& Parameters)
+{
+	UAINpcComponent* Component = NewObject<UAINpcComponent>();
+	TestNotNull(TEXT("Component instance should be created for Phase-1 StateTree progression test."), Component);
+	if (!Component)
+	{
+		return false;
+	}
+
+	FStateTreeTask_LLMQueryInstanceData InstanceData;
+	InstanceData.NpcComponent = Component;
+	InstanceData.bStartedRequest = true;
+	InstanceData.SpeakingDurationSeconds = 0.5f;
+	InstanceData.CooldownDurationSeconds = 0.25f;
+
+	Component->SetDialogueTestState(true, false, FGuid::NewGuid(), 0, ENpcDialogueState::Speaking);
+	TestEqual(TEXT("Phase-1 progression test setup should begin in Speaking."), Component->GetDialogueState(), ENpcDialogueState::Speaking);
+
+	const EStateTreeRunStatus SpeakingStatus = FStateTreeTask_LLMQuery::AdvanceDialogueStateForTest(InstanceData, Component, 0.3f);
+	TestEqual(TEXT("Speaking should keep running before the configured speaking duration elapses."), SpeakingStatus, EStateTreeRunStatus::Running);
+	TestEqual(TEXT("Component should remain in Speaking before the speaking duration elapses."), Component->GetDialogueState(), ENpcDialogueState::Speaking);
+
+	const EStateTreeRunStatus CooldownTransitionStatus = FStateTreeTask_LLMQuery::AdvanceDialogueStateForTest(InstanceData, Component, 0.25f);
+	TestEqual(TEXT("Speaking completion should advance into Cooldown while the task keeps running."), CooldownTransitionStatus, EStateTreeRunStatus::Running);
+	TestEqual(TEXT("Speaking completion should move the component into Cooldown."), Component->GetDialogueState(), ENpcDialogueState::Cooldown);
+
+	const EStateTreeRunStatus CooldownRunningStatus = FStateTreeTask_LLMQuery::AdvanceDialogueStateForTest(InstanceData, Component, 0.1f);
+	TestEqual(TEXT("Cooldown should keep running before the cooldown duration elapses."), CooldownRunningStatus, EStateTreeRunStatus::Running);
+	TestEqual(TEXT("Component should remain in Cooldown before the cooldown duration elapses."), Component->GetDialogueState(), ENpcDialogueState::Cooldown);
+
+	const EStateTreeRunStatus IdleCompletionStatus = FStateTreeTask_LLMQuery::AdvanceDialogueStateForTest(InstanceData, Component, 0.2f);
+	TestEqual(TEXT("Cooldown completion should succeed the task."), IdleCompletionStatus, EStateTreeRunStatus::Succeeded);
+	TestEqual(TEXT("Cooldown completion should return the component to Idle."), Component->GetDialogueState(), ENpcDialogueState::Idle);
 
 	return true;
 }
@@ -1865,11 +1960,22 @@ bool FAINpcDialogueStateTransitionClearsDelayMaskingTest::RunTest(const FString&
 	Component->PersonaDataAsset = Persona;
 	Component->SetDialogueTestState(true, true, FGuid::NewGuid(), 0, ENpcDialogueState::WaitingForLLM);
 
+	int32 DelayMaskingStartCount = 0;
+	FText ObservedFillerText;
+	Component->OnDelayMaskingStartNative().AddLambda(
+		[&DelayMaskingStartCount, &ObservedFillerText](UAnimMontage* Montage, const FText& FillerText)
+		{
+			(void)Montage;
+			++DelayMaskingStartCount;
+			ObservedFillerText = FillerText;
+		});
 	int32 DelayMaskingEndCount = 0;
 	Component->OnDelayMaskingEndNative().AddLambda([&DelayMaskingEndCount]() { ++DelayMaskingEndCount; });
 
 	Component->HandleDelayMaskingThresholdReachedForTest();
 	TestTrue(TEXT("Threshold path should activate delay masking while still waiting for LLM."), Component->IsDelayMaskingActive());
+	TestEqual(TEXT("Threshold path should emit one delay-masking start signal."), DelayMaskingStartCount, 1);
+	TestEqual(TEXT("Threshold path should emit configured filler text."), ObservedFillerText.ToString(), FString(TEXT("Thinking...")));
 
 	Component->SetDialogueStateFromStateTree(ENpcDialogueState::Cooldown);
 
@@ -2588,41 +2694,40 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAINpcRetryFallbackIntegrationTest::RunTest(const FString& Parameters)
 {
+	FScopedFallbackResponseTemplateOverride ScopedFallbackTemplate(TEXT("Retry fallback response."));
+	UAINpcComponent::SetDialogueDispatchBypassForTest(true);
 	UAINpcComponent* Component = NewObject<UAINpcComponent>();
 	TestNotNull(TEXT("Component instance should be created for retry-fallback integration test."), Component);
 	if (!Component)
 	{
+		UAINpcComponent::SetDialogueDispatchBypassForTest(false);
 		return false;
 	}
 
 	int32 DegradedCount = 0;
 	Component->OnDialogueDegradedNative().AddLambda([&DegradedCount](const FString&, const FString&) { ++DegradedCount; });
 
-	const FGuid ActiveRequestId = FGuid::NewGuid();
-	Component->SetDialogueTestState(true, true, ActiveRequestId, 0, ENpcDialogueState::WaitingForLLM);
-
-	FLLMResponse RetryableFailure;
-	RetryableFailure.RequestId = ActiveRequestId;
-	RetryableFailure.bSuccess = false;
-	RetryableFailure.HttpStatusCode = 429;
-	RetryableFailure.ErrorMessage = TEXT("Rate limit exceeded");
-
-	Component->HandleRequestCompletedForTest(RetryableFailure);
-
-	UE_LOG(LogAINpc, Verbose, TEXT("Retry attempt 1 triggered after rate limit failure"));
-	TestEqual(TEXT("First retry should increment attempt counter."), Component->GetRetryAttemptCountForTest(), 1);
+	TestTrue(TEXT("StartDialogue should dispatch the initial bypass request."), Component->StartDialogue(TEXT("Trigger retry fallback.")));
 
 	const UAINpcSettings* Settings = GetDefault<UAINpcSettings>();
 	const int32 MaxRetries = Settings ? Settings->MaxRequestRetries : 3;
-
-	for (int32 i = 1; i < MaxRetries; ++i)
+	for (int32 AttemptIndex = 0; AttemptIndex < MaxRetries; ++AttemptIndex)
 	{
+		FLLMResponse RetryableFailure;
+		RetryableFailure.RequestId = Component->GetActiveRequestIdForTest();
+		RetryableFailure.bSuccess = false;
+		RetryableFailure.HttpStatusCode = 429;
+		RetryableFailure.ErrorMessage = TEXT("Rate limit exceeded");
+
 		Component->HandleRequestCompletedForTest(RetryableFailure);
-		UE_LOG(LogAINpc, Verbose, TEXT("Retry attempt %d triggered"), i + 1);
+		UE_LOG(LogAINpc, Verbose, TEXT("Retry attempt %d triggered after rate limit failure"), AttemptIndex + 1);
+		TestEqual(TEXT("Retry attempt counter should increment."), Component->GetRetryAttemptCountForTest(), AttemptIndex + 1);
+
+		Component->SetDialogueTestState(true, true, FGuid::NewGuid(), Component->GetRetryAttemptCountForTest(), ENpcDialogueState::WaitingForLLM);
 	}
 
 	FLLMResponse FinalFailure;
-	FinalFailure.RequestId = ActiveRequestId;
+	FinalFailure.RequestId = Component->GetActiveRequestIdForTest();
 	FinalFailure.bSuccess = false;
 	FinalFailure.HttpStatusCode = 500;
 	FinalFailure.ErrorMessage = TEXT("Service unavailable");
@@ -2634,6 +2739,8 @@ bool FAINpcRetryFallbackIntegrationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Exhausted retries should trigger degradation."), DegradedCount, 1);
 	TestEqual(TEXT("Component should transition to speaking after fallback."), Component->GetDialogueState(), ENpcDialogueState::Speaking);
 
+	Component->EndDialogue();
+	UAINpcComponent::SetDialogueDispatchBypassForTest(false);
 	return true;
 }
 

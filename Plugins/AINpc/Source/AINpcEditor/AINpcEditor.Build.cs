@@ -23,8 +23,11 @@ public class AINpcEditor : ModuleRules
             "GraphEditor",
             "KismetCompiler",
             "Kismet",
+            "GameplayStateTreeModule",
             "Slate",
-            "SlateCore"
+            "SlateCore",
+            "StateTreeEditorModule",
+            "StateTreeModule"
         });
     }
 }

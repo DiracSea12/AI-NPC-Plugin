@@ -28,9 +28,21 @@ public:
 	UFUNCTION(BlueprintPure, Category = "AI NPC|StateTree")
 	UStateTreeAIComponent* GetStateTreeAIComponent() const;
 
+	UFUNCTION(BlueprintPure, Category = "AI NPC|Diagnostics")
+	bool HasValidStateTreeBinding() const;
+
+	UFUNCTION(BlueprintPure, Category = "AI NPC|Diagnostics")
+	FString GetStateTreeBindingFailureReason() const;
+
+	UFUNCTION(BlueprintPure, Category = "AI NPC|Diagnostics")
+	UStateTree* GetResolvedStateTreeAsset() const;
+
 private:
 	void ApplyStateTreeBinding();
 	UStateTree* ResolveStateTreeAsset() const;
+	bool IsStateTreeAssetReady(const UStateTree* StateTreeAsset) const;
+	FString BuildNotReadyStateTreeDiagnostic(const UStateTree* StateTreeAsset) const;
+	FString BuildMissingStateTreeDiagnostic() const;
 
 private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "AI NPC|StateTree", meta = (AllowPrivateAccess = "true"))
@@ -40,4 +52,5 @@ private:
 	TObjectPtr<UStateTree> DefaultStateTreeAsset = nullptr;
 
 	TWeakObjectPtr<const UAINpcComponent> CachedNpcComponent;
+	FString LastStateTreeBindingFailureReason;
 };

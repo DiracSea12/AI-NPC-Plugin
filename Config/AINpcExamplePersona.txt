@@ -1,0 +1,4 @@
+PersonaName=Example NPC
+Background=A friendly NPC in a game world.
+SpeakingStyle=Respond naturally to player questions.
+DefaultPlayerInput=Hello!

@@ -7,14 +7,15 @@
 class IHttpRequest;
 class IHttpResponse;
 class FJsonObject;
+struct FAnthropicStreamingState;
 
 class AINPCCORE_API FAnthropicProvider : public ILLMProvider, public TSharedFromThis<FAnthropicProvider, ESPMode::ThreadSafe>
 {
 public:
 	explicit FAnthropicProvider(
 		FString InDefaultApiKey = FString(),
-		FString InDefaultModel = TEXT("claude-3-5-sonnet-20241022"),
-		FString InBaseUrl = TEXT("https://api.anthropic.com/v1"));
+		FString InDefaultModel = FString(),
+		FString InBaseUrl = FString());
 
 	virtual FGuid SendRequest(const FLLMRequest& Request, FLLMResponseCallback CompletionCallback) override;
 	virtual bool CancelRequest(const FGuid& RequestId) override;
@@ -26,6 +27,13 @@ public:
 	static bool HasReachedPostInitialCancelGateForTest();
 	FString BuildRequestBodyForTest(const FLLMRequest& Request) const;
 	FString ResolveMessagesEndpointForTest(const FLLMRequest& Request) const;
+	void ProcessStreamResponseForTest(
+		const FGuid& RequestId,
+		const FString& ResponseBody,
+		const FLLMStreamCallback& StreamCallback) const
+	{
+		ProcessStreamResponse(RequestId, ResponseBody, StreamCallback);
+	}
 #endif
 
 private:
@@ -35,7 +43,8 @@ private:
 		bool bRequestSucceeded,
 		const TSharedPtr<IHttpResponse, ESPMode::ThreadSafe>& HttpResponse,
 		const TSharedPtr<IHttpRequest, ESPMode::ThreadSafe>& HttpRequest,
-		const TSharedRef<FLLMResponseCallback, ESPMode::ThreadSafe>& CompletionCallback);
+		const TSharedRef<FLLMResponseCallback, ESPMode::ThreadSafe>& CompletionCallback,
+		const TSharedPtr<FAnthropicStreamingState, ESPMode::ThreadSafe>& StreamingState = nullptr);
 
 	bool TryExtractContent(
 		const FString& ResponseBody,
@@ -46,6 +55,11 @@ private:
 		const FGuid& RequestId,
 		const FString& ResponseBody,
 		const FLLMStreamCallback& StreamCallback) const;
+	void ConfigureStreamingReceive(
+		const FGuid& RequestId,
+		const TSharedRef<IHttpRequest, ESPMode::ThreadSafe>& HttpRequest,
+		const TSharedPtr<FLLMStreamCallback, ESPMode::ThreadSafe>& StreamCallback,
+		TSharedPtr<FAnthropicStreamingState, ESPMode::ThreadSafe>& OutStreamingState) const;
 	FString ResolveApiKey(const FLLMRequest& Request) const;
 	FString ResolveModel(const FLLMRequest& Request) const;
 	FString ResolveBaseUrl(const FLLMRequest& Request) const;

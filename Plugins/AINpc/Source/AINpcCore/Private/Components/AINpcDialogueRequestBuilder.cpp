@@ -35,12 +35,17 @@ void FAINpcDialogueRequestBuilder::ConfigureStreamingRequest(UAINpcComponent& Co
 		AsyncTask(ENamedThreads::GameThread, [WeakThis, Chunk]()
 		{
 			UAINpcComponent* Component = WeakThis.Get();
-			if (!Component || !Component->IsDialogueActive())
+			if (!Component || !Component->IsDialogueActive() || !Component->IsRequestInFlight())
 			{
 				return;
 			}
 
-			if (Chunk.bIsFinal || Chunk.Content.IsEmpty())
+			if (!Chunk.RequestId.IsValid() || Chunk.RequestId != Component->ActiveRequestId)
+			{
+				return;
+			}
+
+			if (Chunk.bIsError || Chunk.bIsFinal || Chunk.Content.IsEmpty())
 			{
 				return;
 			}

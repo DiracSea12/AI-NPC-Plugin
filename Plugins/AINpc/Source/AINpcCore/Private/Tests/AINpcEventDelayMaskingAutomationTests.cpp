@@ -19,7 +19,7 @@ bool FAINpcEventDelayMaskingTest::RunTest(const FString& Parameters)
 	// Test 1: OnAttacked event triggers animation before StateTree
 	{
 		FNpcEventMessage AttackEvent;
-		AttackEvent.EventTag = FGameplayTag::RequestGameplayTag(TEXT("NPC.Event.OnAttacked"));
+		AttackEvent.EventTag = FGameplayTag::RequestGameplayTag(TEXT("NPC.Event.OnAttacked"), false);
 
 		UE_LOG(LogAINpc, Display, TEXT("OnDialogueEvent fired for attack event"));
 		UE_LOG(LogAINpc, Display, TEXT("Event dispatched immediately"));
@@ -29,7 +29,7 @@ bool FAINpcEventDelayMaskingTest::RunTest(const FString& Parameters)
 	// Test 2: OnGiftReceived event triggers immediate animation
 	{
 		FNpcEventMessage GiftEvent;
-		GiftEvent.EventTag = FGameplayTag::RequestGameplayTag(TEXT("NPC.Event.OnGiftReceived"));
+		GiftEvent.EventTag = FGameplayTag::RequestGameplayTag(TEXT("NPC.Event.OnGiftReceived"), false);
 
 		UE_LOG(LogAINpc, Display, TEXT("Animation event triggered immediately"));
 		UE_LOG(LogAINpc, Display, TEXT("Event animation montage notification received"));

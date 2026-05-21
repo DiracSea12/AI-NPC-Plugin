@@ -1,0 +1,44 @@
+[
+  {
+    "testId": "us1.dialogue-action",
+    "script": "scripts/dev/game/test-us1-dialogue-action-visual-game.ps1",
+    "map": "/Game/Maps/AINpcTestMap",
+    "timeoutSec": 180,
+    "requiresProvider": true,
+    "storyIds": ["US-1"],
+    "phaseIds": ["phase2.5"],
+    "requiredObservations": [
+      "sessionStarted",
+      "waitingStateObserved",
+      "speakingStateObserved",
+      "dialogueResponseObserved",
+      "delayMaskingStartObserved",
+      "delayMaskingEndObserved",
+      "actionExecutionAccepted",
+      "actionTargetReached",
+      "actionObservationHoldElapsed"
+    ],
+    "allowedTerminalOutcomes": ["PASS"]
+  },
+  {
+    "testId": "us2.perception-behavior",
+    "script": "scripts/dev/game/test-us2-perception-behavior-visual-game.ps1",
+    "map": "/Game/Maps/AINpcTestMap",
+    "timeoutSec": 240,
+    "requiresProvider": true,
+    "storyIds": ["US-2"],
+    "phaseIds": ["phase2.5"],
+    "requiredObservations": [
+      "sessionStarted",
+      "waitingStateObserved",
+      "speakingStateObserved",
+      "eventTriggerBroadcast",
+      "eventDelayMaskingStartObserved",
+      "delayMaskingEndObserved",
+      "partialResponseObserved",
+      "structuredResponseObserved",
+      "actionIntentObserved"
+    ],
+    "allowedTerminalOutcomes": ["PASS"]
+  }
+]

@@ -41,7 +41,22 @@ TArray<FString> FAINpcSmartObjectPromptHandler::GetAvailableTargets(const UAINpc
 #if WITH_EDITOR
 	if (GSmartObjectTargetsForPromptOverrideForTests.IsSet())
 	{
-		AvailableTargets = GSmartObjectTargetsForPromptOverrideForTests.GetValue();
+		TSet<FString> UniqueTargets;
+		for (const FString& Target : GSmartObjectTargetsForPromptOverrideForTests.GetValue())
+		{
+			const FString NormalizedTarget = Target.TrimStartAndEnd();
+			if (!NormalizedTarget.IsEmpty())
+			{
+				UniqueTargets.Add(NormalizedTarget);
+			}
+
+			if (UniqueTargets.Num() >= MaxPromptTargets)
+			{
+				break;
+			}
+		}
+
+		AvailableTargets = UniqueTargets.Array();
 		AvailableTargets.Sort();
 		return AvailableTargets;
 	}
@@ -63,7 +78,8 @@ TArray<FString> FAINpcSmartObjectPromptHandler::GetAvailableTargets(const UAINpc
 
 	const FVector QueryExtent(PromptSmartObjectSearchRadius);
 	const FBox QueryBox = FBox::BuildAABB(OwnerActor->GetActorLocation(), QueryExtent);
-	const FSmartObjectRequestFilter RequestFilter;
+	FSmartObjectRequestFilter RequestFilter;
+	RequestFilter.ClaimPriority = ESmartObjectClaimPriority::Low;
 	const FSmartObjectRequest Request(QueryBox, RequestFilter);
 
 	TArray<FSmartObjectRequestResult> Results;

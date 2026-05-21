@@ -38,6 +38,7 @@ CLAUDE.md
 /Build/Windows/FileOpenOrder/
 /docs/ralph/state/
 /.artifacts/
+/verification/
 
 # Root-level scratch logs and transient outputs
 /*.log

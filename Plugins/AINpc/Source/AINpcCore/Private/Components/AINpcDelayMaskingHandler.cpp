@@ -249,6 +249,11 @@ FText FAINpcDelayMaskingHandler::SelectFillerText(const UAINpcComponent& Compone
 
 void FAINpcDelayMaskingHandler::ProcessNpcEvent(UAINpcComponent& Component, const FNpcEventMessage& EventMessage)
 {
+	if (!Component.bIsRequestInFlight || Component.CurrentDialogueState != ENpcDialogueState::WaitingForLLM)
+	{
+		return;
+	}
+
 	if (!IsEventRelevantForImmediate(Component, EventMessage))
 	{
 		return;

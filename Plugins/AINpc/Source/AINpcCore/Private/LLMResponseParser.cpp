@@ -393,6 +393,30 @@ static bool TryLooseExtraction(const FString& ContentStr, FParsedLLMResponse& Ou
 				}
 			}
 
+			const TSharedPtr<FJsonObject>* EmotionDeltaObj = nullptr;
+			if (JsonObject->TryGetObjectField(TEXT("emotion_delta"), EmotionDeltaObj))
+			{
+				(*EmotionDeltaObj)->TryGetNumberField(TEXT("valence"), OutParsedResponse.EmotionDelta.Valence);
+				(*EmotionDeltaObj)->TryGetNumberField(TEXT("arousal"), OutParsedResponse.EmotionDelta.Arousal);
+				(*EmotionDeltaObj)->TryGetNumberField(TEXT("dominance"), OutParsedResponse.EmotionDelta.Dominance);
+				OutParsedResponse.EmotionDelta.Valence = FMath::Clamp(OutParsedResponse.EmotionDelta.Valence, -1.0, 1.0);
+				OutParsedResponse.EmotionDelta.Arousal = FMath::Clamp(OutParsedResponse.EmotionDelta.Arousal, -1.0, 1.0);
+				OutParsedResponse.EmotionDelta.Dominance = FMath::Clamp(OutParsedResponse.EmotionDelta.Dominance, -1.0, 1.0);
+				bExtractedAny = true;
+			}
+
+			const TSharedPtr<FJsonObject>* RelationshipDeltaObj = nullptr;
+			if (JsonObject->TryGetObjectField(TEXT("relationship_delta"), RelationshipDeltaObj))
+			{
+				(*RelationshipDeltaObj)->TryGetNumberField(TEXT("affinity"), OutParsedResponse.RelationshipDelta.Affinity);
+				(*RelationshipDeltaObj)->TryGetNumberField(TEXT("trust"), OutParsedResponse.RelationshipDelta.Trust);
+				(*RelationshipDeltaObj)->TryGetNumberField(TEXT("familiarity"), OutParsedResponse.RelationshipDelta.Familiarity);
+				OutParsedResponse.RelationshipDelta.Affinity = FMath::Clamp(OutParsedResponse.RelationshipDelta.Affinity, -1.0, 1.0);
+				OutParsedResponse.RelationshipDelta.Trust = FMath::Clamp(OutParsedResponse.RelationshipDelta.Trust, -1.0, 1.0);
+				OutParsedResponse.RelationshipDelta.Familiarity = FMath::Clamp(OutParsedResponse.RelationshipDelta.Familiarity, -1.0, 1.0);
+				bExtractedAny = true;
+			}
+
 			if (bExtractedAny)
 			{
 				OutParsedResponse.bParsedAsJson = true;
@@ -411,10 +435,6 @@ static void FallbackToPlainText(const FString& ContentStr, FParsedLLMResponse& O
 	OutParsedResponse.Dialogue = ContentStr.TrimStartAndEnd();
 	OutParsedResponse.bParsedAsJson = false;
 	OutParsedResponse.ParseTier = ELLMResponseParseTier::PlainText;
-
-	FNpcAction DefaultAction;
-	DefaultAction.ActionType = AINpc::Actions::DefaultTalkActionType;
-	OutParsedResponse.Actions.Add(DefaultAction);
 }
 
 static bool TryBuildAnthropicMessageBodyFromEventStream(const FString& ResponseBody, FString& OutMessageBody)
@@ -556,6 +576,9 @@ bool FLLMResponseParser::ParseOpenAIChatCompletion(
 	FParsedLLMResponse& OutParsedResponse,
 	FString& OutErrorMessage)
 {
+	OutParsedResponse = FParsedLLMResponse();
+	OutErrorMessage.Reset();
+
 	TSharedPtr<FJsonObject> JsonObject;
 	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseBody);
 	if (!FJsonSerializer::Deserialize(Reader, JsonObject) || !JsonObject.IsValid())
@@ -633,6 +656,9 @@ bool FLLMResponseParser::ParseAnthropicMessages(
 	FParsedLLMResponse& OutParsedResponse,
 	FString& OutErrorMessage)
 {
+	OutParsedResponse = FParsedLLMResponse();
+	OutErrorMessage.Reset();
+
 	TSharedPtr<FJsonObject> JsonObject;
 	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseBody);
 	if (!FJsonSerializer::Deserialize(Reader, JsonObject) || !JsonObject.IsValid())

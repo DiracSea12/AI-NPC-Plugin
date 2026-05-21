@@ -29,7 +29,9 @@ struct AINPCCORE_API FLLMStreamChunk
 {
 	FGuid RequestId;
 	FString Content;
+	FString ErrorMessage;
 	bool bIsFinal = false;
+	bool bIsError = false;
 };
 
 using FLLMStreamCallback = TFunction<void(const FLLMStreamChunk&)>;
@@ -40,6 +42,7 @@ struct AINPCCORE_API FLLMRequest
 	FString Model;
 	FString ApiKey;
 	FString BaseUrl;
+	FString EffortLevel;
 	float Temperature = 0.7f;
 	int32 MaxTokens = 0;
 	float TimeoutSeconds = 0.0f;

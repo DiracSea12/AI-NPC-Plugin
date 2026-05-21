@@ -157,6 +157,24 @@ For version-specific docs, use `/org/project/version` from the `library` output 
 If a command fails with a quota error, inform the user and suggest `npx ctx7@latest login` or setting `CONTEXT7_API_KEY` env var for higher limits. Do not silently fall back to training data.
 Run Context7 CLI requests outside Codex's default sandbox. If a Context7 CLI command fails with DNS or network errors such as ENOTFOUND, host resolution failures, or fetch failed, rerun it outside the sandbox instead of retrying inside the sandbox.
 <!-- context7 -->
+## Automated Test System
+
+- 测试入口统一放在 `scripts/dev/`，手动触发入口统一放在仓库根目录 `.bat` 文件。禁止再把一次性 `test_*.ps1` 垃圾脚本扔到根目录。
+- 静态测试入口：`pwsh ./scripts/dev/test-static.ps1` 或双击 `test-static.bat`。
+  - 静态检查脚本必须命名为 `scripts/dev/verify-*.ps1`。
+  - `test-static.ps1` 会动态发现并运行所有 `verify-*.ps1`；新增/删除静态检查时不允许手改聚合脚本里的测试清单。
+- EditorContext Automation 入口：`pwsh ./scripts/dev/test-editor-context.ps1` 或双击 `test-editor-context.bat`。
+  - C++ Automation 测试放在 `Plugins/AINpc/Source/**/Private/Tests/*.cpp`。
+  - 测试路径字符串必须以 `AINpc.` 开头，runner 会从 `IMPLEMENT_SIMPLE_AUTOMATION_TEST` 中动态发现。
+  - 这类测试只算编辑器上下文自动化，不准冒充局内 NPC 行为验收。
+- 局内 NPC 可视验证入口：`pwsh ./scripts/dev/test-game.ps1` 或双击 `test-game.bat`。
+  - 统一使用 `/Game/Maps/AINpcTestMap` 和 `AAINpcTestGameMode`。
+  - 新增玩家可感知 NPC 功能验收时，扩展现有 `AAINpcTestGameMode` / `AINpcTestMap` harness；不要为每个功能新增散乱 map/mode/script。
+  - 局内 runner 必须启动可见 `UnrealEditor.exe -game`，不得使用 `UnrealEditor-Cmd`、`-nullrhi`、`-unattended` 冒充。
+- 全量测试入口：`pwsh ./scripts/dev/test-all.ps1` 或双击 `test-all.bat`。
+  - 全量测试必须依次执行：静态测试、EditorContext Automation、局内 NPC 可视验证。
+  - 即使前一类失败，也要继续运行后续类别，最后汇总失败；否则会隐藏局内问题。
+- 快速开发入口：`pwsh ./scripts/dev/test-fast.ps1` 保持为 build + 静态测试，不代表局内验收。
 
 ## Runtime Verification Hard Rules
 
@@ -185,12 +203,13 @@ Run Context7 CLI requests outside Codex's default sandbox. If a Context7 CLI com
 - **红线**：如果当前任务存在 OpenSpec，开发必须**严格按照** OpenSpec 文档执行，不得擅自偏离。
 - **红线**：未经用户明确要求，**绝对禁止**干涉或催促子代理工作。
 - 允许探测子代理进度和工作情况，但**不可擅自干涉**子代理。
-- **硬约束**：使用子代理进行开发时，子代理需要需要自测，自我review没问题后才可以交付。
+- **最高优先级硬约束**：动手之前必须先审当前修改方案是否存在可维护性不佳、架构不最优、过度工程、职责放错层、重复造轮、逻辑混乱、往屎山发展的趋势等问题。只要存在这类问题，当前方案就不可接受，必须先改方案；没得商量。
+- **硬约束**：进行开发时，无论是主代理还是子代理，都需要自测，自我review没问题后才可以交付。
 - 在交付时，需回顾本次所有开发内容，并回答以下问题：
-- 问题 1：当前实现是否已经是与声明范围相称的最简最小改动？若不是，仍可继续收缩什么？（如果是重构，优化，精简等需求则无需要求修改最小，成品代码最简最小即可。）
-- 问题 2：需求行为是否已经完整实现？若没有，缺口是什么？
-- 问题 3：当前设计是否仍可更解耦、更优雅？架构是否还能更优？代码质量还能否更高？若可以，受什么约束或为什么这轮没有继续做？如果有往屎山发展的趋势，则该问题优先级大于问题1.
-- 问题 4：当前是否仍有 bug、风险点或其他不建议放行的问题？是否有重复造轮，逻辑混乱的情况？若有，逐条说明。
+- 问题 1：动手前审过的方案是否已经避开可维护性不佳、架构不最优、过度工程、职责放错层、重复造轮、逻辑混乱、往屎山发展等问题？如果没有，为什么还敢交付？
+- 问题 2：当前实现是否已经是与声明范围相称的最简最小改动？若不是，仍可继续收缩什么？（如果是重构，优化，精简等需求则无需要求修改最小，成品代码最简最小即可。）
+- 问题 3：需求行为是否已经完整实现？若没有，缺口是什么？
+- 问题 4：当前是否仍有 bug、风险点或其他不建议放行的问题？若有，逐条说明。
 - **硬约束**：任何其它的review意见，都必须亲自核实，客观分析，绝对禁止无脑接受。
 - **绝对禁止**修改引擎源码来修插件问题。插件问题只能改插件、脚本、导出链、parser、运行时逻辑。
 - 如需参考，引擎源码在G:\UE5\UnrealEngine路径下，版本为5.7

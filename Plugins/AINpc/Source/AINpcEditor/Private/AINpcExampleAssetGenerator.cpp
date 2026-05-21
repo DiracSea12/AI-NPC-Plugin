@@ -5,6 +5,7 @@
 #include "IAssetTools.h"
 #include "Factories/BlueprintFactory.h"
 #include "Factories/DataAssetFactory.h"
+#include "StateTreeFactory.h"
 #include "Engine/Blueprint.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/SCS_Node.h"
@@ -12,6 +13,9 @@
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Components/AINpcComponent.h"
 #include "Data/NpcPersonaDataAsset.h"
+#include "GameFramework/Character.h"
+#include "Components/StateTreeComponentSchema.h"
+#include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "UObject/SavePackage.h"
 #include "PackageTools.h"
@@ -21,11 +25,123 @@
 #include "K2Node_ComponentBoundEvent.h"
 #include "EdGraphSchema_K2.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "StateTree.h"
+
+namespace
+{
+	const TCHAR* ExamplePersonaConfigFileName = TEXT("AINpcExamplePersona.txt");
+
+	bool TryReadExamplePersonaField(const FString& Line, const TCHAR* FieldName, FString& OutValue)
+	{
+		FString Left;
+		FString Right;
+		if (!Line.Split(TEXT("="), &Left, &Right, ESearchCase::CaseSensitive))
+		{
+			return false;
+		}
+
+		Left.TrimStartAndEndInline();
+		if (Left != FieldName)
+		{
+			return false;
+		}
+
+		Right.TrimStartAndEndInline();
+		OutValue = MoveTemp(Right);
+		return true;
+	}
+
+	bool LoadExamplePersonaText(FString& OutPersonaName, FString& OutBackground, FString& OutSpeakingStyle, FString& OutDefaultPlayerInput, FString& OutMessage)
+	{
+		const FString ConfigPath = FPaths::Combine(FPaths::ProjectConfigDir(), ExamplePersonaConfigFileName);
+		FString ConfigText;
+		if (!FFileHelper::LoadFileToString(ConfigText, *ConfigPath))
+		{
+			OutMessage = TEXT("Failed to load example persona config: ") + ConfigPath;
+			return false;
+		}
+
+		TArray<FString> Lines;
+		ConfigText.ParseIntoArrayLines(Lines, false);
+		for (const FString& RawLine : Lines)
+		{
+			FString Line = RawLine;
+			Line.TrimStartAndEndInline();
+			if (Line.IsEmpty())
+			{
+				continue;
+			}
+
+			FString Value;
+			if (TryReadExamplePersonaField(Line, TEXT("PersonaName"), Value))
+			{
+				OutPersonaName = MoveTemp(Value);
+			}
+			else if (TryReadExamplePersonaField(Line, TEXT("Background"), Value))
+			{
+				OutBackground = MoveTemp(Value);
+			}
+			else if (TryReadExamplePersonaField(Line, TEXT("SpeakingStyle"), Value))
+			{
+				OutSpeakingStyle = MoveTemp(Value);
+			}
+			else if (TryReadExamplePersonaField(Line, TEXT("DefaultPlayerInput"), Value))
+			{
+				OutDefaultPlayerInput = MoveTemp(Value);
+			}
+		}
+
+		if (OutPersonaName.IsEmpty() || OutBackground.IsEmpty() || OutSpeakingStyle.IsEmpty() || OutDefaultPlayerInput.IsEmpty())
+		{
+			OutMessage = TEXT("Example persona config must define PersonaName, Background, SpeakingStyle, and DefaultPlayerInput: ") + ConfigPath;
+			return false;
+		}
+
+		return true;
+	}
+}
 
 bool UAINpcExampleAssetGenerator::GenerateExampleAssets(FString& OutMessage)
 {
+	return GenerateExampleAssetsForStateTree(nullptr, OutMessage);
+}
+
+bool UAINpcExampleAssetGenerator::GenerateExampleAssetsForStateTree(UStateTree* DefaultStateTreeAsset, FString& OutMessage)
+{
 	const FString PersonaAssetPath = TEXT("/AINpc/Examples/DA_ExamplePersona");
 	const FString NpcBlueprintPath = TEXT("/AINpc/Examples/BP_ExampleNpc");
+	const FString StateTreeAssetPath = TEXT("/AINpc/Examples/ST_AINpcBasicDialogue");
+
+	if (!DefaultStateTreeAsset)
+	{
+		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+		UStateTreeFactory* StateTreeFactory = NewObject<UStateTreeFactory>();
+		StateTreeFactory->SetSchemaClass(UStateTreeComponentSchema::StaticClass());
+		DefaultStateTreeAsset = Cast<UStateTree>(AssetTools.CreateAsset(
+			FPaths::GetBaseFilename(StateTreeAssetPath),
+			FPaths::GetPath(StateTreeAssetPath),
+			UStateTree::StaticClass(),
+			StateTreeFactory));
+		if (!DefaultStateTreeAsset)
+		{
+			OutMessage = TEXT("Failed to create example StateTree asset: ") + StateTreeAssetPath;
+			return false;
+		}
+
+		DefaultStateTreeAsset->MarkPackageDirty();
+		UPackage* StateTreePackage = DefaultStateTreeAsset->GetPackage();
+		if (StateTreePackage)
+		{
+			const FString PackageFileName = FPackageName::LongPackageNameToFilename(StateTreePackage->GetName(), FPackageName::GetAssetPackageExtension());
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+			if (!UPackage::SavePackage(StateTreePackage, DefaultStateTreeAsset, *PackageFileName, SaveArgs))
+			{
+				OutMessage = TEXT("Failed to save example StateTree package: ") + StateTreeAssetPath;
+				return false;
+			}
+		}
+	}
 
 	// Create DataAsset first
 	UNpcPersonaDataAsset* PersonaAsset = nullptr;
@@ -35,12 +151,15 @@ bool UAINpcExampleAssetGenerator::GenerateExampleAssets(FString& OutMessage)
 	}
 
 	// Create Blueprint
-	if (!CreateExampleNpcBlueprint(NpcBlueprintPath, PersonaAsset, OutMessage))
+	if (!CreateExampleNpcBlueprint(NpcBlueprintPath, PersonaAsset, DefaultStateTreeAsset, OutMessage))
 	{
 		return false;
 	}
 
-	OutMessage = TEXT("Successfully generated example assets:\n- ") + PersonaAssetPath + TEXT("\n- ") + NpcBlueprintPath;
+	OutMessage = TEXT("Successfully generated example Phase-1 assets:\n- ") + PersonaAssetPath
+		+ TEXT("\n- ") + NpcBlueprintPath
+		+ TEXT("\n- ") + DefaultStateTreeAsset->GetPathName()
+		+ TEXT("\nStateTree note: this generated asset proves the setup path assigns a valid UStateTree, but it is still diagnostic/editor setup evidence, not final visible dialogue acceptance.");
 	return true;
 }
 
@@ -72,9 +191,18 @@ bool UAINpcExampleAssetGenerator::CreateExamplePersonaDataAsset(const FString& A
 		return false;
 	}
 
-	PersonaAsset->PersonaName = TEXT("Example NPC");
-	PersonaAsset->Background = TEXT("A friendly NPC in a game world.");
-	PersonaAsset->SpeakingStyle = TEXT("Respond naturally to player questions.");
+	FString PersonaName;
+	FString Background;
+	FString SpeakingStyle;
+	FString DefaultPlayerInput;
+	if (!LoadExamplePersonaText(PersonaName, Background, SpeakingStyle, DefaultPlayerInput, OutMessage))
+	{
+		return false;
+	}
+
+	PersonaAsset->PersonaName = MoveTemp(PersonaName);
+	PersonaAsset->Background = MoveTemp(Background);
+	PersonaAsset->SpeakingStyle = MoveTemp(SpeakingStyle);
 	PersonaAsset->MarkPackageDirty();
 
 	// Save package to disk
@@ -95,7 +223,11 @@ bool UAINpcExampleAssetGenerator::CreateExamplePersonaDataAsset(const FString& A
 	return true;
 }
 
-bool UAINpcExampleAssetGenerator::CreateExampleNpcBlueprint(const FString& AssetPath, UNpcPersonaDataAsset* PersonaAsset, FString& OutMessage)
+bool UAINpcExampleAssetGenerator::CreateExampleNpcBlueprint(
+	const FString& AssetPath,
+	UNpcPersonaDataAsset* PersonaAsset,
+	UStateTree* DefaultStateTreeAsset,
+	FString& OutMessage)
 {
 	if (!PersonaAsset)
 	{
@@ -103,10 +235,25 @@ bool UAINpcExampleAssetGenerator::CreateExampleNpcBlueprint(const FString& Asset
 		return false;
 	}
 
+	if (!DefaultStateTreeAsset)
+	{
+		OutMessage = TEXT("Invalid StateTree asset provided. Phase 1 example generation requires a valid StateTree asset.");
+		return false;
+	}
+
+	FString PersonaName;
+	FString Background;
+	FString SpeakingStyle;
+	FString DefaultPlayerInput;
+	if (!LoadExamplePersonaText(PersonaName, Background, SpeakingStyle, DefaultPlayerInput, OutMessage))
+	{
+		return false;
+	}
+
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 
 	UBlueprintFactory* Factory = NewObject<UBlueprintFactory>();
-	Factory->ParentClass = AActor::StaticClass();
+	Factory->ParentClass = ACharacter::StaticClass();
 
 	UObject* NewAsset = AssetTools.CreateAsset(
 		FPaths::GetBaseFilename(AssetPath),
@@ -141,6 +288,8 @@ bool UAINpcExampleAssetGenerator::CreateExampleNpcBlueprint(const FString& Asset
 			if (ComponentTemplate)
 			{
 				ComponentTemplate->PersonaDataAsset = PersonaAsset;
+				ComponentTemplate->DefaultStateTreeAsset = DefaultStateTreeAsset;
+				ComponentTemplate->bAutoCreateNpcController = true;
 			}
 		}
 	}
@@ -203,7 +352,7 @@ bool UAINpcExampleAssetGenerator::CreateExampleNpcBlueprint(const FString& Asset
 		UEdGraphPin* PlayerInputPin = StartDialogueNode->FindPin(FName(TEXT("PlayerInput")));
 		if (PlayerInputPin)
 		{
-			PlayerInputPin->DefaultValue = TEXT("Hello!");
+			PlayerInputPin->DefaultValue = DefaultPlayerInput;
 		}
 	}
 

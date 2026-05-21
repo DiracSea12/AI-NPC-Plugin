@@ -13,7 +13,6 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpenAIBaseURLTest, "AINpc.OpenAI.BaseURL",
 
 bool FOpenAIBaseURLTest::RunTest(const FString& Parameters)
 {
-	// Read custom BaseURL from environment variable
 	FString CustomBaseUrl = FPlatformMisc::GetEnvironmentVariable(TEXT("DEEPSEEK_TEST"));
 
 	if (CustomBaseUrl.IsEmpty())

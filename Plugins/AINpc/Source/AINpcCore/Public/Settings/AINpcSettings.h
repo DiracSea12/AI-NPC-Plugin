@@ -15,16 +15,6 @@ public:
 	virtual FName GetCategoryName() const override;
 	virtual FName GetSectionName() const override;
 
-	// Prefer environment variable `AINPC_OPENAI_API_KEY` for production to avoid storing secrets in config files.
-	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "LLM Provider")
-	FString GlobalApiKey;
-
-	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "LLM Provider")
-	FString GlobalBaseUrl = TEXT("https://api.openai.com/v1");
-
-	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "LLM Provider")
-	FString GlobalModel;
-
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Concurrency", meta = (ClampMin = "1", UIMin = "1"))
 	int32 DialogueRequestConcurrencyLimit = 2;
 
@@ -47,5 +37,5 @@ public:
 	float MaxTotalRetryTimeSeconds = 30.0f;
 
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Reliability", meta = (MultiLine = "true"))
-	FString FallbackResponseTemplate = TEXT("I need a moment to think. Could you ask me again?");
+	FString FallbackResponseTemplate;
 };

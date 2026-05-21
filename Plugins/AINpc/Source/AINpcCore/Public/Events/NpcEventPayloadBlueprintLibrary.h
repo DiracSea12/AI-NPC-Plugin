@@ -42,6 +42,15 @@ public:
 		int32 RequestedQuantity);
 
 	UFUNCTION(BlueprintPure, Category = "AI NPC|Events|Payloads")
+	static FNpcEventMessage MakeLLMDegradationEventMessage(
+		FGameplayTag EventTag,
+		const FGameplayTagContainer& RoutingTags,
+		AActor* NpcActor,
+		const FString& Reason,
+		int32 RetryCount,
+		bool bUsedTemplate);
+
+	UFUNCTION(BlueprintPure, Category = "AI NPC|Events|Payloads")
 	static bool TryGetAttackPayloadFromMessage(const FNpcEventMessage& EventMessage, FNpcAttackEventPayload& OutPayload);
 
 	UFUNCTION(BlueprintPure, Category = "AI NPC|Events|Payloads")
@@ -49,6 +58,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "AI NPC|Events|Payloads")
 	static bool TryGetTradePayloadFromMessage(const FNpcEventMessage& EventMessage, FNpcTradeEventPayload& OutPayload);
+
+	UFUNCTION(BlueprintPure, Category = "AI NPC|Events|Payloads")
+	static bool TryGetLLMDegradationPayloadFromMessage(const FNpcEventMessage& EventMessage, FNpcLLMDegradationEventPayload& OutPayload);
 
 	UFUNCTION(BlueprintPure, Category = "AI NPC|Events|Payloads")
 	static UScriptStruct* GetPayloadStructType(const FNpcEventMessage& EventMessage);

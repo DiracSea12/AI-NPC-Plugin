@@ -22,8 +22,12 @@ protected:
 
 public:
 	void BeginVisualActionMove(const FTransform& ClaimedSlotTransform, const FString& InTargetId);
+	void SetVisibleDialogueText(const FString& InText);
+	void SetVisibleDelayMaskingText(const FString& InText);
+	void SetVisibleStateText(const FString& InText);
 	bool HasReachedVisualActionTarget() const;
 	bool IsVisualActionMoveActive() const;
+	bool HasValidVisualMeshAndAnimation() const;
 	float GetVisualActionTargetDistance() const;
 	const FString& GetVisualActionTargetId() const;
 
@@ -34,8 +38,13 @@ public:
 private:
 	bool bVisualActionMoveActive = false;
 	bool bVisualActionTargetReached = false;
+	bool bVisualMeshLoaded = false;
+	bool bVisualAnimLoaded = false;
 	FVector VisualActionTargetLocation = FVector::ZeroVector;
 	FString VisualActionTargetId;
+	FString VisibleDialogueText;
+	FString VisibleDelayMaskingText;
+	FString VisibleStateText;
 	float VisualActionMoveSpeed = 220.0f;
 	float VisualActionAcceptanceDistance = 40.0f;
 };

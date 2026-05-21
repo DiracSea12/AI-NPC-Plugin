@@ -1,6 +1,7 @@
 {
   "provider": "anthropic",
-  "apiKey": "replace-with-local-key",
-  "baseUrl": "https://example.invalid/anthropic",
-  "model": "optional-model-name"
+  "apiKey": "replace-with-deepseek-api-key",
+  "baseUrl": "https://api.deepseek.com/anthropic",
+  "model": "deepseek-v4-flash",
+  "effortLevel": "medium"
 }

@@ -7,6 +7,7 @@
 class IHttpRequest;
 class IHttpResponse;
 class FJsonObject;
+struct FOpenAIStreamingState;
 
 /**
  * OpenAI Chat Completions provider with custom BaseURL support.
@@ -20,7 +21,7 @@ public:
 	explicit FOpenAIProvider(
 		FString InDefaultApiKey = FString(),
 		FString InDefaultModel = FString(),
-		FString InBaseUrl = TEXT("https://api.openai.com/v1"));
+		FString InBaseUrl = FString());
 
 	virtual FGuid SendRequest(const FLLMRequest& Request, FLLMResponseCallback CompletionCallback) override;
 	virtual bool CancelRequest(const FGuid& RequestId) override;
@@ -34,6 +35,13 @@ public:
 	static bool HasReachedPostInitialCancelGateForTest();
 	FString BuildRequestBodyForTest(const FLLMRequest& Request) const;
 	FString ResolveBaseUrlForTest(const FLLMRequest& Request) const { return ResolveBaseUrl(Request); }
+	void ProcessStreamResponseForTest(
+		const FGuid& RequestId,
+		const FString& ResponseBody,
+		const FLLMStreamCallback& StreamCallback) const
+	{
+		ProcessStreamResponse(RequestId, ResponseBody, StreamCallback);
+	}
 #endif
 
 private:
@@ -45,7 +53,8 @@ private:
 		const TSharedPtr<IHttpRequest, ESPMode::ThreadSafe>& HttpRequest,
 		const TSharedRef<FLLMResponseCallback, ESPMode::ThreadSafe>& CompletionCallback,
 		const FLLMRequest& OriginalRequest,
-		int32 RetryCount);
+		int32 RetryCount,
+		const TSharedPtr<FOpenAIStreamingState, ESPMode::ThreadSafe>& StreamingState = nullptr);
 
 	bool TryExtractContent(
 		const FString& ResponseBody,
@@ -56,6 +65,11 @@ private:
 		const FGuid& RequestId,
 		const FString& ResponseBody,
 		const FLLMStreamCallback& StreamCallback) const;
+	void ConfigureStreamingReceive(
+		const FGuid& RequestId,
+		const TSharedRef<IHttpRequest, ESPMode::ThreadSafe>& HttpRequest,
+		const TSharedPtr<FLLMStreamCallback, ESPMode::ThreadSafe>& StreamCallback,
+		TSharedPtr<FOpenAIStreamingState, ESPMode::ThreadSafe>& OutStreamingState) const;
 	FString ResolveApiKey(const FLLMRequest& Request) const;
 	FString ResolveModel(const FLLMRequest& Request) const;
 	FString ResolveBaseUrl(const FLLMRequest& Request) const;

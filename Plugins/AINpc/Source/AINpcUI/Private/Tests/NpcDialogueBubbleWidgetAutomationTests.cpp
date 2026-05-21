@@ -30,13 +30,14 @@ bool FAINpcDialogueBubbleWidgetBindFlowTest::RunTest(const FString& Parameters)
 	Widget->bUseTypewriterEffect = false;
 	Widget->BindToNpcComponent(Component);
 
-	const bool bFirstStarted = Component->StartDialogue(TEXT("First response should update widget."));
+	const bool bFirstStarted = Component->StartDialogue(TEXT("第一个响应应该更新小部件。"));
 	TestTrue(TEXT("First StartDialogue should succeed."), bFirstStarted);
 
 	FLLMResponse FirstResponse;
 	FirstResponse.RequestId = Component->GetActiveRequestIdForTest();
 	FirstResponse.bSuccess = true;
-	FirstResponse.Content = TEXT("Hello from bound component.");
+	FirstResponse.Content = TEXT("你好，来自绑定的组件。");
+	FirstResponse.ParsedResponse.Dialogue = FirstResponse.Content;
 	Component->HandleRequestCompletedForTest(FirstResponse);
 
 	TestEqual(TEXT("Bound widget should receive full response text."), Widget->GetFullResponseText(), FirstResponse.Content);
@@ -44,13 +45,14 @@ bool FAINpcDialogueBubbleWidgetBindFlowTest::RunTest(const FString& Parameters)
 
 	Widget->BindToNpcComponent(nullptr);
 
-	const bool bSecondStarted = Component->StartDialogue(TEXT("Second response should not update widget after unbind."));
+	const bool bSecondStarted = Component->StartDialogue(TEXT("解绑后第二个响应不应该更新小部件。"));
 	TestTrue(TEXT("Second StartDialogue should succeed."), bSecondStarted);
 
 	FLLMResponse SecondResponse;
 	SecondResponse.RequestId = Component->GetActiveRequestIdForTest();
 	SecondResponse.bSuccess = true;
-	SecondResponse.Content = TEXT("This text should not appear in widget.");
+	SecondResponse.Content = TEXT("这段文本不应该出现在小部件中。");
+	SecondResponse.ParsedResponse.Dialogue = SecondResponse.Content;
 	Component->HandleRequestCompletedForTest(SecondResponse);
 
 	TestEqual(TEXT("Unbound widget should keep previous full response text."), Widget->GetFullResponseText(), FirstResponse.Content);
@@ -96,13 +98,14 @@ bool FAINpcDialogueBubbleWidgetBindResyncActiveSessionTest::RunTest(const FStrin
 		return false;
 	}
 
-	const bool bStarted = Component->StartDialogue(TEXT("Prompt before widget bind."));
+	const bool bStarted = Component->StartDialogue(TEXT("小部件绑定前的提示。"));
 	TestTrue(TEXT("StartDialogue should succeed for bind resync test."), bStarted);
 
 	FLLMResponse Response;
 	Response.RequestId = Component->GetActiveRequestIdForTest();
 	Response.bSuccess = true;
-	Response.Content = TEXT("Response generated before widget bind.");
+	Response.Content = TEXT("小部件绑定前生成的响应。");
+	Response.ParsedResponse.Dialogue = Response.Content;
 	Component->HandleRequestCompletedForTest(Response);
 
 	Widget->bUseTypewriterEffect = false;
@@ -138,13 +141,14 @@ bool FAINpcDialogueBubbleWidgetRebindIdleClearsStaleTextTest::RunTest(const FStr
 	Widget->bUseTypewriterEffect = false;
 	Widget->BindToNpcComponent(FirstComponent);
 
-	const bool bStarted = FirstComponent->StartDialogue(TEXT("Prompt on first component."));
+	const bool bStarted = FirstComponent->StartDialogue(TEXT("第一个组件上的提示。"));
 	TestTrue(TEXT("StartDialogue should succeed on first component."), bStarted);
 
 	FLLMResponse FirstResponse;
 	FirstResponse.RequestId = FirstComponent->GetActiveRequestIdForTest();
 	FirstResponse.bSuccess = true;
-	FirstResponse.Content = TEXT("Response from first component.");
+	FirstResponse.Content = TEXT("来自第一个组件的响应。");
+	FirstResponse.ParsedResponse.Dialogue = FirstResponse.Content;
 	FirstComponent->HandleRequestCompletedForTest(FirstResponse);
 
 	TestEqual(TEXT("Widget should display first component response before rebind."),
@@ -180,13 +184,12 @@ bool FAINpcDialogueBubbleWidgetSameComponentRebindActiveNoResponseClearsTextTest
 	Widget->bUseTypewriterEffect = false;
 	Widget->BindToNpcComponent(Component);
 
-	const bool bStarted = Component->StartDialogue(TEXT("Prompt before same-component rebind."));
+	const bool bStarted = Component->StartDialogue(TEXT("同一组件重新绑定前的提示。"));
 	TestTrue(TEXT("StartDialogue should succeed for same-component active rebind test."), bStarted);
 
-	// Simulate stale widget text from prior state while an active dialogue has no response yet.
-	Widget->ShowResponseText(TEXT("stale text"));
+	Widget->ShowResponseText(TEXT("过期的文本"));
 	TestEqual(TEXT("Widget should show stale text before explicit same-component resync."),
-		Widget->GetDisplayedText().ToString(), TEXT("stale text"));
+		Widget->GetDisplayedText().ToString(), TEXT("过期的文本"));
 
 	Widget->BindToNpcComponent(Component);
 
@@ -228,21 +231,22 @@ bool FAINpcDialogueBubbleWidgetSessionStartClearsStateTest::RunTest(const FStrin
 	Widget->bUseTypewriterEffect = false;
 	Widget->BindToNpcComponent(Component);
 
-	const bool bFirstStarted = Component->StartDialogue(TEXT("First response."));
+	const bool bFirstStarted = Component->StartDialogue(TEXT("第一个响应。"));
 	TestTrue(TEXT("First StartDialogue should succeed."), bFirstStarted);
 
 	FLLMResponse FirstResponse;
 	FirstResponse.RequestId = Component->GetActiveRequestIdForTest();
 	FirstResponse.bSuccess = true;
-	FirstResponse.Content = TEXT("Old response");
+	FirstResponse.Content = TEXT("旧响应");
+	FirstResponse.ParsedResponse.Dialogue = FirstResponse.Content;
 	Component->HandleRequestCompletedForTest(FirstResponse);
 
-	TestEqual(TEXT("Widget should display first response."), Widget->GetDisplayedText().ToString(), TEXT("Old response"));
-	TestEqual(TEXT("Widget should store first full response."), Widget->GetFullResponseText(), TEXT("Old response"));
+	TestEqual(TEXT("Widget should display first response."), Widget->GetDisplayedText().ToString(), TEXT("旧响应"));
+	TestEqual(TEXT("Widget should store first full response."), Widget->GetFullResponseText(), TEXT("旧响应"));
 
 	Component->EndDialogue();
 
-	const bool bSecondStarted = Component->StartDialogue(TEXT("Second response."));
+	const bool bSecondStarted = Component->StartDialogue(TEXT("第二个响应。"));
 	TestTrue(TEXT("Second StartDialogue should succeed."), bSecondStarted);
 	TestEqual(TEXT("Starting a new session should clear previous displayed text."), Widget->GetDisplayedText().ToString(), TEXT(""));
 	TestEqual(TEXT("Starting a new session should clear previous full text."), Widget->GetFullResponseText(), TEXT(""));
@@ -272,16 +276,16 @@ bool FAINpcDialogueBubbleWidgetIgnoreStalePartialWhenSessionInactiveTest::RunTes
 	Widget->StreamingDisplayMode = EStreamingDisplayMode::SentenceBySentence;
 	Widget->BindToNpcComponent(Component);
 
-	const bool bStarted = Component->StartDialogue(TEXT("Initial prompt."));
+	const bool bStarted = Component->StartDialogue(TEXT("初始提示。"));
 	TestTrue(TEXT("StartDialogue should succeed for stale partial guard test."), bStarted);
 
-	Widget->HandlePartialResponse(TEXT("active"));
-	TestEqual(TEXT("Active dialogue partial should be accepted."), Widget->GetFullResponseText(), TEXT("active"));
+	Widget->HandlePartialResponse(TEXT("活跃"));
+	TestEqual(TEXT("Active dialogue partial should be accepted."), Widget->GetFullResponseText(), TEXT("活跃"));
 
 	Component->EndDialogue();
-	Widget->HandlePartialResponse(TEXT(" stale"));
+	Widget->HandlePartialResponse(TEXT(" 过期"));
 	TestEqual(TEXT("Late partial chunks should be ignored once session is inactive."),
-		Widget->GetFullResponseText(), TEXT("active"));
+		Widget->GetFullResponseText(), TEXT("活跃"));
 
 	UAINpcComponent::ResetConcurrencyStateForTest();
 	return true;
@@ -299,17 +303,17 @@ bool FAINpcDialogueBubbleWidgetStreamingSentenceTest::RunTest(const FString& Par
 	Widget->bEnableStreamingDisplay = true;
 	Widget->StreamingDisplayMode = EStreamingDisplayMode::SentenceBySentence;
 
-	Widget->HandlePartialResponse(TEXT("Hello"));
+	Widget->HandlePartialResponse(TEXT("你好"));
 	TestEqual(TEXT("Incomplete sentence should not display."), Widget->GetFullResponseText(), TEXT(""));
 
-	Widget->HandlePartialResponse(TEXT(" world."));
-	TestEqual(TEXT("Complete sentence should display."), Widget->GetFullResponseText(), TEXT("Hello world."));
+	Widget->HandlePartialResponse(TEXT(" 世界。"));
+	TestEqual(TEXT("Complete sentence should display."), Widget->GetFullResponseText(), TEXT("你好 世界。"));
 
-	Widget->HandlePartialResponse(TEXT(" Next"));
-	TestEqual(TEXT("Incomplete second sentence should not append."), Widget->GetFullResponseText(), TEXT("Hello world."));
+	Widget->HandlePartialResponse(TEXT(" 下一句"));
+	TestEqual(TEXT("Incomplete second sentence should not append."), Widget->GetFullResponseText(), TEXT("你好 世界。"));
 
-	Widget->HandlePartialResponse(TEXT(" sentence!"));
-	TestEqual(TEXT("Second complete sentence should append."), Widget->GetFullResponseText(), TEXT("Hello world. Next sentence!"));
+	Widget->HandlePartialResponse(TEXT(" 来了！"));
+	TestEqual(TEXT("Second complete sentence should append."), Widget->GetFullResponseText(), TEXT("你好 世界。 下一句 来了！"));
 
 	return true;
 }
@@ -329,12 +333,12 @@ bool FAINpcDialogueBubbleWidgetStreamingAccumulatedTextClearTest::RunTest(const 
 	Widget->bEnableStreamingDisplay = true;
 	Widget->StreamingDisplayMode = EStreamingDisplayMode::SentenceBySentence;
 
-	Widget->HandlePartialResponse(TEXT("Incomplete"));
+	Widget->HandlePartialResponse(TEXT("未完成"));
 	TestEqual(TEXT("Incomplete text should not display."), Widget->GetFullResponseText(), TEXT(""));
 
-	Widget->ShowResponseText(TEXT("New non-streaming response"));
+	Widget->ShowResponseText(TEXT("新的非流式响应"));
 	TestEqual(TEXT("ShowResponseText should clear accumulated text and show new response."),
-		Widget->GetFullResponseText(), TEXT("New non-streaming response"));
+		Widget->GetFullResponseText(), TEXT("新的非流式响应"));
 
 	return true;
 }
@@ -354,19 +358,19 @@ bool FAINpcDialogueBubbleWidgetDuplicateTerminalKeepsBufferedStreamingTextTest::
 	Widget->bEnableStreamingDisplay = true;
 	Widget->StreamingDisplayMode = EStreamingDisplayMode::SentenceBySentence;
 
-	Widget->HandlePartialResponse(TEXT("Hello."));
-	TestEqual(TEXT("First sentence should flush immediately."), Widget->GetFullResponseText(), TEXT("Hello."));
+	Widget->HandlePartialResponse(TEXT("你好。"));
+	TestEqual(TEXT("First sentence should flush immediately."), Widget->GetFullResponseText(), TEXT("你好。"));
 
-	Widget->HandlePartialResponse(TEXT(" trailing"));
-	TestEqual(TEXT("Incomplete trailing text should remain buffered."), Widget->GetFullResponseText(), TEXT("Hello."));
+	Widget->HandlePartialResponse(TEXT(" 尾部"));
+	TestEqual(TEXT("Incomplete trailing text should remain buffered."), Widget->GetFullResponseText(), TEXT("你好。"));
 
 	// Simulate a duplicate terminal callback where the final response repeats the
 	// currently visible text while sentence-buffered streaming text still exists.
-	Widget->ShowResponseText(TEXT("Hello."));
-	Widget->HandlePartialResponse(TEXT("!"));
+	Widget->ShowResponseText(TEXT("你好。"));
+	Widget->HandlePartialResponse(TEXT("！"));
 
 	TestEqual(TEXT("Buffered trailing text should be preserved across duplicate terminal callbacks."),
-		Widget->GetFullResponseText(), TEXT("Hello. trailing!"));
+		Widget->GetFullResponseText(), TEXT("你好。 尾部！"));
 
 	return true;
 }
@@ -386,9 +390,9 @@ bool FAINpcDialogueBubbleWidgetPunctuationPriorityTest::RunTest(const FString& P
 	Widget->bEnableStreamingDisplay = true;
 	Widget->StreamingDisplayMode = EStreamingDisplayMode::SentenceBySentence;
 
-	Widget->HandlePartialResponse(TEXT("First. Second? Third!"));
+	Widget->HandlePartialResponse(TEXT("第一句。 第二句？ 第三句！"));
 	TestEqual(TEXT("Should find last punctuation (exclamation)."),
-		Widget->GetFullResponseText(), TEXT("First. Second? Third!"));
+		Widget->GetFullResponseText(), TEXT("第一句。 第二句？ 第三句！"));
 
 	return true;
 }
@@ -446,9 +450,9 @@ bool FAINpcDialogueBubbleWidgetCarriageReturnBoundaryTest::RunTest(const FString
 	Widget->bEnableStreamingDisplay = true;
 	Widget->StreamingDisplayMode = EStreamingDisplayMode::SentenceBySentence;
 
-	Widget->HandlePartialResponse(TEXT("First line\rSecond line"));
+	Widget->HandlePartialResponse(TEXT("第一行\r第二行"));
 	TestEqual(TEXT("Carriage return should flush complete sentence chunk."),
-		Widget->GetFullResponseText(), TEXT("First line\r"));
+		Widget->GetFullResponseText(), TEXT("第一行\r"));
 
 	return true;
 }
@@ -463,13 +467,13 @@ bool FAINpcDialogueBubbleWidgetCarriageReturnLineFeedBoundaryTest::RunTest(const
 	Widget->bEnableStreamingDisplay = true;
 	Widget->StreamingDisplayMode = EStreamingDisplayMode::SentenceBySentence;
 
-	Widget->HandlePartialResponse(TEXT("First line\r\nSecond"));
+	Widget->HandlePartialResponse(TEXT("第一行\r\n第二行"));
 	TestEqual(TEXT("CRLF should flush as one boundary unit without leaving dangling LF."),
-		Widget->GetFullResponseText(), TEXT("First line\r\n"));
+		Widget->GetFullResponseText(), TEXT("第一行\r\n"));
 
-	Widget->HandlePartialResponse(TEXT(" line."));
+	Widget->HandlePartialResponse(TEXT(" 行。"));
 	TestEqual(TEXT("Subsequent sentence should append cleanly after CRLF flush."),
-		Widget->GetFullResponseText(), TEXT("First line\r\nSecond line."));
+		Widget->GetFullResponseText(), TEXT("第一行\r\n第二行 行。"));
 
 	return true;
 }
@@ -501,13 +505,13 @@ bool FAINpcDialogueBubbleWidgetMultilingualBoundaryTest::RunTest(const FString& 
 	Widget->bEnableStreamingDisplay = true;
 	Widget->StreamingDisplayMode = EStreamingDisplayMode::SentenceBySentence;
 
-	Widget->HandlePartialResponse(TEXT("First line\nSecond line"));
+	Widget->HandlePartialResponse(TEXT("\u7B2C\u4E00\u884C\n\u7B2C\u4E8C\u884C"));
 	TestEqual(TEXT("Line break should flush complete sentence chunk."),
-		Widget->GetFullResponseText(), TEXT("First line\n"));
+		Widget->GetFullResponseText(), TEXT("\u7B2C\u4E00\u884C\n"));
 
 	Widget->HandlePartialResponse(TEXT("\u4F60\u597D\u3002"));
 	TestEqual(TEXT("Full-width Chinese period should flush buffered text."),
-		Widget->GetFullResponseText(), TEXT("First line\nSecond line\u4F60\u597D\u3002"));
+		Widget->GetFullResponseText(), TEXT("\u7B2C\u4E00\u884C\n\u7B2C\u4E8C\u884C\u4F60\u597D\u3002"));
 
 	return true;
 }
@@ -532,15 +536,15 @@ bool FAINpcDialogueBubbleWidgetPartialDelegateTest::RunTest(const FString& Param
 	});
 
 	Widget->bEnableStreamingDisplay = false;
-	Widget->HandlePartialResponse(TEXT("chunk-a"));
+	Widget->HandlePartialResponse(TEXT("块-甲"));
 	Widget->bEnableStreamingDisplay = true;
 	Widget->StreamingDisplayMode = EStreamingDisplayMode::SentenceBySentence;
-	Widget->HandlePartialResponse(TEXT("chunk-b"));
+	Widget->HandlePartialResponse(TEXT("块-乙"));
 
 	TestEqual(TEXT("Native partial delegate should broadcast once per chunk."),
 		PartialBroadcastCount, 2);
 	TestEqual(TEXT("Native partial delegate should carry latest chunk."),
-		LastPartialText, TEXT("chunk-b"));
+		LastPartialText, TEXT("块-乙"));
 
 	return true;
 }
@@ -569,17 +573,17 @@ bool FAINpcDialogueBubbleWidgetTypewriterSpeedContractTest::RunTest(const FStrin
 	Widget->bUseTypewriterEffect = true;
 	Widget->CharactersPerSecond = 30.0f;
 
-	Widget->ShowResponseText(TEXT("abcd"));
+	Widget->ShowResponseText(TEXT("你好"));
 	TestEqual(TEXT("Typewriter should begin hidden before reveal starts."),
 		Widget->GetDisplayedText().ToString(), TEXT(""));
 
 	Widget->AdvanceTypewriterForTest(0.04f);
 	TestEqual(TEXT("Typewriter should reveal one character at 30 chars/sec after 0.04s."),
-		Widget->GetDisplayedText().ToString(), TEXT("a"));
+		Widget->GetDisplayedText().ToString(), TEXT("你"));
 
 	Widget->AdvanceTypewriterForTest(0.10f);
 	TestEqual(TEXT("Typewriter should complete reveal when accumulated time reaches 4 chars."),
-		Widget->GetDisplayedText().ToString(), TEXT("abcd"));
+		Widget->GetDisplayedText().ToString(), TEXT("你好"));
 
 	return true;
 }
@@ -595,29 +599,29 @@ bool FAINpcDialogueBubbleWidgetStreamingCharacterTypewriterContractTest::RunTest
 	Widget->bEnableStreamingDisplay = true;
 	Widget->StreamingDisplayMode = EStreamingDisplayMode::CharacterByCharacter;
 
-	Widget->HandlePartialResponse(TEXT("ab"));
+	Widget->HandlePartialResponse(TEXT("你好"));
 	TestEqual(TEXT("Character streaming should queue full response text immediately."),
-		Widget->GetFullResponseText(), TEXT("ab"));
+		Widget->GetFullResponseText(), TEXT("你好"));
 	TestEqual(TEXT("Character streaming should still use typewriter for display."),
 		Widget->GetDisplayedText().ToString(), TEXT(""));
 
 	Widget->AdvanceTypewriterForTest(0.04f);
 	TestEqual(TEXT("Typewriter should reveal one character per 0.04s at 30 chars/sec."),
-		Widget->GetDisplayedText().ToString(), TEXT("a"));
+		Widget->GetDisplayedText().ToString(), TEXT("你"));
 
-	Widget->HandlePartialResponse(TEXT("cd"));
+	Widget->HandlePartialResponse(TEXT("吗"));
 	TestEqual(TEXT("Additional stream chunks should extend queued full response text."),
-		Widget->GetFullResponseText(), TEXT("abcd"));
+		Widget->GetFullResponseText(), TEXT("你好吗"));
 	TestEqual(TEXT("Display should preserve revealed progress until next tick."),
-		Widget->GetDisplayedText().ToString(), TEXT("a"));
+		Widget->GetDisplayedText().ToString(), TEXT("你"));
 
 	Widget->AdvanceTypewriterForTest(0.04f);
 	TestEqual(TEXT("Typewriter should continue reveal from existing progress."),
-		Widget->GetDisplayedText().ToString(), TEXT("ab"));
+		Widget->GetDisplayedText().ToString(), TEXT("你好"));
 
 	Widget->AdvanceTypewriterForTest(0.10f);
 	TestEqual(TEXT("Typewriter should reveal remaining queued characters."),
-		Widget->GetDisplayedText().ToString(), TEXT("abcd"));
+		Widget->GetDisplayedText().ToString(), TEXT("你好吗"));
 
 	return true;
 }
@@ -631,11 +635,11 @@ bool FAINpcDialogueBubbleWidgetTypewriterHitchClampTest::RunTest(const FString& 
 	Widget->bUseTypewriterEffect = true;
 	Widget->CharactersPerSecond = 30.0f;
 
-	Widget->ShowResponseText(TEXT("abcdef"));
+	Widget->ShowResponseText(TEXT("你好吗"));
 	Widget->AdvanceTypewriterForTest(0.5f);
 
 	TestEqual(TEXT("Large frame hitches should clamp reveal progress instead of revealing the full line in one step."),
-		Widget->GetDisplayedText().ToString(), TEXT("abc"));
+		Widget->GetDisplayedText().ToString(), TEXT("你好"));
 
 	return true;
 }
@@ -656,18 +660,18 @@ bool FAINpcDialogueBubbleWidgetShowResponseTextStreamingExtensionKeepsProgressTe
 	Widget->bEnableStreamingDisplay = true;
 	Widget->StreamingDisplayMode = EStreamingDisplayMode::Immediate;
 
-	Widget->ShowResponseText(TEXT("ab"));
+	Widget->ShowResponseText(TEXT("你好"));
 	Widget->AdvanceTypewriterForTest(0.04f);
 	TestEqual(TEXT("Typewriter should reveal one character before extension."),
-		Widget->GetDisplayedText().ToString(), TEXT("a"));
+		Widget->GetDisplayedText().ToString(), TEXT("你"));
 
-	Widget->ShowResponseText(TEXT("abcd"));
+	Widget->ShowResponseText(TEXT("你好吗"));
 	TestEqual(TEXT("Streaming extension should keep in-flight reveal progress without restart flicker."),
-		Widget->GetDisplayedText().ToString(), TEXT("a"));
+		Widget->GetDisplayedText().ToString(), TEXT("你"));
 
 	Widget->AdvanceTypewriterForTest(0.04f);
 	TestEqual(TEXT("Typewriter should continue from prior progress after extension."),
-		Widget->GetDisplayedText().ToString(), TEXT("ab"));
+		Widget->GetDisplayedText().ToString(), TEXT("你好"));
 
 	return true;
 }
@@ -680,6 +684,16 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAINpcDialogueBubbleWidgetEmptyTerminalPreservesStreamedTextTest,
 	"AINpc.DialogueBubble.EmptyTerminalPreservesStreamedText",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAINpcDialogueBubbleWidgetFinalResponseMergeDoesNotDuplicateStreamedTextTest,
+	"AINpc.DialogueBubble.FinalResponseMergeDoesNotDuplicateStreamedText",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAINpcDialogueBubbleWidgetSessionRestartClearsBufferedStreamingStateTest,
+	"AINpc.DialogueBubble.SessionRestartClearsBufferedStreamingState",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FAINpcDialogueBubbleWidgetIgnoresEmptyPartialChunksTest::RunTest(const FString& Parameters)
@@ -704,9 +718,9 @@ bool FAINpcDialogueBubbleWidgetIgnoresEmptyPartialChunksTest::RunTest(const FStr
 	TestEqual(TEXT("Empty chunks should not broadcast partial-response delegates."),
 		PartialBroadcastCount, 0);
 
-	Widget->HandlePartialResponse(TEXT("a"));
-	TestEqual(TEXT("Non-empty chunks should still be accepted."),
-		Widget->GetFullResponseText(), TEXT("a"));
+	Widget->HandlePartialResponse(TEXT("你"));
+	TestEqual(TEXT("Incomplete sentence chunks should stay buffered until a boundary is received."),
+		Widget->GetFullResponseText(), TEXT(""));
 	TestEqual(TEXT("Non-empty chunks should broadcast partial-response delegates."),
 		PartialBroadcastCount, 1);
 
@@ -725,13 +739,13 @@ bool FAINpcDialogueBubbleWidgetEmptyTerminalPreservesStreamedTextTest::RunTest(c
 	CharModeWidget->bUseTypewriterEffect = false;
 	CharModeWidget->bEnableStreamingDisplay = true;
 	CharModeWidget->StreamingDisplayMode = EStreamingDisplayMode::Immediate;
-	CharModeWidget->HandlePartialResponse(TEXT("Hello"));
+	CharModeWidget->HandlePartialResponse(TEXT("你好"));
 	CharModeWidget->ShowResponseText(TEXT(""));
 
 	TestEqual(TEXT("Empty terminal callback should keep character-mode streamed text."),
-		CharModeWidget->GetFullResponseText(), TEXT("Hello"));
+		CharModeWidget->GetFullResponseText(), TEXT("你好"));
 	TestEqual(TEXT("Displayed text should remain visible after empty terminal callback."),
-		CharModeWidget->GetDisplayedText().ToString(), TEXT("Hello"));
+		CharModeWidget->GetDisplayedText().ToString(), TEXT("你好"));
 
 	UNpcDialogueBubbleWidget* SentenceModeWidget = NewObject<UNpcDialogueBubbleWidget>();
 	TestNotNull(TEXT("Sentence-mode widget should be created."), SentenceModeWidget);
@@ -743,16 +757,79 @@ bool FAINpcDialogueBubbleWidgetEmptyTerminalPreservesStreamedTextTest::RunTest(c
 	SentenceModeWidget->bUseTypewriterEffect = false;
 	SentenceModeWidget->bEnableStreamingDisplay = true;
 	SentenceModeWidget->StreamingDisplayMode = EStreamingDisplayMode::SentenceBySentence;
-	SentenceModeWidget->HandlePartialResponse(TEXT("Buffered text without punctuation"));
+	SentenceModeWidget->HandlePartialResponse(TEXT("没有标点的缓冲文本"));
 	SentenceModeWidget->ShowResponseText(TEXT(""));
 
 	TestEqual(TEXT("Empty terminal callback should flush and keep sentence buffer content."),
-		SentenceModeWidget->GetFullResponseText(), TEXT("Buffered text without punctuation"));
+		SentenceModeWidget->GetFullResponseText(), TEXT("没有标点的缓冲文本"));
 	TestEqual(TEXT("Displayed sentence buffer content should remain visible after empty terminal callback."),
-		SentenceModeWidget->GetDisplayedText().ToString(), TEXT("Buffered text without punctuation"));
+		SentenceModeWidget->GetDisplayedText().ToString(), TEXT("没有标点的缓冲文本"));
+
+	return true;
+}
+
+bool FAINpcDialogueBubbleWidgetFinalResponseMergeDoesNotDuplicateStreamedTextTest::RunTest(const FString& Parameters)
+{
+	UNpcDialogueBubbleWidget* Widget = NewObject<UNpcDialogueBubbleWidget>();
+	TestNotNull(TEXT("Widget should be created."), Widget);
+	if (!Widget)
+	{
+		return false;
+	}
+
+	Widget->bUseTypewriterEffect = false;
+	Widget->bEnableStreamingDisplay = true;
+	Widget->StreamingDisplayMode = EStreamingDisplayMode::SentenceBySentence;
+
+	Widget->HandlePartialResponse(TEXT("第一句。"));
+	Widget->HandlePartialResponse(TEXT("第二句"));
+	Widget->ShowResponseText(TEXT("第一句。第二句。"));
+
+	TestEqual(TEXT("Final response should replace/merge streamed text without duplication."),
+		Widget->GetFullResponseText(), TEXT("第一句。第二句。"));
+	TestEqual(TEXT("Displayed final response should not duplicate streamed prefix."),
+		Widget->GetDisplayedText().ToString(), TEXT("第一句。第二句。"));
+
+	return true;
+}
+
+bool FAINpcDialogueBubbleWidgetSessionRestartClearsBufferedStreamingStateTest::RunTest(const FString& Parameters)
+{
+	UAINpcComponent::ResetConcurrencyStateForTest();
+	UAINpcComponent::SetDialogueDispatchBypassForTest(true);
+
+	UNpcDialogueBubbleWidget* Widget = NewObject<UNpcDialogueBubbleWidget>();
+	TestNotNull(TEXT("Widget should be created."), Widget);
+	if (!Widget)
+	{
+		return false;
+	}
+	UAINpcComponent* Component = NewObject<UAINpcComponent>();
+	TestNotNull(TEXT("Component should be created."), Component);
+	if (!Component)
+	{
+		UAINpcComponent::ResetConcurrencyStateForTest();
+		return false;
+	}
+
+	Widget->bUseTypewriterEffect = false;
+	Widget->bEnableStreamingDisplay = true;
+	Widget->StreamingDisplayMode = EStreamingDisplayMode::SentenceBySentence;
+	Widget->BindToNpcComponent(Component);
+
+	Widget->HandlePartialResponse(TEXT("上一轮未完成"));
+	Component->StartDialogue(TEXT("新一轮 prompt"));
+	Widget->HandlePartialResponse(TEXT("新一轮。"));
+
+	TestEqual(TEXT("Session restart should clear old buffered chunks before accepting new text."),
+		Widget->GetFullResponseText(), TEXT("新一轮。"));
+	TestEqual(TEXT("Displayed session restart text should only contain the new request."),
+		Widget->GetDisplayedText().ToString(), TEXT("新一轮。"));
+
+	Component->EndDialogue();
+	UAINpcComponent::ResetConcurrencyStateForTest();
 
 	return true;
 }
 
 #endif
-

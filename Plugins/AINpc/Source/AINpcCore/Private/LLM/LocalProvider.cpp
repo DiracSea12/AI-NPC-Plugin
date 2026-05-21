@@ -1,6 +1,8 @@
 ﻿#include "LLM/LocalProvider.h"
+#include "LLM/AINpcLLMDiagnostics.h"
 #include "LLM/StructuredOutputPromptLibrary.h"
 #include "LLM/StructuredOutputSchemaHelpers.h"
+#include "AINpcCoreLog.h"
 
 #include "Async/Async.h"
 #include "Dom/JsonObject.h"
@@ -131,9 +133,17 @@ void FLocalProvider::DispatchRequest(const FGuid& RequestId, FLLMRequest Request
 	const TSharedRef<TJsonWriter<>> JsonWriter = TJsonWriterFactory<>::Create(&RequestBody);
 	FJsonSerializer::Serialize(JsonPayload, JsonWriter);
 
-	FString Endpoint = ResolveBaseUrl(Request);
+	FString BaseUrl = ResolveBaseUrl(Request).TrimStartAndEnd();
+	FString Endpoint = BaseUrl;
 	Endpoint.RemoveFromEnd(TEXT("/"));
 	Endpoint += TEXT("/chat/completions");
+	UE_LOG(LogAINpc, Log, TEXT("LLM request dispatch provider=local requestId=%s baseUrl=%s model=%s effortLevel=%s endpoint=%s timeout=%.1f apiKey=not-applicable"),
+		*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		*BaseUrl,
+		*ResolveModel(Request),
+		Request.EffortLevel.IsEmpty() ? TEXT("<empty>") : *Request.EffortLevel,
+		*Endpoint,
+		Request.TimeoutSeconds);
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
 	HttpRequest->SetURL(Endpoint);
 	HttpRequest->SetVerb(TEXT("POST"));
@@ -272,6 +282,15 @@ void FLocalProvider::CompleteRequest(
 	Response.bSuccess = false;
 	Response.HttpStatusCode = HttpResponse.IsValid() ? HttpResponse->GetResponseCode() : 0;
 
+	const double RequestDurationMs = HttpRequest.IsValid() ? HttpRequest->GetElapsedTime() * 1000.0 : 0.0;
+	FString ResponseBody;
+	FString SafeResponseSummary;
+	if (HttpResponse.IsValid())
+	{
+		ResponseBody = HttpResponse->GetContentAsString();
+		SafeResponseSummary = AINpc::LLMDiagnostics::BuildSafeResponseSummary(ResponseBody);
+	}
+
 	if (!bRequestSucceeded || !HttpResponse.IsValid())
 	{
 		if (HttpRequest.IsValid())
@@ -299,7 +318,6 @@ void FLocalProvider::CompleteRequest(
 	}
 	else
 	{
-		const FString ResponseBody = HttpResponse->GetContentAsString();
 		FString ParsedContent;
 		FParsedLLMResponse ParsedResponse;
 		FString ParseError;
@@ -319,6 +337,31 @@ void FLocalProvider::CompleteRequest(
 				? FString::Printf(TEXT("Local provider request failed with HTTP %d."), Response.HttpStatusCode)
 				: MoveTemp(ParseError);
 		}
+	}
+
+	if (Response.bSuccess)
+	{
+		UE_LOG(LogAINpc, Log, TEXT("LLM request completed provider=local requestId=%s httpStatus=%d durationMs=%.1f parseTier=%s parsedAsJson=%s dialogueLen=%d actionCount=%d"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			Response.HttpStatusCode,
+			RequestDurationMs,
+			AINpc::LLMDiagnostics::DescribeParseTier(Response.ParsedResponse.ParseTier),
+			Response.ParsedResponse.bParsedAsJson ? TEXT("true") : TEXT("false"),
+			Response.Content.Len(),
+			Response.ParsedResponse.Actions.Num());
+	}
+	else
+	{
+		UE_LOG(LogAINpc, Warning, TEXT("LLM request failed provider=local requestId=%s httpStatus=%d durationMs=%.1f requestSucceeded=%s failureReason=%d parseTier=%s parsedAsJson=%s error=%s responseSummary=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			Response.HttpStatusCode,
+			RequestDurationMs,
+			bRequestSucceeded ? TEXT("true") : TEXT("false"),
+			HttpRequest.IsValid() ? static_cast<int32>(HttpRequest->GetFailureReason()) : -1,
+			AINpc::LLMDiagnostics::DescribeParseTier(Response.ParsedResponse.ParseTier),
+			Response.ParsedResponse.bParsedAsJson ? TEXT("true") : TEXT("false"),
+			*Response.ErrorMessage,
+			SafeResponseSummary.IsEmpty() ? TEXT("<empty>") : *SafeResponseSummary);
 	}
 
 	Async(EAsyncExecution::ThreadPool, [CompletionCallback, Response = MoveTemp(Response)]() mutable
@@ -366,6 +409,10 @@ TSharedRef<FJsonObject> FLocalProvider::BuildJsonPayload(const FLLMRequest& Requ
 	const TSharedRef<FJsonObject> JsonPayload = MakeShared<FJsonObject>();
 	JsonPayload->SetStringField(TEXT("model"), ResolveModel(Request));
 	JsonPayload->SetNumberField(TEXT("temperature"), Request.Temperature);
+	if (!Request.EffortLevel.IsEmpty())
+	{
+		JsonPayload->SetStringField(TEXT("effortLevel"), Request.EffortLevel);
+	}
 	if (Request.MaxTokens > 0)
 	{
 		JsonPayload->SetNumberField(TEXT("max_tokens"), Request.MaxTokens);

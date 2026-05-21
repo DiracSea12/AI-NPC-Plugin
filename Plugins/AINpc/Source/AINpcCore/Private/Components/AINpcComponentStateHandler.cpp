@@ -2,6 +2,7 @@
 
 #include "Components/AINpcComponent.h"
 #include "Controllers/AINpcController.h"
+#include "AINpcCoreLog.h"
 #include "GameFramework/Pawn.h"
 #include "HAL/PlatformTime.h"
 #include "LLM/LLMResponseParser.h"
@@ -34,11 +35,30 @@ bool FAINpcComponentStateHandler::HasBeenInDialogueStateLongerThan(const UAINpcC
 	return (FPlatformTime::Seconds() - Component.DialogueStateEnterTimeSeconds) >= static_cast<double>(DurationSeconds);
 }
 
+bool FAINpcComponentStateHandler::SupportsStateTreeAutoController(const UAINpcComponent& Component)
+{
+	return Cast<APawn>(Component.GetOwner()) != nullptr;
+}
+
 void FAINpcComponentStateHandler::EnsureControllerBinding(UAINpcComponent& Component)
 {
-	APawn* PawnOwner = Cast<APawn>(Component.GetOwner());
+	AActor* Owner = Component.GetOwner();
+	if (!Owner)
+	{
+		return;
+	}
+
+	APawn* PawnOwner = Cast<APawn>(Owner);
 	if (!PawnOwner)
 	{
+		if (Component.bAutoCreateNpcController)
+		{
+			UE_LOG(
+				LogAINpc,
+				Warning,
+				TEXT("UAINpcComponent on owner '%s' cannot auto-bind AAINpcController/StateTree because the owner is not a Pawn. Use a Pawn/Character for StateTree-driven dialogue, or drive the component directly without StateTree auto-controller support."),
+				*GetNameSafe(Owner));
+		}
 		return;
 	}
 

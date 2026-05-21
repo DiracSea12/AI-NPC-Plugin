@@ -30,16 +30,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Persona", meta = (MultiLine = "true"))
 	FString SpeakingStyle;
 
-	// Avoid shipping secrets in content assets; prefer env-var based key injection for runtime.
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Provider")
-	FString ApiKey;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Provider")
-	FString BaseUrl;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Provider")
-	FString Model;
-
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Dialogue")
 	ENpcSpeakingLength SpeakingLength = ENpcSpeakingLength::Medium;
 

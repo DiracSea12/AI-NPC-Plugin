@@ -9,6 +9,59 @@
 #include "Engine/GameInstance.h"
 #include "GameFramework/Actor.h"
 
+namespace
+{
+FLLMRequest BuildChainStreamingRequest(
+	const FLLMRequest& Request,
+	const FGuid& ChainRequestId,
+	const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe>& bStreamOpen,
+	TFunction<bool(const TOptional<FGuid>&)> ShouldForwardChunk)
+{
+	FLLMRequest WrappedRequest = Request;
+	if (!Request.StreamCallback)
+	{
+		return WrappedRequest;
+	}
+
+	const FLLMStreamCallback OriginalStreamCallback = Request.StreamCallback;
+	const TSharedRef<TOptional<FGuid>, ESPMode::ThreadSafe> ProviderRequestId =
+		MakeShared<TOptional<FGuid>, ESPMode::ThreadSafe>();
+	WrappedRequest.StreamCallback =
+		[ChainRequestId, OriginalStreamCallback, ProviderRequestId, bStreamOpen, ShouldForwardChunk = MoveTemp(ShouldForwardChunk)](const FLLMStreamChunk& Chunk)
+		{
+			if (!bStreamOpen->Load())
+			{
+				return;
+			}
+
+			if (!Chunk.RequestId.IsValid())
+			{
+				return;
+			}
+
+			if (!ProviderRequestId->IsSet())
+			{
+				*ProviderRequestId = Chunk.RequestId;
+			}
+
+			if (ProviderRequestId->IsSet() && Chunk.RequestId != ProviderRequestId->GetValue())
+			{
+				return;
+			}
+
+			if (ShouldForwardChunk && !ShouldForwardChunk(*ProviderRequestId))
+			{
+				return;
+			}
+			FLLMStreamChunk ChainChunk = Chunk;
+			ChainChunk.RequestId = ChainRequestId;
+			OriginalStreamCallback(ChainChunk);
+		};
+
+	return WrappedRequest;
+}
+}
+
 FLLMProviderChain::FLLMProviderChain(
 	TSharedPtr<ILLMProvider> InPrimaryProvider,
 	TSharedPtr<ILLMProvider> InFallbackProvider,
@@ -40,10 +93,41 @@ void FLLMProviderChain::TryPrimaryWithRetry(const FGuid& RequestId, const FLLMRe
 
 	const TWeakPtr<FLLMProviderChain, ESPMode::ThreadSafe> WeakChain = AsWeak();
 	const FLLMRequest RequestCopy = Request;
-
-	const FGuid PrimaryRequestId = PrimaryProvider->SendRequest(Request,
-		[WeakChain, RequestId, RequestCopy, CompletionCallback = MoveTemp(CompletionCallback), RetryCount](const FLLMResponse& Response) mutable
+	const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> bPrimaryStreamOpen =
+		MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(true);
+	const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> bPrimaryRequestIdRecorded =
+		MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false);
+	const FLLMRequest PrimaryRequest = BuildChainStreamingRequest(
+		Request,
+		RequestId,
+		bPrimaryStreamOpen,
+		[WeakChain, RequestId, bPrimaryRequestIdRecorded](const TOptional<FGuid>& ProviderRequestId)
 		{
+			const TSharedPtr<FLLMProviderChain, ESPMode::ThreadSafe> Chain = WeakChain.Pin();
+			if (!Chain.IsValid())
+			{
+				return false;
+			}
+
+			if (!bPrimaryRequestIdRecorded->Load())
+			{
+				return true;
+			}
+
+			FScopeLock Lock(&Chain->RequestMutex);
+			const FGuid* ActiveProviderRequestId = Chain->ActivePrimaryRequests.Find(RequestId);
+			return ActiveProviderRequestId &&
+				ProviderRequestId.IsSet() &&
+				*ActiveProviderRequestId == ProviderRequestId.GetValue();
+		});
+	const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> bCompletedBeforeRequestIdWasRecorded =
+		MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false);
+
+	const FGuid PrimaryRequestId = PrimaryProvider->SendRequest(PrimaryRequest,
+		[WeakChain, RequestId, RequestCopy, CompletionCallback = MoveTemp(CompletionCallback), RetryCount, bCompletedBeforeRequestIdWasRecorded, bPrimaryStreamOpen](const FLLMResponse& Response) mutable
+		{
+			bPrimaryStreamOpen->Store(false);
+			bCompletedBeforeRequestIdWasRecorded->Store(true);
 			if (Response.bSuccess)
 			{
 				if (const TSharedPtr<FLLMProviderChain, ESPMode::ThreadSafe> Chain = WeakChain.Pin())
@@ -103,7 +187,11 @@ void FLLMProviderChain::TryPrimaryWithRetry(const FGuid& RequestId, const FLLMRe
 
 	{
 		FScopeLock Lock(&RequestMutex);
-		ActivePrimaryRequests.Add(RequestId, PrimaryRequestId);
+		if (!bCompletedBeforeRequestIdWasRecorded->Load())
+		{
+			ActivePrimaryRequests.Add(RequestId, PrimaryRequestId);
+			bPrimaryRequestIdRecorded->Store(true);
+		}
 	}
 }
 
@@ -160,10 +248,41 @@ void FLLMProviderChain::TryFallbackProvider(const FGuid& RequestId, const FLLMRe
 	}
 
 	const TWeakPtr<FLLMProviderChain, ESPMode::ThreadSafe> WeakChain = AsWeak();
-
-	const FGuid FallbackRequestId = FallbackProvider->SendRequest(Request,
-		[WeakChain, RequestId, CompletionCallback = MoveTemp(CompletionCallback), RetryCount](const FLLMResponse& Response) mutable
+	const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> bFallbackStreamOpen =
+		MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(true);
+	const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> bFallbackRequestIdRecorded =
+		MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false);
+	const FLLMRequest FallbackRequest = BuildChainStreamingRequest(
+		Request,
+		RequestId,
+		bFallbackStreamOpen,
+		[WeakChain, RequestId, bFallbackRequestIdRecorded](const TOptional<FGuid>& ProviderRequestId)
 		{
+			const TSharedPtr<FLLMProviderChain, ESPMode::ThreadSafe> Chain = WeakChain.Pin();
+			if (!Chain.IsValid())
+			{
+				return false;
+			}
+
+			if (!bFallbackRequestIdRecorded->Load())
+			{
+				return true;
+			}
+
+			FScopeLock Lock(&Chain->RequestMutex);
+			const FGuid* ActiveProviderRequestId = Chain->ActiveFallbackRequests.Find(RequestId);
+			return ActiveProviderRequestId &&
+				ProviderRequestId.IsSet() &&
+				*ActiveProviderRequestId == ProviderRequestId.GetValue();
+		});
+	const TSharedRef<TAtomic<bool>, ESPMode::ThreadSafe> bCompletedBeforeRequestIdWasRecorded =
+		MakeShared<TAtomic<bool>, ESPMode::ThreadSafe>(false);
+
+	const FGuid FallbackRequestId = FallbackProvider->SendRequest(FallbackRequest,
+		[WeakChain, RequestId, CompletionCallback = MoveTemp(CompletionCallback), RetryCount, bCompletedBeforeRequestIdWasRecorded, bFallbackStreamOpen](const FLLMResponse& Response) mutable
+		{
+			bFallbackStreamOpen->Store(false);
+			bCompletedBeforeRequestIdWasRecorded->Store(true);
 			if (Response.bSuccess)
 			{
 				if (const TSharedPtr<FLLMProviderChain, ESPMode::ThreadSafe> Chain = WeakChain.Pin())
@@ -206,7 +325,11 @@ void FLLMProviderChain::TryFallbackProvider(const FGuid& RequestId, const FLLMRe
 
 	{
 		FScopeLock Lock(&RequestMutex);
-		ActiveFallbackRequests.Add(RequestId, FallbackRequestId);
+		if (!bCompletedBeforeRequestIdWasRecorded->Load())
+		{
+			ActiveFallbackRequests.Add(RequestId, FallbackRequestId);
+			bFallbackRequestIdRecorded->Store(true);
+		}
 	}
 }
 
@@ -223,19 +346,23 @@ void FLLMProviderChain::UseFallbackTemplate(const FGuid& RequestId, FLLMResponse
 		Response.bSuccess = true;
 		Response.Content = FallbackResponses[RandomIndex];
 		Response.ParsedResponse.Dialogue = Response.Content;
-		Response.ParsedResponse.Actions.Add(FNpcAction());
-		Response.ParsedResponse.Actions[0].ActionType = AINpc::Actions::DefaultTalkActionType;
 		Response.ParsedResponse.ParseTier = ELLMResponseParseTier::PlainText;
 		Response.FallbackReason = ELLMFallbackReason::FallbackFailed;
 	}
 	else
 	{
-		Response.bSuccess = true;
+		Response.bSuccess = false;
 		Response.Content = TEXT("");
+		Response.ErrorMessage = TEXT("LLM providers failed and no fallback template is configured.");
 		Response.FallbackReason = ELLMFallbackReason::NoTemplateAvailable;
 	}
 
-	BroadcastDegradationEvent(TEXT("LLM providers failed, using template response"), RetryCount, bHasTemplate);
+	BroadcastDegradationEvent(
+		bHasTemplate
+			? TEXT("LLM providers failed, using template response")
+			: TEXT("LLM providers failed and no fallback template is configured"),
+		RetryCount,
+		bHasTemplate);
 
 	Async(EAsyncExecution::ThreadPool, [CompletionCallback = MoveTemp(CompletionCallback), Response = MoveTemp(Response)]() mutable
 	{
@@ -278,7 +405,7 @@ void FLLMProviderChain::BroadcastDegradationEvent(const FString& Reason, int32 R
 	Payload.bUsedTemplate = bUsedTemplate;
 
 	FNpcEventMessage EventMessage;
-	EventMessage.EventTag = FGameplayTag::RequestGameplayTag(TEXT("NPC.Event.LLMDegradation"));
+	EventMessage.EventTag = FGameplayTag::RequestGameplayTag(TEXT("NPC.Event.LLMDegradation"), false);
 	EventMessage.Payload.InitializeAs<FNpcLLMDegradationEventPayload>(Payload);
 
 	EventSubsystem->BroadcastEvent(EventMessage);
