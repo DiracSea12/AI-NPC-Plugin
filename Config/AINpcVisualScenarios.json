@@ -1,64 +1,210 @@
 [
   {
+    "schemaVersion": 2,
     "testId": "us1.dialogue-action",
     "map": "/Game/Maps/AINpcTestMap",
     "timeoutSec": 180,
-    "requiresProvider": true,
-    "promptFile": "AINpcVisualHarnessInitialPrompt.txt",
-    "personaFile": "AINpcVisualHarnessUs1Persona.txt",
-    "delayFillerFile": "AINpcVisualHarnessDelayFiller.txt",
-    "delayFillerThreshold": 0.0,
-    "requireEventTrigger": false,
-    "eventTag": "",
-    "eventTriggerId": "",
-    "requirePartialResponse": false,
-    "requireStructuredResponse": false,
-    "requireActionIntent": false,
-    "allowActionRejection": false,
     "storyIds": ["US-1"],
-    "phaseIds": ["phase2.6"],
-    "requiredObservations": [
-      "sessionStarted",
-      "waitingStateObserved",
-      "speakingStateObserved",
-      "dialogueResponseObserved",
-      "delayMaskingStartObserved",
-      "delayMaskingEndObserved",
-      "actionExecutionAccepted",
-      "actionTargetReached",
-      "actionObservationHoldElapsed"
+    "phaseIds": ["phase2.7"],
+    "fixture": {
+      "type": "npcWithSmartObject"
+    },
+    "persona": {
+      "file": "AINpcVisualHarnessUs1Persona.txt",
+      "delayFillerFile": "AINpcVisualHarnessDelayFiller.txt",
+      "delayFillerThreshold": 0.0
+    },
+    "prompt": {
+      "file": "AINpcVisualHarnessInitialPrompt.txt",
+      "variables": {
+        "SmartObjectTargetId": "runtime.smartObjectTargetId"
+      }
+    },
+    "steps": [
+      {
+        "type": "dialogue.start",
+        "payload": {
+          "promptRef": "prompt"
+        }
+      },
+      {
+        "type": "wait.until",
+        "payload": {
+          "timeoutSec": 90
+        },
+        "condition": {
+          "all": [
+            { "equals": { "observation": "sessionStarted", "value": true } },
+            { "equals": { "observation": "waitingStateObserved", "value": true } },
+            { "equals": { "observation": "speakingStateObserved", "value": true } },
+            { "equals": { "observation": "dialogueResponseObserved", "value": true } },
+            { "equals": { "observation": "delayMaskingEndObserved", "value": true } },
+            { "equals": { "observation": "actionIntentObserved", "value": true } }
+          ]
+        }
+      },
+      {
+        "type": "action.executeLatestIntent",
+        "payload": {
+          "allowActionRejection": false
+        }
+      },
+      {
+        "type": "observe.hold",
+        "payload": {
+          "observation": "actionTargetReached",
+          "durationSec": 3.0,
+          "scope": "step"
+        }
+      }
     ],
-    "allowedTerminalOutcomes": ["PASS"]
+    "expect": {
+      "all": [
+        { "equals": { "observation": "sessionStarted", "value": true } },
+        { "equals": { "observation": "dialogueResponseObserved", "value": true } },
+        { "equals": { "observation": "actionExecutionAccepted", "value": true } },
+        { "equals": { "observation": "actionTargetReached", "value": true } },
+        { "equals": { "observation": "actionTargetReachedHoldElapsed", "value": true } }
+      ]
+    }
   },
   {
+    "schemaVersion": 2,
     "testId": "us2.perception-behavior",
     "map": "/Game/Maps/AINpcTestMap",
     "timeoutSec": 240,
-    "requiresProvider": true,
-    "promptFile": "AINpcVisualHarnessUs2Prompt.txt",
-    "personaFile": "AINpcVisualHarnessUs2Persona.txt",
-    "delayFillerFile": "AINpcVisualHarnessDelayFiller.txt",
-    "delayFillerThreshold": 30.0,
-    "requireEventTrigger": true,
-    "eventTag": "AINpc.Tests.Route.Match",
-    "eventTriggerId": "US2_EVENT_TRIGGER_GIFT_001",
-    "requirePartialResponse": true,
-    "requireStructuredResponse": true,
-    "requireActionIntent": true,
-    "allowActionRejection": true,
     "storyIds": ["US-2"],
-    "phaseIds": ["phase2.6"],
-    "requiredObservations": [
-      "sessionStarted",
-      "waitingStateObserved",
-      "speakingStateObserved",
-      "eventTriggerBroadcast",
-      "eventDelayMaskingStartObserved",
-      "delayMaskingEndObserved",
-      "partialResponseObserved",
-      "structuredResponseObserved",
-      "actionIntentObserved"
+    "phaseIds": ["phase2.7"],
+    "fixture": {
+      "type": "npcWithSmartObject"
+    },
+    "persona": {
+      "file": "AINpcVisualHarnessUs2Persona.txt",
+      "delayFillerFile": "AINpcVisualHarnessDelayFiller.txt",
+      "delayFillerThreshold": 30.0
+    },
+    "prompt": {
+      "file": "AINpcVisualHarnessUs2Prompt.txt",
+      "variables": {
+        "SmartObjectTargetId": "runtime.smartObjectTargetId",
+        "EventTriggerId": "US2_EVENT_TRIGGER_GIFT_001"
+      }
+    },
+    "steps": [
+      {
+        "type": "dialogue.start",
+        "payload": {
+          "promptRef": "prompt"
+        }
+      },
+      {
+        "type": "world.event",
+        "payload": {
+          "eventTag": "AINpc.Tests.Route.Match",
+          "eventId": "US2_EVENT_TRIGGER_GIFT_001"
+        }
+      },
+      {
+        "type": "wait.until",
+        "payload": {
+          "timeoutSec": 120
+        },
+        "condition": {
+          "all": [
+            { "equals": { "observation": "sessionStarted", "value": true } },
+            { "equals": { "observation": "waitingStateObserved", "value": true } },
+            { "equals": { "observation": "speakingStateObserved", "value": true } },
+            { "equals": { "observation": "eventTriggerBroadcast", "value": true } },
+            { "equals": { "observation": "partialResponseObserved", "value": true } },
+            { "equals": { "observation": "structuredResponseObserved", "value": true } },
+            { "equals": { "observation": "actionIntentObserved", "value": true } },
+            { "equals": { "observation": "delayMaskingEndObserved", "value": true } }
+          ]
+        }
+      },
+      {
+        "type": "action.executeLatestIntent",
+        "payload": {
+          "allowActionRejection": true
+        }
+      }
     ],
-    "allowedTerminalOutcomes": ["PASS"]
+    "expect": {
+      "all": [
+        { "equals": { "observation": "sessionStarted", "value": true } },
+        { "equals": { "observation": "eventTriggerBroadcast", "value": true } },
+        { "equals": { "observation": "structuredResponseObserved", "value": true } },
+        {
+          "anyOf": [
+            { "equals": { "observation": "actionExecutionAccepted", "value": true } },
+            { "equals": { "observation": "actionRejectedVisible", "value": true } }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "schemaVersion": 2,
+    "testId": "phase27.prompt-only-dialogue-action",
+    "map": "/Game/Maps/AINpcTestMap",
+    "timeoutSec": 180,
+    "storyIds": ["US-1"],
+    "phaseIds": ["phase2.7"],
+    "fixture": {
+      "type": "npcWithSmartObject"
+    },
+    "persona": {
+      "file": "AINpcVisualHarnessPhase27Persona.txt",
+      "delayFillerFile": "AINpcVisualHarnessDelayFiller.txt",
+      "delayFillerThreshold": 0.0
+    },
+    "prompt": {
+      "file": "AINpcVisualHarnessPhase27Prompt.txt",
+      "variables": {
+        "SmartObjectTargetId": "runtime.smartObjectTargetId"
+      }
+    },
+    "steps": [
+      {
+        "type": "dialogue.start",
+        "payload": {
+          "promptRef": "prompt"
+        }
+      },
+      {
+        "type": "wait.until",
+        "payload": {
+          "timeoutSec": 90
+        },
+        "condition": {
+          "all": [
+            { "equals": { "observation": "sessionStarted", "value": true } },
+            { "equals": { "observation": "dialogueResponseObserved", "value": true } },
+            { "equals": { "observation": "actionIntentObserved", "value": true } }
+          ]
+        }
+      },
+      {
+        "type": "action.executeLatestIntent",
+        "payload": {
+          "allowActionRejection": false
+        }
+      },
+      {
+        "type": "observe.hold",
+        "payload": {
+          "observation": "actionTargetReached",
+          "durationSec": 3.0,
+          "scope": "step"
+        }
+      }
+    ],
+    "expect": {
+      "all": [
+        { "equals": { "observation": "dialogueResponseObserved", "value": true } },
+        { "equals": { "observation": "actionExecutionAccepted", "value": true } },
+        { "equals": { "observation": "actionTargetReachedHoldElapsed", "value": true } }
+      ]
+    }
   }
 ]

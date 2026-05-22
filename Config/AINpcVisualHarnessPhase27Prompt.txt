@@ -1,0 +1,3 @@
+Phase 2.7 DSL-only scenario check.
+
+You are a visible humanoid NPC in the shared visual harness. Reply briefly in character, then include exactly one SmartObject action with type "Action.Inspect" and target "{SmartObjectTargetId}" so the existing visible movement/action coverage can run without a runner branch for this test id.

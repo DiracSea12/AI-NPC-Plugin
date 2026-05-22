@@ -137,3 +137,11 @@ Aider 配置始终加载：
 - `openspec/`
 
 Generated Unreal artifacts、scratch logs 和 one-off probe scripts 被 ignore。
+
+## Phase 2.7 visual DSL 说明
+
+- `Config/AINpcVisualScenarios.json` 是 visual game scenarios 的单一发现源，当前只接受 `schemaVersion: 2`。
+- 共享启动/聚合脚本仍位于 `scripts/dev/game/` 和 `scripts/dev/test-game.ps1`；新增场景优先只改 scenario 配置、prompt/persona 文件。
+- 新增 prompt/config-only scenario 不得在 runner、script dispatcher 或 adapter registry 里加 test-id-specific branch。
+- Phase 2.7 不引入远程服务、数据库、Web 控制台、分布式调度、私有服务或长期运行基础设施。
+- 开源复现时，提交 `Config/*.example.json`、prompt/persona 模板和 scenario 配置；本地私有 `Config/AINpcLocalProvider.json`、API key、本机 `G:\UE5\...` 路径只属于维护者本机，不是外部贡献者必须条件。

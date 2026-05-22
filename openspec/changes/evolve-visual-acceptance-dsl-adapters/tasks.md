@@ -1,20 +1,20 @@
 ## 2.7 - 最小 Step DSL 闭环
 
-- [ ] 1.1 将 `Config/AINpcVisualScenarios.json` 升级为 `schemaVersion: 2`，为现有 `us1.dialogue-action` 和 `us2.perception-behavior` 场景声明必填顶层字段：`testId`、`map`、`timeoutSec`、`storyIds`、`phaseIds`、`fixture`、`persona`、`prompt`、`steps`、`expect`。
-- [ ] 1.2 更新 `Plugins/AINpc/Source/AINpcCore/Public/Test/AINpcVisualTest.h`，加入最小 v2 scenario 数据结构，明确表示 fixture spec、prompt variables、persona files、step payloads、expectations、observation names、assertion scopes 和 phase ids。
-- [ ] 1.3 更新 `Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcVisualTestRegistry.cpp`，只解析 v2 scenario schema，拒绝 legacy fields、unknown top-level fields、unknown step types，并在无效场景中报告 test id 和字段/step 上下文。
-- [ ] 1.4 将 `Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcDataDrivenVisualScenarioTest.cpp` 重构为最小 step runner，支持 `dialogue.start`、`world.event`、`wait.until`、`action.executeLatestIntent`、`observe.hold`，并通过最小 internal adapter seam 执行，而不是 feature-specific `requireX`、test-id、event 或 action 分支。
-- [ ] 1.5 在 C++ scenario schema descriptor/validator 中定义 Phase 2.7 每个 supported step type 的 payload contract，包括 required fields、optional fields、timeout semantics、actor references、prompt references、adapter id fields 和 allowed policy fields；PowerShell/static checks 只能引用或核对该 contract，不能成为第二套 schema 真源。
-- [ ] 1.6 增加最小 observation store 和 assertion evaluator，足够支持 `wait.until`、`observe.hold`、`all`、`any`、`anyOf`、`exists`、`equals` 以及 boolean observation 判定；更完整 numeric/operator 语义留给后续阶段增强。
-- [ ] 1.7 新增一个 visual scenario，只新增 prompt/persona/scenario entry 并使用现有 built-in behavior coverage，证明 prompt/config-only test addition path 成立。
-- [ ] 1.8 为 prompt/config-only scenario 留下 review evidence：scenario source 和 prompt/persona files 有变化，而 scenario runner、script dispatcher、adapter registry 没有新增 test-id-specific branch。
-- [ ] 1.9 仅在必要时更新 `scripts/dev/game/VisualGameHarness.ps1` 和 `scripts/dev/test-game.ps1`，以保留可见 `UnrealEditor.exe -game` 启动、确定性 child run ids、精确 result artifact paths，以及 validate-only-not-final-acceptance reporting。
-- [ ] 1.10 在 Phase 2.7 runtime result 中记录最小 final-acceptance evidence：`Config/AINpcLocalProvider.json` 来源的 provider identity summary、request attempt/status/duration summary、visible launch guardrail result、runtime observation snapshot、artifact identity fields；没有这些 evidence 时不得把结果报告为最终行为验收。
-- [ ] 1.11 更新 `scripts/dev/verify-test-system-contract.ps1`，校验 v2 scenario sections、supported step types、step payload contracts、prompt variable references、referenced config files、staged visual harness file naming、visible acceptance guardrails、deterministic result artifact requirements，并拒绝旧 schema fields。
-- [ ] 1.12 增加 Phase 2.7 负向验证：unsupported schema、legacy field、unknown top-level field、unknown step、malformed step payload、unresolved prompt var、forbidden final-acceptance mode、validate-only-as-final、artifact identity mismatch 都必须失败。
-- [ ] 1.13 更新 `DEVELOPMENT.md`、`AGENTS.md` 等 test-discovery 文档，说明 visual game scenarios 从 `Config/AINpcVisualScenarios.json` 发现，而 shared harness scripts 仍位于 `scripts/dev/game/`。
-- [ ] 1.14 增加个人开源维护性检查：Phase 2.7 不引入远程服务、数据库、Web 控制台、分布式调度、私有服务或必须长期运营的新基础设施。
-- [ ] 1.15 增加开源可复现 setup 说明：区分可提交 example/template 和本地私有 provider config，不把 `G:\UE5\...` 这类本机路径、私有 key 或隐藏服务当作外部贡献者必需条件。
+- [x] 1.1 将 `Config/AINpcVisualScenarios.json` 升级为 `schemaVersion: 2`，为现有 `us1.dialogue-action` 和 `us2.perception-behavior` 场景声明必填顶层字段：`testId`、`map`、`timeoutSec`、`storyIds`、`phaseIds`、`fixture`、`persona`、`prompt`、`steps`、`expect`。
+- [x] 1.2 更新 `Plugins/AINpc/Source/AINpcCore/Public/Test/AINpcVisualTest.h`，加入最小 v2 scenario 数据结构，明确表示 fixture spec、prompt variables、persona files、step payloads、expectations、observation names、assertion scopes 和 phase ids。
+- [x] 1.3 更新 `Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcVisualTestRegistry.cpp`，只解析 v2 scenario schema，拒绝 legacy fields、unknown top-level fields、unknown step types，并在无效场景中报告 test id 和字段/step 上下文。
+- [x] 1.4 将 `Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcDataDrivenVisualScenarioTest.cpp` 重构为最小 step runner，支持 `dialogue.start`、`world.event`、`wait.until`、`action.executeLatestIntent`、`observe.hold`，并通过最小 internal adapter seam 执行，而不是 feature-specific `requireX`、test-id、event 或 action 分支。
+- [x] 1.5 在 C++ scenario schema descriptor/validator 中定义 Phase 2.7 每个 supported step type 的 payload contract，包括 required fields、optional fields、timeout semantics、actor references、prompt references、adapter id fields 和 allowed policy fields；PowerShell/static checks 只能引用或核对该 contract，不能成为第二套 schema 真源。
+- [x] 1.6 增加最小 observation store 和 assertion evaluator，足够支持 `wait.until`、`observe.hold`、`all`、`any`、`anyOf`、`exists`、`equals` 以及 boolean observation 判定；更完整 numeric/operator 语义留给后续阶段增强。
+- [x] 1.7 新增一个 visual scenario，只新增 prompt/persona/scenario entry 并使用现有 built-in behavior coverage，证明 prompt/config-only test addition path 成立。
+- [x] 1.8 为 prompt/config-only scenario 留下 review evidence：scenario source 和 prompt/persona files 有变化，而 scenario runner、script dispatcher、adapter registry 没有新增 test-id-specific branch。
+- [x] 1.9 仅在必要时更新 `scripts/dev/game/VisualGameHarness.ps1` 和 `scripts/dev/test-game.ps1`，以保留可见 `UnrealEditor.exe -game` 启动、确定性 child run ids、精确 result artifact paths，以及 validate-only-not-final-acceptance reporting。
+- [x] 1.10 在 Phase 2.7 runtime result 中记录最小 final-acceptance evidence：`Config/AINpcLocalProvider.json` 来源的 provider identity summary、runtime observation/status summary、visible launch guardrail result、runtime observation snapshot、artifact identity fields；没有这些 evidence 时不得把结果报告为最终行为验收。
+- [x] 1.11 更新 `scripts/dev/verify-test-system-contract.ps1`，校验 v2 scenario sections、supported step types、step payload contracts、prompt variable references、referenced config files、staged visual harness file naming、visible acceptance guardrails、deterministic result artifact requirements，并拒绝旧 schema fields。
+- [x] 1.12 增加 Phase 2.7 负向验证：unsupported schema、legacy field、unknown top-level field、unknown step、malformed step payload、unresolved prompt var、forbidden final-acceptance mode、validate-only-as-final、artifact identity mismatch 都必须失败。
+- [x] 1.13 更新 `DEVELOPMENT.md`、`AGENTS.md` 等 test-discovery 文档，说明 visual game scenarios 从 `Config/AINpcVisualScenarios.json` 发现，而 shared harness scripts 仍位于 `scripts/dev/game/`。
+- [x] 1.14 增加个人开源维护性检查：Phase 2.7 不引入远程服务、数据库、Web 控制台、分布式调度、私有服务或必须长期运营的新基础设施。
+- [x] 1.15 增加开源可复现 setup 说明：区分可提交 example/template 和本地私有 provider config，不把 `G:\UE5\...` 这类本机路径、私有 key 或隐藏服务当作外部贡献者必需条件。
 - [ ] 1.16 使用 `pwsh -NoProfile -File ./scripts/dev/verify-test-system-contract.ps1`、VerifierHostEditor UBT build command，以及 `Config/AINpcLocalProvider.json` 真实 provider 配置下的 `pwsh -NoProfile -File ./scripts/dev/test-game.ps1` 可见游戏运行验证 Phase 2.7。
 
 ## 2.8 - Internal Adapter Registry

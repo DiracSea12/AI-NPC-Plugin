@@ -101,18 +101,13 @@ if ($status -eq "PASS") {
             if ([int]$runtimeResult.schemaVersion -ne 1 -or [string]$runtimeResult.layer -ne "visual-game" -or [string]$runtimeResult.testId -ne $testId) {
                 throw "$testId runtime result JSON identity fields are invalid."
             }
-            foreach ($observationName in @($entry.requiredObservations)) {
-                $name = [string]$observationName
-                if ([string]::IsNullOrWhiteSpace($name)) { continue }
-                if (-not ($runtimeResult.observations.PSObject.Properties.Name -contains $name)) {
-                    throw "$testId runtime result missing required observation '$name'."
-                }
-                if (-not [bool]$runtimeResult.observations.$name) {
-                    throw "$testId required observation '$name' was not satisfied."
+            foreach ($field in @('providerIdentity', 'runtimeObservationSummary', 'visibleLaunchGuardrail')) {
+                if (-not ($runtimeResult.PSObject.Properties.Name -contains $field)) {
+                    throw "$testId runtime result missing final-acceptance evidence field '$field'."
                 }
             }
-            if (@($entry.allowedTerminalOutcomes) -notcontains [string]$runtimeResult.status) {
-                throw "$testId runtime result status '$($runtimeResult.status)' is not allowed."
+            if ([string]$runtimeResult.status -ne 'PASS') {
+                throw "$testId runtime result status '$($runtimeResult.status)' is not PASS."
             }
             if ($exitCode -ne 0 -or $testStatus -ne "PASS") {
                 throw "$testId status $testStatus exitCode $exitCode."

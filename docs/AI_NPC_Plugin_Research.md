@@ -177,15 +177,18 @@
 ### 4.2 数据流
 
 ```
-玩家行为（攻击/对话/送礼，宿主只需向总线广播 GameplayMessage）
-  → 插件感知系统（通过自定义 GameInstanceSubsystem 的全局 Delegate 监听）捕获事件
-  → 写入记忆系统（带时间戳+重要性评分）
-  → 更新情感/关系数值
-  → 构建LLM Prompt（人设 + 当前情感 + 相关记忆 + 当前感知）
-  → LLM返回结构化JSON（对话文本 + 行为意图 + 情感变化）
-  → 解析指令并写入 StateTree 参数
+玩家交互入口分流：
+  ├─ RequestDialogue(PlayerInput) → PlayerUtterance：只代表玩家说了这句话
+  └─ 宿主广播 GameplayMessage → AuthoritativeGameEvent：代表游戏逻辑确认发生的事件（攻击/送礼等）
+  → 插件感知系统（通过自定义 GameInstanceSubsystem 的全局 Delegate 监听）捕获权威事件
+  → 按来源写入记忆系统（PlayerClaim / WitnessedGameEvent / SystemFact）
+  → 仅由权威事件和系统状态更新情感/关系数值；玩家文本只能经语言行为规则产生有限影响
+  → 构建LLM Prompt（可选 WorldContext + 可选 LevelContext + 可选 KnowledgeScope 裁剪后的人设可知背景 + SystemState + RetrievedMemory + AuthoritativeGameEvent + PlayerUtterance + NPC视角观察；未配置背景时只用实际观察）
+  → LLM返回结构化JSON（对话文本 + 行为意图 + 情感/关系增量建议）
+  → 本地 Validator 裁决建议，拒绝玩家自报事实驱动的状态覆盖或伪造动作
+  → 合法指令写入 StateTree 参数
   → StateTree 状态流转执行（说话/寻找SmartObject/攻击/逃跑）
-  → 执行结果反馈 → 新事件写入记忆
+  → 执行结果反馈 → 新权威事件写入记忆
 ```
 
 ### 4.3 LLM通信层设计
@@ -241,6 +244,7 @@ FNpcMemoryEntry {
   FName ObjectId;            // Whom — 事件对象（对谁做的）
   FString Cause;             // Why — 因果链（可选，反思机制生成）
   FGameplayTagContainer Tags; // "Gift", "Positive", "Player"
+  EMemoryAuthority Authority; // PlayerClaim / WitnessedGameEvent / SystemFact / Reflection
   TArray<float> Embedding;   // 向量（可选，用于语义检索）
   int32 SchemaVersion;       // 记忆条目版本号（存档迁移用）
 }
@@ -258,11 +262,13 @@ Score = α × Recency(时间衰减) + β × Importance(重要性) + γ × Releva
 - 重要性 < 3 的事件仅保留在工作记忆，不入情景记忆
 - 重要性 < 5 的事件不入长期记忆（SQLite）
 - 防止低价值事件污染记忆库，降低检索噪声
+- PlayerClaim 只能表示“玩家声称/表达过”，不得覆盖 WitnessedGameEvent 或 SystemFact
 
 **反思机制：**
 - 当累积重要性 > 阈值时触发
 - LLM从近期记忆提取高层洞察（如"玩家一直在帮助我"）
 - 洞察写回记忆流，影响后续决策
+- 引用 PlayerClaim 的洞察必须保留“玩家声称/玩家表达”的限定，不能写成系统事实
 
 ### 4.5 情感与关系系统
 
@@ -286,10 +292,11 @@ FNpcRelationship {
 ```
 
 **驱动规则：**
-- 事件触发数值变化（被攻击→好感-30, 愤怒+50）
+- AuthoritativeGameEvent 触发数值变化（被攻击→好感-30, 愤怒+50）
+- PlayerUtterance 只能按语言行为规则有限影响状态（赞美/威胁/道歉），不能按玩家自报文本设置绝对值
 - 数值随时间自然衰减（情绪冷却）
-- 当前情感注入LLM prompt（影响对话语气）
-- 当前关系影响 StateTree 分支和状态选择（敌人→战斗，朋友→帮助）
+- 当前情感作为 SystemState 注入 LLM prompt（影响对话语气）
+- 当前关系作为 SystemState 影响 StateTree 分支和状态选择（敌人→战斗，朋友→帮助）
 - **UE5.7 State Tree Selectors（实验性）**：官方引入 Utility-based 状态选择行为（`FStateTreeConsiderationBase` 评分节点），情感/关系数值可直接作为 Consideration 权重输入，替代硬编码条件分支
 
 ### 4.6 行为执行层
@@ -307,6 +314,8 @@ FNpcRelationship {
 }
 ```
 
+这里的 `actions`、`emotion_delta`、`relationship_delta` 全是建议，不是权威状态写入。LLM 不能声明 `was_hit=true`、`affinity=100` 这类事实覆盖；即使模型输出了，也必须被本地解析/校验层忽略或拒绝。
+
 **输出解析降级策略（`LLMResponseParser` 多级容错）：**
 1. Function Calling / Tool Use（首选，Provider 支持时优先使用，结构化程度最高，无需正则提取）
 2. 严格 JSON Schema 校验（JSON Mode，Provider 不支持 Function Calling 时使用）
@@ -319,6 +328,8 @@ FNpcRelationship {
 - StateTree 负责状态流转：对话→动画→寻找目标SmartObject并交互
 - 委托 SmartObject 系统处理复杂的精细寻路和插槽对齐动画，降低大模型空间控制的幻觉。
 - **防幻觉：动态注入可用动作列表** — 构建 Prompt 前，通过 `USmartObjectSubsystem::FindSmartObjects()` 查询 NPC 周围可交互的 SmartObject（引擎内置 Octree/HashGrid 空间索引，比手动 Sphere Trace 更高效），将可用标签（如 `Available_Objects: [Chair, Cup, Sword]`）注入 System Prompt，强制 LLM 只能从合法列表中选择动作
+- **世界语境：同一句话在不同世界不是同一含义** — WorldContext 可选提供时代、题材、社会规则、常识边界和语言风格；LevelContext 可选提供地点级规则；KnowledgeScope 可选决定 NPC 知道多少；局部环境和多模态摘要必须来自 NPC 视角观察。都未配置时不编背景，只靠实际观察和 NPC 人设。
+- **权威边界：玩家说“我打了你”不是攻击事件** — 只有宿主战斗系统广播的 AuthoritativeGameEvent 才能触发受击、反击、降好感等真实状态变化；玩家文本只作为 PlayerUtterance 影响对话理解
 - **异步衔接：UE5.4+ StateTree WeakExecutionContext** — `FStateTreeTask_LLMQuery::EnterState()` 保存 `WeakContext = Context.MakeWeakExecutionContext()` 后发起异步 HTTP 请求；HTTP 回调中通过 `StrongContext.SendEvent()` 安全触发 StateTree 状态转换，无需自建指令队列
 
 ---

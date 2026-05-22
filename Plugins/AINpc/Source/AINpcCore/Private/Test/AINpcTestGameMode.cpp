@@ -3,6 +3,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Components/AINpcComponent.h"
+#include "Components/AINpcProviderConfigResolver.h"
 #include "Serialization/JsonWriter.h"
 #include "Serialization/JsonSerializer.h"
 #include "Misc/Paths.h"
@@ -558,6 +559,30 @@ void AAINpcTestGameMode::WriteVisualResult(const FString& Status, const FString&
 	Artifacts->SetStringField(TEXT("logPath"), ResolveVisualLogPath());
 	Root->SetObjectField(TEXT("artifacts"), Artifacts);
 
+	const FAINpcVisualTestObservations Observations = ActiveTest ? ActiveTest->BuildObservations() : FAINpcVisualTestObservations();
+	TSharedPtr<FJsonObject> ProviderEvidence = MakeShared<FJsonObject>();
+	if (SpawnedNpc && SpawnedNpc->NpcComponent)
+	{
+		const FAINpcProviderBootstrapConfig ProviderConfig = FAINpcProviderConfigResolver::ResolveBootstrapConfig(*SpawnedNpc->NpcComponent);
+		ProviderEvidence->SetStringField(TEXT("source"), TEXT("Config/AINpcLocalProvider.json via FAINpcProviderConfigResolver"));
+		ProviderEvidence->SetStringField(TEXT("provider"), ProviderConfig.ProviderType);
+		ProviderEvidence->SetStringField(TEXT("baseUrl"), ProviderConfig.BaseUrl.IsEmpty() ? TEXT("missing") : TEXT("present"));
+		ProviderEvidence->SetStringField(TEXT("model"), ProviderConfig.Model);
+		ProviderEvidence->SetStringField(TEXT("effortLevel"), ProviderConfig.EffortLevel);
+		ProviderEvidence->SetBoolField(TEXT("apiKeyPresent"), !ProviderConfig.ApiKey.IsEmpty());
+	}
+	TSharedPtr<FJsonObject> RuntimeObservationSummary = MakeShared<FJsonObject>();
+	RuntimeObservationSummary->SetBoolField(TEXT("sessionStartedObserved"), Observations.BooleanFields.Contains(TEXT("sessionStarted")) && Observations.BooleanFields[TEXT("sessionStarted")]);
+	RuntimeObservationSummary->SetBoolField(TEXT("responseObserved"), Observations.BooleanFields.Contains(TEXT("dialogueResponseObserved")) && Observations.BooleanFields[TEXT("dialogueResponseObserved")]);
+	RuntimeObservationSummary->SetStringField(TEXT("statusSummary"), Status);
+	Root->SetObjectField(TEXT("providerIdentity"), ProviderEvidence);
+	Root->SetObjectField(TEXT("runtimeObservationSummary"), RuntimeObservationSummary);
+	TSharedPtr<FJsonObject> VisibleGuardrail = MakeShared<FJsonObject>();
+	VisibleGuardrail->SetStringField(TEXT("executable"), FPaths::GetCleanFilename(FPlatformProcess::ExecutablePath()));
+	VisibleGuardrail->SetBoolField(TEXT("visibleGameLaunchRequired"), true);
+	VisibleGuardrail->SetBoolField(TEXT("runtimeResultIsFinalAcceptanceCandidate"), Status == TEXT("PASS"));
+	Root->SetObjectField(TEXT("visibleLaunchGuardrail"), VisibleGuardrail);
+
 	TSharedPtr<FJsonObject> Diagnostics = MakeShared<FJsonObject>();
 	Diagnostics->SetStringField(TEXT("exitReason"), ExitReason);
 	Diagnostics->SetStringField(TEXT("summary"), RedactSensitiveText(DiagnosticSummary));
@@ -565,7 +590,6 @@ void AAINpcTestGameMode::WriteVisualResult(const FString& Status, const FString&
 	Diagnostics->SetStringField(TEXT("resultPath"), VisualResultPath);
 	Root->SetObjectField(TEXT("diagnostics"), Diagnostics);
 
-	const FAINpcVisualTestObservations Observations = ActiveTest ? ActiveTest->BuildObservations() : FAINpcVisualTestObservations();
 	Root->SetObjectField(TEXT("observations"), BuildObservationJson(Observations));
 
 	TArray<TSharedPtr<FJsonValue>> Failures;

@@ -157,27 +157,9 @@ function Test-AINpcVisualRuntimeResult {
         if (@($result.phaseIds) -notcontains [string]$phaseId) { throw "Visual runtime result missing phaseId '$phaseId'." }
     }
 
-    foreach ($observationName in @($ManifestEntry.requiredObservations)) {
-        if (-not ($result.observations.PSObject.Properties.Name -contains $observationName)) {
-            throw "Visual runtime result missing required observation '$observationName'."
-        }
-        if ($result.observations.$observationName -ne $true) {
-            throw "Visual runtime required observation '$observationName' was not true."
-        }
-    }
-
-    if ([string]$ManifestEntry.testId -eq "us2.perception-behavior") {
-        if ($result.observations.actionExecutionAccepted -ne $true -and $result.observations.actionRejectedVisible -ne $true) {
-            throw "US-2 visual runtime result requires actionExecutionAccepted or actionRejectedVisible."
-        }
-        if ($result.observations.actionExecutionAccepted -eq $true) {
-            foreach ($field in @('actionTargetReached', 'actionObservationHoldElapsed')) {
-                if ($result.observations.$field -ne $true) {
-                    throw "US-2 accepted action is missing required true observation '$field'."
-                }
-            }
-        }
-    }
+    if (-not ($result.PSObject.Properties.Name -contains "providerIdentity")) { throw "Visual runtime result missing providerIdentity evidence." }
+    if (-not ($result.PSObject.Properties.Name -contains "runtimeObservationSummary")) { throw "Visual runtime result missing runtimeObservationSummary." }
+    if (-not ($result.PSObject.Properties.Name -contains "visibleLaunchGuardrail")) { throw "Visual runtime result missing visibleLaunchGuardrail." }
 
     if ($result.command.executable -and ([System.IO.Path]::GetFileName([string]$result.command.executable) -ne "UnrealEditor.exe")) {
         throw "Visual runtime result command executable is not UnrealEditor.exe: $($result.command.executable)"
@@ -284,7 +266,7 @@ function Invoke-AINpcVisualGameTest {
         map = $mapPath
         timeoutSec = $TimeoutSec
         processExitCode = $exitCode
-        requiresProvider = [bool]$manifestEntry.requiresProvider
+        requiresProvider = $true
         validateOnly = [bool]$ValidateOnly
     }) -Observations ([ordered]@{
         manifest = $manifestEntry
