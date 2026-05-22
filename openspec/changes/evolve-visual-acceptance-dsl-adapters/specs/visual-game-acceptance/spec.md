@@ -20,7 +20,7 @@
 - **THEN** 结果被报告为 diagnostic validation，而不是最终 NPC 行为验收
 
 ### Requirement: 最终验收 artifact 证明 provider 和 runtime path
-最终 visual game acceptance artifact MUST 包含安全证据，证明运行使用了配置的真实 provider path，并且 result 由游戏 runtime process 写出。
+最终 visual game acceptance artifact MUST 包含安全证据，证明运行使用了配置的真实 provider path，并且 result 由游戏 runtime process 写出。该最小证据从 Phase 2.7 起就是最终验收前提；后续阶段可以丰富 diagnostics，但不得把真实 provider/runtime path 证明推迟到 Phase 2.95。
 
 #### Scenario: Provider request 被尝试
 - **WHEN** 最终验收 scenario 发送 provider request

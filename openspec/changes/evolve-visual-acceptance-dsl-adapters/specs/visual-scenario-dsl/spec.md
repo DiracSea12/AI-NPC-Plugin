@@ -20,7 +20,7 @@
 - **THEN** validation fail，并报告 unknown field name 和 test id
 
 ### Requirement: Visual scenario step 具有明确 payload contract
-Visual scenario DSL MUST 只支持声明过的 step type，且每个 step type MUST 声明 required fields、optional fields 和 payload types。
+Visual scenario DSL MUST 只支持声明过的 step type，且每个 step type MUST 声明 required fields、optional fields 和 payload types。可执行 payload contract MUST 由 C++ scenario schema descriptor/validator 作为单一真源持有；scripts 和 docs 可以引用或校验该 contract，但不得各自硬编码另一套独立 schema 真源。
 
 #### Scenario: 使用 Dialogue start step
 - **WHEN** step 声明 `type: "dialogue.start"`
@@ -45,6 +45,10 @@ Visual scenario DSL MUST 只支持声明过的 step type，且每个 step type M
 #### Scenario: 使用未知 step type
 - **WHEN** scenario step 声明未知 `type`
 - **THEN** runtime execution 前 validation fail，并报告 step index、type 和 test id
+
+#### Scenario: Phase 2.7 使用 malformed step payload
+- **WHEN** scenario step 缺少该 step type payload contract 的必填字段，或字段类型不匹配
+- **THEN** validation fail，并报告 field name、step index、step type 和 test id
 
 #### Scenario: Phase 2.95 在 step 内使用未知字段
 - **WHEN** scenario step 包含该 step type payload contract 未声明的字段

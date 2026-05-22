@@ -50,7 +50,7 @@ Visual acceptance system MUST 通过 character driver interface 与 NPC characte
 - **THEN** visual acceptance scenarios 可以通过 driver 驱动和观察该 character，而不修改 core runner
 
 ### Requirement: Project adapters 在 Phase 2.9 起注册时不修改 core runner
-Visual acceptance system MUST 在 Phase 2.9 起暴露最小 registry mechanism，供 project modules 注册当前已有示例和验证覆盖的 fixture、event/action、character 和 observation adapters；没有当期示例和验证的 adapter category 不得进入 public API。
+Visual acceptance system MUST 在 Phase 2.9 起暴露最小 registry mechanism，供 project modules 注册当前已有示例和验证覆盖的 adapter category；优先覆盖 fixture resolver、observation provider 和必要 event/action seam。character driver 或其它 category 只有在当期示例和验证需要时才进入 public API。
 
 #### Scenario: Project adapter 被注册
 - **WHEN** project module 使用唯一 adapter id 和 category 注册 adapter
