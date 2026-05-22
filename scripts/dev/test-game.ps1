@@ -4,18 +4,11 @@ param(
 
 $ErrorActionPreference = "Continue"
 . (Join-Path $PSScriptRoot "TestResult.ps1")
-
-function ConvertTo-AINpcNormalizedRelativePath {
-    param([string]$Path)
-    if ([string]::IsNullOrWhiteSpace($Path)) {
-        return ""
-    }
-    return ([string]$Path).Replace('\', '/').TrimStart('./')
-}
+. (Join-Path $PSScriptRoot "game/VisualGameHarness.ps1")
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $gameTestRoot = Join-Path $scriptRoot "game"
-$manifestPath = Join-Path $gameTestRoot "visual-tests.json"
+$manifestPath = Join-Path (Get-AINpcRepoRoot) "Config/AINpcVisualScenarios.json"
 $context = New-AINpcTestRunContext -Layer "visual-game" -RunId $RunId
 $startTime = (Get-Date).ToUniversalTime()
 $testResults = @()
@@ -26,107 +19,64 @@ $commandArgs = @("-File", $MyInvocation.MyCommand.Path)
 if (-not [string]::IsNullOrWhiteSpace($RunId)) { $commandArgs += @("-RunId", $RunId) }
 $command = New-AINpcCommandInfo -Executable "pwsh" -Arguments $commandArgs -WorkingDirectory (Get-AINpcRepoRoot)
 $manifestEntries = @()
-$testScripts = @()
 
 try {
     if (-not (Test-Path $manifestPath)) {
-        throw "Visual game manifest not found: $manifestPath"
+        throw "Visual scenario config not found: $manifestPath"
     }
     $manifestEntries = @(Get-Content -Path $manifestPath -Raw | ConvertFrom-Json)
+    if ($manifestEntries.Count -eq 0) {
+        throw "No entries found in visual scenario config: $manifestPath"
+    }
 }
 catch {
     $status = "BLOCKED"
     $failures += [ordered]@{
-        id = "visual-manifest"
+        id = "visual-scenarios"
         message = ConvertTo-AINpcRedactedErrorSummary -ErrorRecord $_
         artifact = ConvertTo-AINpcRepoRelativePath $manifestPath
     }
 }
 
-try {
-    if (-not (Test-Path $gameTestRoot)) {
-        throw "Visual game script directory not found: $gameTestRoot"
-    }
-    $testScripts = @(Get-ChildItem -Path $gameTestRoot -Filter "test-*.ps1" -File | Sort-Object Name)
-    if ($testScripts.Count -eq 0) {
-        throw "No visual game scripts discovered under $gameTestRoot"
-    }
-}
-catch {
-    $status = "BLOCKED"
-    $failures += [ordered]@{
-        id = "visual-discovery"
-        message = ConvertTo-AINpcRedactedErrorSummary -ErrorRecord $_
-        artifact = ConvertTo-AINpcRepoRelativePath $gameTestRoot
-    }
-}
-
 if ($status -eq "PASS") {
-    $discoveredRelativeScripts = @($testScripts | ForEach-Object { ConvertTo-AINpcNormalizedRelativePath (ConvertTo-AINpcRepoRelativePath $_.FullName) })
     foreach ($entry in $manifestEntries) {
-        $manifestScript = ConvertTo-AINpcNormalizedRelativePath ([string]$entry.script)
-        if ($discoveredRelativeScripts -notcontains $manifestScript) {
-            $status = "BLOCKED"
-            $failures += [ordered]@{
-                id = "visual-manifest-discovery"
-                message = "Visual manifest references a script that dynamic discovery did not find: $manifestScript"
-                artifact = ConvertTo-AINpcRepoRelativePath $manifestPath
-            }
-        }
-    }
-}
-
-if ($status -eq "PASS") {
-    foreach ($script in $testScripts) {
-        $scriptPath = $script.FullName
-        $scriptRelativePath = ConvertTo-AINpcNormalizedRelativePath (ConvertTo-AINpcRepoRelativePath $scriptPath)
-        $matches = @($manifestEntries | Where-Object { (ConvertTo-AINpcNormalizedRelativePath ([string]$_.script)) -eq $scriptRelativePath })
-        if ($matches.Count -ne 1) {
-            $status = "FAIL"
-            $failures += [ordered]@{
-                id = "visual-manifest-match"
-                message = "Expected exactly one visual manifest entry for dynamically discovered script '$scriptRelativePath', found $($matches.Count)."
-                artifact = $scriptRelativePath
-            }
-            continue
-        }
-
-        $entry = $matches[0]
         $testId = [string]$entry.testId
         $testStart = (Get-Date).ToUniversalTime()
         $testStatus = "PASS"
         $exitCode = 0
         $message = ""
-        $scriptResultPath = $null
+        $childResultPath = $null
         $runtimeResultPath = $null
         $runtimeResult = $null
 
         Write-Host "Running visual game test: $testId"
         try {
             $childRunId = "$($context.RunId)-$($testId -replace '[^A-Za-z0-9._-]', '-')"
-            $scriptResultPath = Join-Path (Join-Path (Join-Path (Get-AINpcRepoRoot) "Saved/TestLogs") "visual-game") (Join-Path $childRunId "result.json")
-            $process = Start-Process -FilePath "pwsh" -ArgumentList @("-NoProfile", "-File", $scriptPath, "-RunId", $childRunId) -Wait -PassThru
+            $childResultPath = Join-Path (Join-Path (Join-Path (Get-AINpcRepoRoot) "Saved/TestLogs") "visual-game") (Join-Path $childRunId "result.json")
+
+            $harnessArgs = @(
+                "-NoProfile", "-File", (Join-Path $gameTestRoot "VisualGameHarness.ps1"),
+                "-TestId", $testId,
+                "-RunId", $childRunId
+            )
+            $process = Start-Process -FilePath "pwsh" -ArgumentList $harnessArgs -Wait -PassThru
             $exitCode = $process.ExitCode
 
-            if (-not (Test-Path $scriptResultPath)) {
-                throw "$testId did not emit the expected visual-game result artifact: $scriptResultPath"
+            if (-not (Test-Path $childResultPath)) {
+                throw "$testId did not emit the expected visual-game result artifact: $childResultPath"
             }
 
             try {
-                $scriptResult = Get-Content -Path $scriptResultPath -Raw | ConvertFrom-Json
+                $childResult = Get-Content -Path $childResultPath -Raw | ConvertFrom-Json
             }
             catch {
-                throw "$testId emitted malformed script result JSON: $scriptResultPath"
+                throw "$testId emitted malformed result JSON: $childResultPath"
             }
 
-            $testStatus = [string]$scriptResult.status
-            if ([string]$scriptResult.testId -ne $testId) {
-                throw "$testId script result identity mismatch: $($scriptResult.testId)"
-            }
-
-            $runtimeResultPath = [string]$scriptResult.artifacts.runtimeResult
+            $testStatus = [string]$childResult.status
+            $runtimeResultPath = [string]$childResult.artifacts.runtimeResult
             if ([string]::IsNullOrWhiteSpace($runtimeResultPath)) {
-                throw "$testId script result did not reference artifacts.runtimeResult."
+                throw "$testId result did not reference artifacts.runtimeResult."
             }
             if (-not [System.IO.Path]::IsPathRooted($runtimeResultPath)) {
                 $runtimeResultPath = Join-Path (Get-AINpcRepoRoot) $runtimeResultPath
@@ -151,23 +101,21 @@ if ($status -eq "PASS") {
             if ([int]$runtimeResult.schemaVersion -ne 1 -or [string]$runtimeResult.layer -ne "visual-game" -or [string]$runtimeResult.testId -ne $testId) {
                 throw "$testId runtime result JSON identity fields are invalid."
             }
-            foreach ($requiredObservation in @($entry.requiredObservations)) {
-                $observationName = [string]$requiredObservation
-                if ([string]::IsNullOrWhiteSpace($observationName)) {
-                    continue
+            foreach ($observationName in @($entry.requiredObservations)) {
+                $name = [string]$observationName
+                if ([string]::IsNullOrWhiteSpace($name)) { continue }
+                if (-not ($runtimeResult.observations.PSObject.Properties.Name -contains $name)) {
+                    throw "$testId runtime result missing required observation '$name'."
                 }
-                if (-not ($runtimeResult.observations.PSObject.Properties.Name -contains $observationName)) {
-                    throw "$testId runtime result missing required observation '$observationName'."
-                }
-                if (-not [bool]$runtimeResult.observations.$observationName) {
-                    throw "$testId required observation '$observationName' was not satisfied."
+                if (-not [bool]$runtimeResult.observations.$name) {
+                    throw "$testId required observation '$name' was not satisfied."
                 }
             }
             if (@($entry.allowedTerminalOutcomes) -notcontains [string]$runtimeResult.status) {
                 throw "$testId runtime result status '$($runtimeResult.status)' is not allowed."
             }
             if ($exitCode -ne 0 -or $testStatus -ne "PASS") {
-                throw "$testId script status $testStatus exitCode $exitCode."
+                throw "$testId status $testStatus exitCode $exitCode."
             }
         }
         catch {
@@ -178,7 +126,7 @@ if ($status -eq "PASS") {
             $failures += [ordered]@{
                 id = $testId
                 message = $message
-                artifact = ConvertTo-AINpcRepoRelativePath $(if ($runtimeResultPath) { $runtimeResultPath } else { $scriptResultPath })
+                artifact = ConvertTo-AINpcRepoRelativePath $(if ($runtimeResultPath) { $runtimeResultPath } else { $childResultPath })
             }
         }
         finally {
@@ -189,18 +137,16 @@ if ($status -eq "PASS") {
         $runtimeArtifacts += [ordered]@{
             testId = $testId
             runtimeResult = ConvertTo-AINpcRepoRelativePath $runtimeResultPath
-            scriptResult = ConvertTo-AINpcRepoRelativePath $scriptResultPath
+            childResult = ConvertTo-AINpcRepoRelativePath $childResultPath
             status = $(if ($runtimeResult) { [string]$runtimeResult.status } else { $testStatus })
         }
         $testResults += [ordered]@{
             id = $testId
-            script = ConvertTo-AINpcRepoRelativePath $scriptPath
             status = $testStatus
             exitCode = $exitCode
             durationMs = [int][Math]::Max(0, [Math]::Round(($testEnd - $testStart).TotalMilliseconds))
             message = $message
             runtimeResult = ConvertTo-AINpcRepoRelativePath $runtimeResultPath
-            scriptResult = ConvertTo-AINpcRepoRelativePath $scriptResultPath
         }
     }
 }
@@ -212,7 +158,6 @@ Write-AINpcTestResult -Context $context -Status $status -StartTimeUtc $startTime
     runtimeResults = @($runtimeArtifacts | ForEach-Object { $_.runtimeResult })
 }) -Diagnostics ([ordered]@{
     manifestCount = $manifestEntries.Count
-    discoveredCount = $testScripts.Count
     failedCount = @($testResults | Where-Object { $_.status -eq "FAIL" }).Count
 }) -Observations ([ordered]@{
     tests = @($testResults)

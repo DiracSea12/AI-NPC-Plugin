@@ -44,22 +44,13 @@ public class AINpcCore : ModuleRules
             "$(ProjectDir)/Config/AINpcStructuredOutputToolDescription.txt",
             StagedFileType.NonUFS);
         RuntimeDependencies.Add(
+            "$(ProjectDir)/Config/AINpcVisualScenarios.json",
+            StagedFileType.NonUFS);
+        RuntimeDependencies.Add(
             "$(ProjectDir)/Config/AINpcExamplePersona.txt",
             StagedFileType.NonUFS);
         RuntimeDependencies.Add(
-            "$(ProjectDir)/Config/AINpcVisualHarnessInitialPrompt.txt",
-            StagedFileType.NonUFS);
-        RuntimeDependencies.Add(
-            "$(ProjectDir)/Config/AINpcVisualHarnessDelayFiller.txt",
-            StagedFileType.NonUFS);
-        RuntimeDependencies.Add(
-            "$(ProjectDir)/Config/AINpcVisualHarnessUs2Prompt.txt",
-            StagedFileType.NonUFS);
-        RuntimeDependencies.Add(
-            "$(ProjectDir)/Config/AINpcVisualHarnessUs1Persona.txt",
-            StagedFileType.NonUFS);
-        RuntimeDependencies.Add(
-            "$(ProjectDir)/Config/AINpcVisualHarnessUs2Persona.txt",
+            "$(ProjectDir)/Config/AINpcVisualHarness*.txt",
             StagedFileType.NonUFS);
 
         // Automation tests need to be available in Development builds

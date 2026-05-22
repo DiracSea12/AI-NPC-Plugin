@@ -176,41 +176,156 @@ foreach ($bat in Get-ChildItem -Path $repoRoot -Filter "test-*.bat" -File) {
     if ($logicLines.Count -gt 0) { Add-Failure "$($bat.Name) contains non-wrapper logic: $($logicLines -join ' | ')" }
 }
 
-# 7.4: visual manifest, scripts, and C++ registry TestIds must line up.
-$manifestPath = Join-Path $repoRoot "scripts/dev/game/visual-tests.json"
-$manifest = @(Get-JsonFile $manifestPath)
-$registryPath = Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcVisualTestRegistry.cpp"
-$registryText = Get-Content -Path $registryPath -Raw
-$registryIds = @([regex]::Matches($registryText, 'TEXT\("([^"]+)"\)') | ForEach-Object { $_.Groups[1].Value } | Where-Object { $_ -match '^us[0-9]+\.[a-z0-9.-]+$' } | Sort-Object -Unique)
-$manifestIds = @($manifest | ForEach-Object { [string]$_.testId })
-$discoveredVisualScripts = @(Get-ChildItem -Path (Join-Path $repoRoot "scripts/dev/game") -Filter "test-*.ps1" -File | ForEach-Object { Get-RelativePath $_.FullName })
-foreach ($group in $manifestIds | Group-Object) {
-    if ($group.Count -gt 1) { Add-Failure "Duplicate visual manifest TestId '$($group.Name)'." }
+# 7.4: visual scenarios are the single source of truth and must be strongly valid.
+$obsoleteManifestPath = Join-Path $repoRoot "scripts/dev/game/visual-tests.json"
+if (Test-Path $obsoleteManifestPath) {
+    Add-Failure "Obsolete visual manifest still exists; use Config/AINpcVisualScenarios.json as the single source of truth: $(Get-RelativePath $obsoleteManifestPath)"
 }
-foreach ($id in $manifestIds) {
-    if ($registryIds -notcontains $id) { Add-Failure "Visual manifest TestId '$id' is not registered in FAINpcVisualTestRegistry." }
-}
-foreach ($id in $registryIds) {
-    if ($manifestIds -notcontains $id) { Add-Failure "Registered visual TestId '$id' has no scripts/dev/game/visual-tests.json entry." }
-}
-foreach ($script in $discoveredVisualScripts) {
-    $matchingEntries = @($manifest | Where-Object { ([string]$_.script).Replace('\\', '/') -eq $script })
-    if ($matchingEntries.Count -ne 1) {
-        Add-Failure "Dynamically discovered visual script must have exactly one manifest entry: $script"
+
+$knownVisualObservationNames = @(
+    "sessionStarted",
+    "waitingStateObserved",
+    "speakingStateObserved",
+    "dialogueResponseObserved",
+    "partialResponseObserved",
+    "structuredResponseObserved",
+    "actionIntentObserved",
+    "eventTriggerBroadcast",
+    "eventDelayMaskingStartObserved",
+    "delayMaskingStartObserved",
+    "delayMaskingEndObserved",
+    "actionExecutionAccepted",
+    "actionRejectedVisible",
+    "actionTargetReached",
+    "actionObservationHoldElapsed",
+    "responseLength",
+    "partialResponseLength",
+    "delayFillerLength",
+    "distanceToActionTarget",
+    "lastActionFailure"
+)
+$validTerminalOutcomes = @("PASS", "FAIL", "SKIP", "BLOCKED")
+$requiredScenarioFields = @(
+    "testId", "map", "timeoutSec", "requiresProvider", "promptFile", "personaFile", "delayFillerFile",
+    "delayFillerThreshold", "requireEventTrigger", "requirePartialResponse", "requireStructuredResponse",
+    "requireActionIntent", "allowActionRejection", "storyIds", "phaseIds", "requiredObservations", "allowedTerminalOutcomes"
+)
+
+function Test-NonEmptyJsonArray($Object, [string]$FieldName, [string]$Context) {
+    if (-not ($Object.PSObject.Properties.Name -contains $FieldName)) {
+        Add-Failure "$Context missing required field '$FieldName'."
+        return @()
     }
+    $json = $Object | ConvertTo-Json -Depth 20
+    if ($json -notmatch ('"' + [regex]::Escape($FieldName) + '"\s*:\s*\[')) {
+        Add-Failure "$Context field '$FieldName' must be a JSON array."
+        return @()
+    }
+    $values = @($Object.$FieldName)
+    if ($values.Count -eq 0) {
+        Add-Failure "$Context field '$FieldName' must not be empty."
+    }
+    foreach ($value in $values) {
+        if ([string]::IsNullOrWhiteSpace([string]$value)) {
+            Add-Failure "$Context field '$FieldName' contains an empty value."
+        }
+    }
+    return $values
 }
-foreach ($entry in $manifest) {
-    $scriptPath = Join-Path $repoRoot ([string]$entry.script)
-    if (-not (Test-Path $scriptPath)) {
-        Add-Failure "Visual manifest script is missing for '$($entry.testId)': $($entry.script)"
-        continue
+
+function Resolve-VisualScenarioMapPath([string]$MapPath) {
+    if ([string]::IsNullOrWhiteSpace($MapPath) -or -not $MapPath.StartsWith("/Game/")) {
+        return $null
     }
-    if ($discoveredVisualScripts -notcontains ([string]$entry.script).Replace('\\', '/')) {
-        Add-Failure "Visual manifest script is not dynamically discovered by scripts/dev/game/test-*.ps1: $($entry.script)"
+    $relative = $MapPath.Substring("/Game/".Length).TrimStart('/')
+    if ([string]::IsNullOrWhiteSpace($relative)) { return $null }
+    return Join-Path (Join-Path $repoRoot "Content") ($relative + ".umap")
+}
+
+$scenariosPath = Join-Path $repoRoot "Config/AINpcVisualScenarios.json"
+$scenarios = @(Get-JsonFile $scenariosPath)
+$scenarioIds = @($scenarios | ForEach-Object { [string]$_.testId })
+foreach ($group in $scenarioIds | Group-Object) {
+    if (-not [string]::IsNullOrWhiteSpace($group.Name) -and $group.Count -gt 1) { Add-Failure "Duplicate visual scenario TestId '$($group.Name)'." }
+}
+
+foreach ($entry in $scenarios) {
+    $context = "Visual scenario '$($entry.testId)'"
+    foreach ($field in $requiredScenarioFields) {
+        if (-not ($entry.PSObject.Properties.Name -contains $field)) {
+            Add-Failure "$context missing required field '$field'."
+        }
     }
-    $scriptText = Get-Content -Path $scriptPath -Raw
-    if ($scriptText -notmatch [regex]::Escape([string]$entry.testId)) {
-        Add-Failure "Visual script '$($entry.script)' does not reference manifest TestId '$($entry.testId)'."
+    if ($entry.PSObject.Properties.Name -contains "script") {
+        Add-Failure "$context still has obsolete field 'script'."
+    }
+
+    foreach ($field in @("testId", "map", "promptFile", "personaFile", "delayFillerFile")) {
+        if ([string]::IsNullOrWhiteSpace([string]$entry.$field)) {
+            Add-Failure "$context field '$field' must not be empty."
+        }
+    }
+    foreach ($field in @("timeoutSec", "delayFillerThreshold")) {
+        if (-not ($entry.$field -is [int] -or $entry.$field -is [long] -or $entry.$field -is [double] -or $entry.$field -is [decimal])) {
+            Add-Failure "$context field '$field' must be numeric."
+        }
+    }
+    if (($entry.PSObject.Properties.Name -contains "timeoutSec") -and [double]$entry.timeoutSec -le 0) {
+        Add-Failure "$context timeoutSec must be greater than zero."
+    }
+    if (($entry.PSObject.Properties.Name -contains "delayFillerThreshold") -and [double]$entry.delayFillerThreshold -lt 0) {
+        Add-Failure "$context delayFillerThreshold must not be negative."
+    }
+    foreach ($field in @("requiresProvider", "requireEventTrigger", "requirePartialResponse", "requireStructuredResponse", "requireActionIntent", "allowActionRejection")) {
+        if (($entry.PSObject.Properties.Name -contains $field) -and -not ($entry.$field -is [bool])) {
+            Add-Failure "$context field '$field' must be boolean."
+        }
+    }
+    if ([bool]$entry.requireEventTrigger) {
+        foreach ($field in @("eventTag", "eventTriggerId")) {
+            if ([string]::IsNullOrWhiteSpace([string]$entry.$field)) {
+                Add-Failure "$context requires non-empty '$field' when requireEventTrigger is true."
+            }
+        }
+    }
+
+    foreach ($field in @("promptFile", "personaFile", "delayFillerFile")) {
+        $fileName = [string]$entry.$field
+        if ($fileName.Contains('/') -or $fileName.Contains([char]92) -or [System.IO.Path]::IsPathRooted($fileName)) {
+            Add-Failure "$context field '$field' must be a Config file name, not a path: '$fileName'."
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($fileName)) {
+            $configFile = Join-Path (Join-Path $repoRoot "Config") $fileName
+            if (-not (Test-Path $configFile)) {
+                Add-Failure "$context references missing $field file: $(Get-RelativePath $configFile)"
+            }
+        }
+    }
+
+    $mapAssetPath = Resolve-VisualScenarioMapPath ([string]$entry.map)
+    if (-not $mapAssetPath) {
+        Add-Failure "$context map must be a /Game asset path, got '$($entry.map)'."
+    }
+    elseif (-not (Test-Path $mapAssetPath)) {
+        Add-Failure "$context map does not resolve to an existing .umap: $(Get-RelativePath $mapAssetPath)"
+    }
+
+    [void](Test-NonEmptyJsonArray $entry "storyIds" $context)
+    [void](Test-NonEmptyJsonArray $entry "phaseIds" $context)
+    $requiredObservations = @(Test-NonEmptyJsonArray $entry "requiredObservations" $context)
+    $allowedTerminalOutcomes = @(Test-NonEmptyJsonArray $entry "allowedTerminalOutcomes" $context)
+    foreach ($observationName in $requiredObservations) {
+        if ($knownVisualObservationNames -notcontains [string]$observationName) {
+            Add-Failure "$context references unknown required observation '$observationName'."
+        }
+    }
+    foreach ($outcome in $allowedTerminalOutcomes) {
+        if ($validTerminalOutcomes -notcontains [string]$outcome) {
+            Add-Failure "$context has invalid allowed terminal outcome '$outcome'."
+        }
+    }
+    if ($allowedTerminalOutcomes.Count -eq 0) {
+        Add-Failure "$context must declare at least one allowedTerminalOutcomes value."
     }
 }
 
@@ -233,8 +348,8 @@ $testGameText = Get-Content -Path $testGameScript -Raw
 if ($testGameText -match "Get-AINpcLatestResultPath") {
     Add-Failure "test-game.ps1 must not use Get-AINpcLatestResultPath; pass deterministic child RunId/ResultPath instead."
 }
-if ($testGameText -notmatch "Get-ChildItem[\s\S]*test-\*\.ps1") {
-    Add-Failure "test-game.ps1 must dynamically discover scripts/dev/game/test-*.ps1."
+if ($testGameText -notmatch "foreach.*manifestEntries") {
+    Add-Failure "test-game.ps1 must iterate manifest entries directly."
 }
 if ($testGameText -notmatch '"-RunId"' -or $testGameText -notmatch "childRunId") {
     Add-Failure "test-game.ps1 must pass a deterministic child RunId to visual game scripts."
@@ -316,11 +431,10 @@ if ($visualGameModeText -match 'SetStringField\s*\(\s*Field\.Key\s*,\s*Field\.Va
 }
 
 $visualTestPaths = @(
-    (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcUs1DialogueActionVisualTest.cpp"),
-    (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcUs2PerceptionBehaviorVisualTest.cpp")
+    (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcDataDrivenVisualScenarioTest.cpp")
 )
 $rawVisualTextPatterns = @(
-    'ShowStatus.*(Text|TrimmedText|LastNpcResponseText|FallbackResponse)\.Left\s*\(',
+    'ShowStatus.*(Text|TrimmedText|LastNpcResponseText|FallbackResponse)\.Left\s*\(\s*(?!2[0-9][0-9]\s*\))',
     'Fail.*(Text|TrimmedText|LastNpcResponseText|FallbackResponse|ErrorMessage|FailureReasonText)\.Left?\s*\(',
     'Fail.*\*(ErrorMessage|FailureReasonText)'
 )

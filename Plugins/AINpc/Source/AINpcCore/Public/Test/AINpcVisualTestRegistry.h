@@ -6,6 +6,7 @@
 class AINPCCORE_API FAINpcVisualTestRegistry
 {
 public:
+	static const TArray<FAINpcVisualTestDescriptor>& GetDescriptors();
 	static const FAINpcVisualTestDescriptor* Find(const FString& TestId);
 	static FString GetRegisteredTestIds();
 };

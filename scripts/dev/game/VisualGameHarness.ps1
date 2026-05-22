@@ -1,10 +1,24 @@
+param(
+    [string]$TestId,
+    [int]$TimeoutSec = 0,
+    [int]$HoldSeconds = 8,
+    [double]$ActionObservationHoldSeconds = 3.0,
+    [switch]$AllowExistingUEProcess,
+    [switch]$ValidateOnly,
+    [string]$RunId
+)
+
 $ErrorActionPreference = "Stop"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "TestResult.ps1")
 
+function Get-AINpcVisualScenarioConfigPath {
+    return Join-Path (Get-AINpcRepoRoot) "Config/AINpcVisualScenarios.json"
+}
+
 function Get-AINpcVisualTestManifest {
-    $manifestPath = Join-Path $PSScriptRoot "visual-tests.json"
+    $manifestPath = Get-AINpcVisualScenarioConfigPath
     if (-not (Test-Path $manifestPath)) {
-        throw "Visual test manifest not found: $manifestPath"
+        throw "Visual scenario config not found: $manifestPath"
     }
 
     return @(Get-Content -Path $manifestPath -Raw | ConvertFrom-Json)
@@ -15,10 +29,25 @@ function Get-AINpcVisualTestEntry {
 
     $matches = @(Get-AINpcVisualTestManifest | Where-Object { $_.testId -eq $TestId })
     if ($matches.Count -ne 1) {
-        throw "Expected exactly one visual manifest entry for '$TestId', found $($matches.Count)."
+        throw "Expected exactly one visual scenario entry for '$TestId', found $($matches.Count)."
     }
 
     return $matches[0]
+}
+
+function Resolve-AINpcGameMapFile {
+    param([Parameter(Mandatory = $true)][string]$MapPath)
+
+    if (-not $MapPath.StartsWith("/Game/")) {
+        throw "Visual scenario map must be a /Game asset path, got '$MapPath'."
+    }
+
+    $relative = $MapPath.Substring("/Game/".Length).TrimStart('/')
+    if ([string]::IsNullOrWhiteSpace($relative)) {
+        throw "Visual scenario map path is empty after /Game/: '$MapPath'."
+    }
+
+    return Join-Path (Join-Path (Get-AINpcRepoRoot) "Content") ($relative + ".umap")
 }
 
 function Write-AINpcVisualLogTail {
@@ -175,6 +204,7 @@ function Invoke-AINpcVisualGameTest {
     $uproject = Join-Path $repoRoot "VerifierHost.uproject"
     $editor = "G:\UE5\UnrealEngine\Engine\Binaries\Win64\UnrealEditor.exe"
     $mapPath = [string]$manifestEntry.map
+    $mapAssetPath = Resolve-AINpcGameMapFile -MapPath $mapPath
     if ([string]::IsNullOrWhiteSpace($RunId)) {
         $RunId = New-AINpcRunId (($TestId -replace '[^A-Za-z0-9._-]', '-'))
     }
@@ -203,6 +233,8 @@ function Invoke-AINpcVisualGameTest {
 
     try {
         Assert-AINpcVisibleLaunchContract -EditorPath $editor -Arguments $arguments
+        if (-not (Test-Path $uproject)) { throw "Project file not found at $uproject" }
+        if (-not (Test-Path $mapAssetPath)) { throw "Visual scenario map not found for '$mapPath': $mapAssetPath" }
 
         if ($ValidateOnly) {
             $status = "SKIP"
@@ -210,9 +242,6 @@ function Invoke-AINpcVisualGameTest {
         }
         else {
             if (-not (Test-Path $editor)) { throw "UnrealEditor.exe not found at $editor" }
-            if (-not (Test-Path $uproject)) { throw "Project file not found at $uproject" }
-            $mapAssetPath = Join-Path $repoRoot "Content/Maps/AINpcTestMap.umap"
-            if (-not (Test-Path $mapAssetPath)) { throw "Visual NPC test map not found: $mapAssetPath" }
 
             Assert-AINpcSingleVisibleInstance -AllowExistingUEProcess:$AllowExistingUEProcess
 
@@ -264,4 +293,19 @@ function Invoke-AINpcVisualGameTest {
 
     if ($status -eq "FAIL") { exit 1 }
     exit 0
+}
+
+if ($MyInvocation.InvocationName -ne '.') {
+    if ([string]::IsNullOrWhiteSpace($TestId)) {
+        throw "-TestId is required."
+    }
+
+    Invoke-AINpcVisualGameTest `
+        -TestId $TestId `
+        -TimeoutSec $TimeoutSec `
+        -HoldSeconds $HoldSeconds `
+        -ActionObservationHoldSeconds $ActionObservationHoldSeconds `
+        -AllowExistingUEProcess:$AllowExistingUEProcess `
+        -ValidateOnly:$ValidateOnly `
+        -RunId $RunId
 }

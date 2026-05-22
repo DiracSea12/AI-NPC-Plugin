@@ -378,7 +378,7 @@ void AAINpcTestGameMode::StartSelectedTest()
 	}
 
 	FAINpcVisualTestFixture Fixture{SpawnedNpc, SpawnedSmartObject};
-	FAINpcVisualTestContext Context{Fixture};
+	FAINpcVisualTestContext Context{Fixture, VisualTestId};
 	ActiveTest = Descriptor->CreateTest(Context);
 	if (!ActiveTest)
 	{

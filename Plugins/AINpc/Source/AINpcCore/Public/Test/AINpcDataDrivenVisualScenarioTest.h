@@ -1,19 +1,17 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/AINpcComponent.h"
 #include "Test/AINpcVisualTest.h"
 
 class AAINpcTestCharacter;
 class AAINpcTestSmartObjectActor;
-class UAnimMontage;
 class UNpcPersonaDataAsset;
 
-class FAINpcUs2PerceptionBehaviorVisualTest final : public IAINpcVisualTest
+class FAINpcDataDrivenVisualScenarioTest final : public IAINpcVisualTest
 {
 public:
-	FAINpcUs2PerceptionBehaviorVisualTest(AAINpcTestCharacter& InNpc, AAINpcTestSmartObjectActor& InSmartObject);
-	~FAINpcUs2PerceptionBehaviorVisualTest();
+	FAINpcDataDrivenVisualScenarioTest(AAINpcTestCharacter& InNpc, AAINpcTestSmartObjectActor& InSmartObject, FAINpcVisualScenarioConfig InConfig);
+	~FAINpcDataDrivenVisualScenarioTest();
 
 	bool Start(FString& OutFailureReason) override;
 	void Poll() override;
@@ -24,16 +22,14 @@ public:
 	FAINpcVisualTestObservations BuildObservations() const override;
 
 private:
-	void StartEventDialogue();
-	void BroadcastGameplayEventTrigger();
+	void StartDialogue();
 	void HandleTimeout();
 	void MarkActionObservationHoldElapsed();
 	void UpdateDialogueStateEvidence();
 	bool HasRequiredEvidence() const;
 	bool ConfigurePersona(FString& OutFailureReason);
+	void BroadcastEventTrigger();
 	void Fail(const FString& Reason);
-	bool LoadEventPrompt(FString& OutPrompt, FString& OutFailureReason) const;
-	bool LoadDelayFillerText(FString& OutText, FString& OutFailureReason) const;
 	void ShowStatus(const FString& Message, const FColor& Color, float DurationSeconds) const;
 
 	void OnNpcSessionStarted();
@@ -48,8 +44,9 @@ private:
 private:
 	AAINpcTestCharacter& Npc;
 	AAINpcTestSmartObjectActor& SmartObject;
+	FAINpcVisualScenarioConfig Config;
 	TObjectPtr<UNpcPersonaDataAsset> VisualHarnessPersona;
-	FTimerHandle StartDialogueTimerHandle;
+	FTimerHandle DialogueTimerHandle;
 	FTimerHandle TimeoutTimerHandle;
 	FTimerHandle ActionObservationHoldTimerHandle;
 	FDelegateHandle SessionStartedHandle;
@@ -66,21 +63,23 @@ private:
 	bool bDialogueSessionStartedObserved = false;
 	bool bWaitingStateObserved = false;
 	bool bSpeakingStateObserved = false;
-	bool bEventTriggerBroadcastObserved = false;
-	bool bEventDelayMaskingStartObserved = false;
-	bool bDelayMaskingEndObserved = false;
+	bool bDialogueResponseObserved = false;
 	bool bPartialResponseObserved = false;
 	bool bStructuredResponseObserved = false;
 	bool bActionIntentObserved = false;
+	bool bEventTriggerBroadcastObserved = false;
+	bool bEventDelayMaskingStartObserved = false;
+	bool bDelayMaskingStartObserved = false;
+	bool bDelayMaskingEndObserved = false;
 	bool bActionExecutionAccepted = false;
 	bool bActionRejectedVisible = false;
 	bool bActionTargetReached = false;
 	bool bActionObservationHoldStarted = false;
 	bool bActionObservationHoldElapsed = false;
+	float ActionObservationHoldSeconds = 3.0f;
 	FString FailureReason;
 	FString LastNpcResponseText;
 	FString LastPartialResponseText;
 	FString LastDelayFillerText;
 	FString LastActionFailureReason;
-	float ActionObservationHoldSeconds = 3.0f;
 };
