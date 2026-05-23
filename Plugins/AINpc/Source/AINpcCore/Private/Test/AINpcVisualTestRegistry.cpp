@@ -39,7 +39,7 @@ namespace
 		return KnownNames.Contains(Name);
 	}
 
-	TArray<FString> FindPromptPlaceholders(const FString& Text)
+	TArray<FString> FindRegistryPromptPlaceholders(const FString& Text)
 	{
 		TArray<FString> Placeholders;
 		int32 SearchFrom = 0;
@@ -234,7 +234,7 @@ namespace
 				return false;
 			}
 		}
-		for (const FString& Placeholder : FindPromptPlaceholders(PromptText))
+		for (const FString& Placeholder : FindRegistryPromptPlaceholders(PromptText))
 		{
 			if (!Config.Prompt.Variables.Contains(Placeholder))
 			{
