@@ -279,9 +279,12 @@ namespace
 
 		const TSharedPtr<FJsonObject>* FixtureObject = nullptr;
 		if (!JsonObject.TryGetObjectField(TEXT("fixture"), FixtureObject) || !FixtureObject || !FixtureObject->IsValid()) { OutError = FString::Printf(TEXT("scenario '%s' field 'fixture' must be an object"), *OutConfig.TestId); return false; }
-		if (!RejectUnknownFields(**FixtureObject, OutConfig.TestId, { TEXT("type") }, TEXT("fixture"), OutError)) { return false; }
-		if (!RequireStringField(**FixtureObject, OutConfig.TestId, TEXT("type"), OutConfig.Fixture.Type, OutError)) { return false; }
-		if (OutConfig.Fixture.Type != TEXT("npcWithSmartObject")) { OutError = FString::Printf(TEXT("scenario '%s' field 'fixture.type' has unsupported value '%s'"), *OutConfig.TestId, *OutConfig.Fixture.Type); return false; }
+			if ((*FixtureObject)->HasField(TEXT("type"))) { OutError = FString::Printf(TEXT("scenario '%s' field 'fixture.type' is rejected; use fixture.adapterId and fixture.kind"), *OutConfig.TestId); return false; }
+			if (!RejectUnknownFields(**FixtureObject, OutConfig.TestId, { TEXT("adapterId"), TEXT("kind") }, TEXT("fixture"), OutError)) { return false; }
+			if (!RequireStringField(**FixtureObject, OutConfig.TestId, TEXT("adapterId"), OutConfig.Fixture.AdapterId, OutError)) { return false; }
+			if (!RequireStringField(**FixtureObject, OutConfig.TestId, TEXT("kind"), OutConfig.Fixture.Kind, OutError)) { return false; }
+			if (OutConfig.Fixture.AdapterId != TEXT("builtin.characterFixture")) { OutError = FString::Printf(TEXT("scenario '%s' field 'fixture.adapterId' has unsupported value '%s'"), *OutConfig.TestId, *OutConfig.Fixture.AdapterId); return false; }
+			if (OutConfig.Fixture.Kind != TEXT("character") && OutConfig.Fixture.Kind != TEXT("characterWithSmartObject")) { OutError = FString::Printf(TEXT("scenario '%s' field 'fixture.kind' has unsupported value '%s'"), *OutConfig.TestId, *OutConfig.Fixture.Kind); return false; }
 
 		const TSharedPtr<FJsonObject>* PersonaObject = nullptr;
 		if (!JsonObject.TryGetObjectField(TEXT("persona"), PersonaObject) || !PersonaObject || !PersonaObject->IsValid()) { OutError = FString::Printf(TEXT("scenario '%s' field 'persona' must be an object"), *OutConfig.TestId); return false; }
@@ -331,11 +334,21 @@ namespace
 				if (!RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("promptRef"), Step.Payload.PromptRef, OutError)) { return false; }
 				if (Step.Payload.PromptRef != TEXT("prompt")) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.promptRef must be 'prompt'"), *OutConfig.TestId, StepIndex); return false; }
 			}
-			else if (Step.Type == TEXT("world.event"))
-			{
-				if (!RejectUnknownFields(**PayloadObject, OutConfig.TestId, { TEXT("eventTag") }, FString::Printf(TEXT("step[%d].payload"), StepIndex), OutError)) { return false; }
-				if (!RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("eventTag"), Step.Payload.EventTag, OutError)) { return false; }
-			}
+				else if (Step.Type == TEXT("world.event"))
+				{
+					if (!RejectUnknownFields(**PayloadObject, OutConfig.TestId, { TEXT("adapterId"), TEXT("eventTag"), TEXT("eventId"), TEXT("targetRef"), TEXT("payload") }, FString::Printf(TEXT("step[%d].payload"), StepIndex), OutError)) { return false; }
+					if (!RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("adapterId"), Step.Payload.AdapterId, OutError)) { return false; }
+					if (Step.Payload.AdapterId != TEXT("builtin.npcEvent")) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.adapterId has unsupported value '%s'"), *OutConfig.TestId, StepIndex, *Step.Payload.AdapterId); return false; }
+					const bool bHasEventTag = (*PayloadObject)->HasField(TEXT("eventTag"));
+					const bool bHasEventId = (*PayloadObject)->HasField(TEXT("eventId"));
+					if (bHasEventTag == bHasEventId) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload must declare exactly one of eventTag or eventId"), *OutConfig.TestId, StepIndex); return false; }
+					if (bHasEventTag && !RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("eventTag"), Step.Payload.EventTag, OutError)) { return false; }
+					if (bHasEventId && !RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("eventId"), Step.Payload.EventId, OutError)) { return false; }
+					if ((*PayloadObject)->HasField(TEXT("targetRef")) && !(*PayloadObject)->TryGetStringField(TEXT("targetRef"), Step.Payload.TargetRef)) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.targetRef must be a string"), *OutConfig.TestId, StepIndex); return false; }
+					if (!Step.Payload.TargetRef.IsEmpty() && Step.Payload.TargetRef != TEXT("fixture.npc")) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.targetRef has unsupported value '%s'"), *OutConfig.TestId, StepIndex, *Step.Payload.TargetRef); return false; }
+					const TSharedPtr<FJsonObject>* AdapterPayloadObject = nullptr;
+					if ((*PayloadObject)->HasField(TEXT("payload")) && (!(*PayloadObject)->TryGetObjectField(TEXT("payload"), AdapterPayloadObject) || !AdapterPayloadObject || !AdapterPayloadObject->IsValid() || !(*AdapterPayloadObject)->Values.IsEmpty())) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.payload must be an empty object when present"), *OutConfig.TestId, StepIndex); return false; }
+				}
 			else if (Step.Type == TEXT("wait.until"))
 			{
 				if (!RejectUnknownFields(**PayloadObject, OutConfig.TestId, { TEXT("timeoutSec") }, FString::Printf(TEXT("step[%d].payload"), StepIndex), OutError)) { return false; }
@@ -347,11 +360,15 @@ namespace
 				if (!(*StepObject)->TryGetObjectField(TEXT("condition"), ConditionObject) || !ConditionObject || !ConditionObject->IsValid()) { OutError = FString::Printf(TEXT("scenario '%s' step[%d] wait.until requires condition"), *OutConfig.TestId, StepIndex); return false; }
 				if (!ParseAssertion(*ConditionObject, OutConfig.TestId, FString::Printf(TEXT("step[%d].condition"), StepIndex), Step.Condition, OutError)) { return false; }
 			}
-			else if (Step.Type == TEXT("action.executeLatestIntent"))
-			{
-				if (!RejectUnknownFields(**PayloadObject, OutConfig.TestId, { TEXT("allowActionRejection") }, FString::Printf(TEXT("step[%d].payload"), StepIndex), OutError)) { return false; }
-				if (!(*PayloadObject)->TryGetBoolField(TEXT("allowActionRejection"), Step.Payload.bAllowActionRejection)) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.allowActionRejection must be boolean"), *OutConfig.TestId, StepIndex); return false; }
-			}
+				else if (Step.Type == TEXT("action.executeLatestIntent"))
+				{
+					if (!RejectUnknownFields(**PayloadObject, OutConfig.TestId, { TEXT("adapterId"), TEXT("actorRef"), TEXT("allowActionRejection") }, FString::Printf(TEXT("step[%d].payload"), StepIndex), OutError)) { return false; }
+					if (!RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("adapterId"), Step.Payload.AdapterId, OutError)) { return false; }
+					if (Step.Payload.AdapterId != TEXT("builtin.smartObjectAction")) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.adapterId has unsupported value '%s'"), *OutConfig.TestId, StepIndex, *Step.Payload.AdapterId); return false; }
+					if (!RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("actorRef"), Step.Payload.ActorRef, OutError)) { return false; }
+					if (Step.Payload.ActorRef != TEXT("fixture.npc")) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.actorRef has unsupported value '%s'"), *OutConfig.TestId, StepIndex, *Step.Payload.ActorRef); return false; }
+					if (!(*PayloadObject)->TryGetBoolField(TEXT("allowActionRejection"), Step.Payload.bAllowActionRejection)) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.allowActionRejection must be boolean"), *OutConfig.TestId, StepIndex); return false; }
+				}
 			else if (Step.Type == TEXT("observe.hold"))
 			{
 				if (!RejectUnknownFields(**PayloadObject, OutConfig.TestId, { TEXT("observation"), TEXT("durationSec") }, FString::Printf(TEXT("step[%d].payload"), StepIndex), OutError)) { return false; }
@@ -373,12 +390,12 @@ namespace
 
 	TUniquePtr<IAINpcVisualTest> CreateDataDrivenScenarioTest(FAINpcVisualTestContext& Context)
 	{
-		if (!Context.Fixture.Npc || !Context.Fixture.SmartObject) { return nullptr; }
+		if (!Context.Fixture.Npc) { return nullptr; }
 		for (const FAINpcVisualTestDescriptor& Descriptor : FAINpcVisualTestRegistry::GetDescriptors())
 		{
 			if (Descriptor.TestId == Context.TestId && Descriptor.ScenarioConfig.IsSet())
 			{
-				return MakeUnique<FAINpcDataDrivenVisualScenarioTest>(*Context.Fixture.Npc, *Context.Fixture.SmartObject, Descriptor.ScenarioConfig.GetValue());
+				return MakeUnique<FAINpcDataDrivenVisualScenarioTest>(Context, Descriptor.ScenarioConfig.GetValue());
 			}
 		}
 		return nullptr;
@@ -407,7 +424,7 @@ namespace
 			Descriptor.TestId = Config.TestId;
 			Descriptor.StoryIds = Config.StoryIds;
 			Descriptor.PhaseIds = Config.PhaseIds;
-			Descriptor.FixtureKind = EAINpcVisualTestFixtureKind::NpcWithSmartObject;
+			Descriptor.FixtureKind = Config.Fixture.Kind == TEXT("character") ? EAINpcVisualTestFixtureKind::NpcOnly : EAINpcVisualTestFixtureKind::NpcWithSmartObject;
 			Descriptor.CreateTest = &CreateDataDrivenScenarioTest;
 			Descriptor.ScenarioConfig = MoveTemp(Config);
 			Descriptors.Add(MoveTemp(Descriptor));

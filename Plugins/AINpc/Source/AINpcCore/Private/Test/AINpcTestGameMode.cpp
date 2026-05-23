@@ -245,6 +245,80 @@ namespace
 		return DefaultDelaySeconds;
 	}
 
+
+	struct FAINpcBuiltInFixtureAdapter
+	{
+		AAINpcTestGameMode& Owner;
+		int32 ScenarioIndex = 0;
+
+		bool Prepare(EAINpcVisualTestFixtureKind FixtureKind, AAINpcTestCharacter*& OutNpc, AAINpcTestSmartObjectActor*& OutSmartObject, FString& OutFailureReason) const
+		{
+			OutSmartObject = nullptr;
+			if (!SpawnNpc(OutNpc, OutFailureReason))
+			{
+				return false;
+			}
+
+			if (FixtureKind == EAINpcVisualTestFixtureKind::NpcWithSmartObject && !SpawnSmartObject(OutSmartObject, OutFailureReason))
+			{
+				return false;
+			}
+
+			return true;
+		}
+
+		bool SpawnNpc(AAINpcTestCharacter*& OutNpc, FString& OutFailureReason) const
+		{
+			UWorld* World = Owner.GetWorld();
+			if (!World)
+			{
+				OutFailureReason = TEXT("Visual harness failed because World is null.");
+				return false;
+			}
+
+			const FVector SpawnLocation(500.0f, 0.0f, 100.0f);
+			FActorSpawnParameters NpcParams;
+			NpcParams.Name = FName(*FString::Printf(TEXT("AutoTestNpc_%d"), ScenarioIndex));
+			NpcParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+			OutNpc = World->SpawnActor<AAINpcTestCharacter>(AAINpcTestCharacter::StaticClass(), SpawnLocation, FRotator::ZeroRotator, NpcParams);
+			if (!OutNpc || !OutNpc->NpcComponent)
+			{
+				OutFailureReason = TEXT("Failed to spawn NPC test character or its UAINpcComponent is null.");
+				return false;
+			}
+			if (!OutNpc->HasValidVisualMeshAndAnimation())
+			{
+				OutFailureReason = TEXT("Visual NPC is invalid because mannequin mesh or animation blueprint is missing.");
+				return false;
+			}
+
+			return true;
+		}
+
+		bool SpawnSmartObject(AAINpcTestSmartObjectActor*& OutSmartObject, FString& OutFailureReason) const
+		{
+			UWorld* World = Owner.GetWorld();
+			if (!World)
+			{
+				OutFailureReason = TEXT("Visual harness failed because World is null.");
+				return false;
+			}
+
+			const FVector SmartObjectLocation(900.0f, 0.0f, 40.0f);
+			FActorSpawnParameters SmartObjectParams;
+			SmartObjectParams.Name = FName(*FString::Printf(TEXT("AutoTestSmartObject_%d"), ScenarioIndex));
+			SmartObjectParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+			OutSmartObject = World->SpawnActor<AAINpcTestSmartObjectActor>(AAINpcTestSmartObjectActor::StaticClass(), SmartObjectLocation, FRotator::ZeroRotator, SmartObjectParams);
+			if (!OutSmartObject)
+			{
+				OutFailureReason = TEXT("Failed to spawn runtime SmartObject actor for the visual harness.");
+				return false;
+			}
+
+			return true;
+		}
+	};
+
 	FString ResolveVisualLogPath()
 	{
 		FString RequestedPath;
@@ -335,25 +409,18 @@ void AAINpcTestGameMode::StartHarness()
 
 bool AAINpcTestGameMode::SpawnFixture(const EAINpcVisualTestFixtureKind FixtureKind, FString& OutFailureReason)
 {
+	SpawnedNpc = nullptr;
 	SpawnedSmartObject = nullptr;
 
-	if (!SpawnNpc(OutFailureReason))
+	FAINpcBuiltInFixtureAdapter FixtureAdapter{*this, bSuiteMode ? VisualSuiteIndex : 0};
+	AAINpcTestCharacter* PreparedNpc = nullptr;
+	AAINpcTestSmartObjectActor* PreparedSmartObject = nullptr;
+	if (!FixtureAdapter.Prepare(FixtureKind, PreparedNpc, PreparedSmartObject, OutFailureReason))
 	{
 		return false;
 	}
-
-	switch (FixtureKind)
-	{
-	case EAINpcVisualTestFixtureKind::NpcOnly:
-		break;
-
-	case EAINpcVisualTestFixtureKind::NpcWithSmartObject:
-		if (!SpawnSmartObject(OutFailureReason))
-		{
-			return false;
-		}
-		break;
-	}
+	SpawnedNpc = PreparedNpc;
+	SpawnedSmartObject = PreparedSmartObject;
 
 	if (!PositionObserverCamera(OutFailureReason))
 	{
@@ -361,57 +428,6 @@ bool AAINpcTestGameMode::SpawnFixture(const EAINpcVisualTestFixtureKind FixtureK
 	}
 
 	UE_LOG(LogTemp, Warning, TEXT("=== Visual fixture spawned. TestId=%s Npc=%s SmartObject=%s ==="), *VisualTestId, *SpawnedNpc->GetName(), SpawnedSmartObject ? *SpawnedSmartObject->GetName() : TEXT("not requested"));
-	return true;
-}
-
-bool AAINpcTestGameMode::SpawnNpc(FString& OutFailureReason)
-{
-	UWorld* World = GetWorld();
-	if (!World)
-	{
-		OutFailureReason = TEXT("Visual harness failed because World is null.");
-		return false;
-	}
-
-	const FVector SpawnLocation(500.0f, 0.0f, 100.0f);
-	FActorSpawnParameters NpcParams;
-	NpcParams.Name = FName(*FString::Printf(TEXT("AutoTestNpc_%d"), bSuiteMode ? VisualSuiteIndex : 0));
-	NpcParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
-	SpawnedNpc = World->SpawnActor<AAINpcTestCharacter>(AAINpcTestCharacter::StaticClass(), SpawnLocation, FRotator::ZeroRotator, NpcParams);
-	if (!SpawnedNpc || !SpawnedNpc->NpcComponent)
-	{
-		OutFailureReason = TEXT("Failed to spawn NPC test character or its UAINpcComponent is null.");
-		return false;
-	}
-	if (!SpawnedNpc->HasValidVisualMeshAndAnimation())
-	{
-		OutFailureReason = TEXT("Visual NPC is invalid because mannequin mesh or animation blueprint is missing.");
-		return false;
-	}
-
-	return true;
-}
-
-bool AAINpcTestGameMode::SpawnSmartObject(FString& OutFailureReason)
-{
-	UWorld* World = GetWorld();
-	if (!World)
-	{
-		OutFailureReason = TEXT("Visual harness failed because World is null.");
-		return false;
-	}
-
-	const FVector SmartObjectLocation(900.0f, 0.0f, 40.0f);
-	FActorSpawnParameters SmartObjectParams;
-	SmartObjectParams.Name = FName(*FString::Printf(TEXT("AutoTestSmartObject_%d"), bSuiteMode ? VisualSuiteIndex : 0));
-	SmartObjectParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
-	SpawnedSmartObject = World->SpawnActor<AAINpcTestSmartObjectActor>(AAINpcTestSmartObjectActor::StaticClass(), SmartObjectLocation, FRotator::ZeroRotator, SmartObjectParams);
-	if (!SpawnedSmartObject)
-	{
-		OutFailureReason = TEXT("Failed to spawn runtime SmartObject actor for the visual harness.");
-		return false;
-	}
-
 	return true;
 }
 
@@ -536,7 +552,7 @@ void AAINpcTestGameMode::StartSelectedTest()
 	}
 
 	FAINpcVisualTestFixture Fixture{SpawnedNpc, SpawnedSmartObject};
-	FAINpcVisualTestContext Context{Fixture, VisualTestId};
+	FAINpcVisualTestContext Context{Fixture, GetWorld(), VisualTestId, VisualRunId};
 	ActiveTest = Descriptor->CreateTest(Context);
 	if (!ActiveTest)
 	{

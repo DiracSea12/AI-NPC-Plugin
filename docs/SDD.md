@@ -165,6 +165,7 @@ AINpcCore/                    # 必选模块
 │   │   ├── StateTree/
 │   │   │   ├── StateTreeTask_LLMQuery.h        // FStateTreeTask_LLMQuery
 │   │   │   └── StateTreeTask_ExecuteSmartObject.h  // #if WITH_SMARTOBJECTS
+│   │   ├── NavigationReachability.h    // NavMesh/PathFollowing 可达性与失败归因
 │   │   ├── SmartObjectBridge.h          // #if WITH_SMARTOBJECTS
 │   │   ├── LLMResponseParser.h          // 四级降级解析
 │   │   └── ActionValidator.h            // IActionValidator 接口
@@ -977,8 +978,19 @@ enum class EMovementFailureReason : uint8
     PartialPathRejected,       // 只找到 partial path，但动作不允许 partial path
     BlockedByStaticGeometry,   // 墙、不可通行土包、空气墙等静态碰撞阻挡
     BlockedByDynamicObstacle,  // 角色、门、临时物体等动态阻挡
+    NoProgress,                // PathFollowing 未失败但距离目标长期无有效下降
     Aborted,                   // 被高优先级事件、玩家取消或 StateTree 中断
     Timeout,                   // 超过动作移动时间预算仍未到达
+};
+
+UENUM(BlueprintType)
+enum class EMovementRecoverability : uint8
+{
+    Unknown,
+    RecoverableByRetry,              // 动态阻挡等短期状态，允许消耗一次重规划/重试预算
+    RecoverableByAlternativeAction,  // 存在本地已验证的可达替代动作/目标
+    RecoverableByWorldChange,        // 需要门打开、平台到位、玩家让路等外部状态变化
+    UnrecoverableForCurrentAction,   // 当前动作在当前世界状态下不可完成
 };
 
 USTRUCT(BlueprintType)
@@ -997,6 +1009,33 @@ struct FNavigationReachabilityResult
 
     UPROPERTY(BlueprintReadOnly)
     FString DebugSummary;
+};
+
+USTRUCT(BlueprintType)
+struct FMovementFailureObservation
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadOnly)
+    FGameplayTag ActionType;
+
+    UPROPERTY(BlueprintReadOnly)
+    FString Target;
+
+    UPROPERTY(BlueprintReadOnly)
+    EMovementFailureReason FailureReason = EMovementFailureReason::None;
+
+    UPROPERTY(BlueprintReadOnly)
+    EMovementRecoverability Recoverability = EMovementRecoverability::Unknown;
+
+    UPROPERTY(BlueprintReadOnly)
+    int32 RetryBudgetRemaining = 0;
+
+    UPROPERTY(BlueprintReadOnly)
+    TArray<FNpcAction> AvailableAlternatives;
+
+    UPROPERTY(BlueprintReadOnly)
+    FString LlmVisibleSummary;
 };
 
 // GameInstanceSubsystem，全局管理 SmartObject 交互
@@ -1065,8 +1104,8 @@ struct FSmartObjectCandidate
 **检查时机：**
 
 1. Prompt 注入前：`FindNearbyObjects()` 得到候选 SmartObject/目标后，只对当前候选集合做 NavMesh 投影和路径预检。`Reachable` 才能进入可执行动作列表；`Partial` 仅在动作定义显式允许 partial path 时进入；`Unreachable` 不作为可执行动作暴露给 LLM。
-2. 执行前：动作真正进入 `FStateTreeTask_ExecuteSmartObject` 时重新检查一次。原因很简单，槽位可能被占、门可能关上、目标可能移动，拿旧结果执行就是给 bug 铺红毯。
-3. 执行中：统一走 `AAIController::MoveTo` / PathFollowing 结果，不允许 `SetActorLocation` 瞬移兜底，不允许 LLM 输出路径点，不允许碰撞穿透。PathFollowing 失败必须映射到 `EMovementFailureReason`。
+2. 执行前：动作真正进入 `FStateTreeTask_ExecuteSmartObject` 时重新检查一次。槽位可能被占、门可能关上、目标可能移动；旧结果不能直接当成执行许可。
+3. 执行中：统一走 `AAIController::MoveTo` / PathFollowing 结果，不允许 `SetActorLocation` 瞬移兜底，不允许 LLM 输出路径点，不允许碰撞穿透。PathFollowing 失败必须映射到 `EMovementFailureReason`；如果 PathFollowing 未显式失败但距离目标在 `NoProgressTimeout` 内没有超过 `ProgressDistanceEpsilon` 的有效下降，归因 `NoProgress`。
 
 **地形/阻挡归类：**
 
@@ -1075,16 +1114,42 @@ struct FSmartObjectCandidate
 | 墙或封闭门挡住目标 | 路径查询失败为 `NoPath`，或执行中归因 `BlockedByStaticGeometry` |
 | 土包、坡、台阶 | 由 NavMesh/Agent 半径/坡度配置决定；可走就是 `Reachable`，不可走就是 `OffNavMesh`/`NoPath`，插件不写地形特判 |
 | 空气墙 | 如果 NavMesh 已反映碰撞，预检阶段失败；如果 NavMesh 没反映但运行时碰撞阻挡，PathFollowing 失败归因 `BlockedByStaticGeometry` |
-| 玩家、NPC、移动物体临时挡路 | 执行中归因 `BlockedByDynamicObstacle`，最多允许一次短延迟重新规划 |
+| 玩家、NPC、移动物体临时挡路 | 执行中归因 `BlockedByDynamicObstacle` 或 `NoProgress`，最多允许一次短延迟重新规划 |
 | 目标离开 NavMesh 或被销毁 | `OffNavMesh` / `InvalidTarget`，直接失败，不重试 |
 | 只有 partial path | 默认 `PartialPathRejected`；项目动作显式声明允许 partial path 时才可执行到最近可达点 |
+
+**卡住观测与可恢复性：**
+
+`FMovementFailureObservation` 是 LLM 知道“我刚才过不去”的唯一入口。它由移动执行器和 StateTree 写入 `UAINpcComponent` 的短期 SystemState，上限只保留最近一次或当前动作链相关失败，避免把运行时流水账塞进 Prompt。
+
+| 运行时事实 | Recoverability | LLM 可做什么 |
+|------------|----------------|--------------|
+| `BlockedByDynamicObstacle` / `NoProgress` 且还有重试预算 | `RecoverableByRetry` | 等待本地重试结果；不得自己生成路线 |
+| 存在另一个已通过 `NavigationReachability` 的目标或动作 | `RecoverableByAlternativeAction` | 从 `AvailableAlternatives` 中选择，或解释将改去另一个目标 |
+| 需要门打开、平台移动、玩家让路、项目事件解除阻挡 | `RecoverableByWorldChange` | 请求玩家或世界状态变化；不得声称自己能穿过去 |
+| `OffNavMesh`、`NoPath`、`BlockedByStaticGeometry`、`PartialPathRejected` 且无替代动作 | `UnrecoverableForCurrentAction` | 角色化说明失败并回到 Idle/等待新指令 |
+
+PromptBuilder 下一轮把该事实作为独立 `FLLMContextBlock` 注入，`Authority = SystemState`，内容使用结构化摘要，例如：
+
+```json
+{
+  "event": "MovementFailed",
+  "action": "Action.GoTo",
+  "target": "Chest_01",
+  "reason": "BlockedByStaticGeometry",
+  "recoverability": "UnrecoverableForCurrentAction",
+  "available_alternatives": ["Action.SayCannotReach", "Action.GoTo:Chest_02"]
+}
+```
+
+LLM 只能消费这个事实。它不能把 `UnrecoverableForCurrentAction` 改写成可恢复，不能添加未验证的新目标，也不能输出路径点或“绕过去”的伪动作。
 
 **失败后的行为：**
 
 - 已 Claim 的 SmartObject 槽位必须立即释放。
 - 广播 `ActionFailed` / `MovementFailed` 事件，载荷包含 `ActionType`、`Target`、`Reachability`、`FailureReason` 和简短 `DebugSummary`。
 - StateTree 可以选择同类可达替代目标、转成对话说明（例如“我过不去”）、或回到 Idle。
-- 静态不可达（`OffNavMesh`、`NoPath`、`BlockedByStaticGeometry`、`PartialPathRejected`）不重试；动态阻挡最多一次短延迟重新规划，仍失败就结束。无限重试就是把 NPC 变成卡墙演示器，禁止。
+- 静态不可达（`OffNavMesh`、`NoPath`、`BlockedByStaticGeometry`、`PartialPathRejected`）不重试；动态阻挡最多一次短延迟重新规划，仍失败就结束。禁止无限重试。
 - 下一次 LLM 请求只接收结构化失败摘要和新的可用动作列表；LLM 不能获得“请自己规划路线”的权限。
 
 **可视化验收：**
@@ -1763,22 +1828,26 @@ private:
     bool ValidateActionWhitelist(const FNpcAction& Action,
         const TArray<FSmartObjectCandidate>& Available) const;
 
-    // ② 人设边界检测：对话内容与人设的一致性评分
+    // ② 可达性校验：移动类动作必须拥有 Reachable 或显式允许的 Partial 结果
+    bool ValidateActionReachability(const FNpcAction& Action,
+        const TArray<FSmartObjectCandidate>& Available) const;
+
+    // ③ 人设边界检测：对话内容与人设的一致性评分
     bool ValidatePersonaBoundary(const FString& Dialogue,
         const UNpcPersonaDataAsset* Persona) const;
 
-    // ③ 情感-行为一致性：当前情感状态与输出倾向是否矛盾
+    // ④ 情感-行为一致性：当前情感状态与输出倾向是否矛盾
     bool ValidateEmotionConsistency(const FParsedLLMResponse& Response,
         const FVADState& CurrentEmotion) const;
 
-    // ④ 权威边界校验：拒绝玩家自报事实驱动的绝对状态/动作事实
+    // ⑤ 权威边界校验：拒绝玩家自报事实驱动的绝对状态/动作事实
     bool ValidateAuthorityBoundary(const FParsedLLMResponse& Response,
         const TArray<FLLMContextBlock>& ContextBlocks) const;
 
-    // ⑤ System Prompt 泄露检测：余弦相似度 > 0.85 则拒绝
+    // ⑥ System Prompt 泄露检测：余弦相似度 > 0.85 则拒绝
     bool DetectPromptLeakage(const FString& Dialogue) const;
 
-    // ⑥ 敏感内容过滤
+    // ⑦ 敏感内容过滤
     bool FilterSensitiveContent(const FString& Dialogue) const;
 };
 ```
@@ -2489,7 +2558,7 @@ CREATE TABLE IF NOT EXISTS npc_relationships (
 | UNpcEventSubsystem | 全局事件广播 + FInstancedStruct 载荷 | FR-34, FR-35 |
 | FLLMResponseParser | 四级降级解析（Function Calling→严格JSON→宽松→纯文本） | FR-27 |
 | EmotionTypes.h / FRelationshipDelta | 结构体定义占位（FVADState + FRelationshipDelta），Phase 4 实现行为逻辑 | FR-20 |
-| FStateTreeTask_ExecuteSmartObject | 动作执行 + 内联白名单校验 | FR-29, FR-32 |
+| FStateTreeTask_ExecuteSmartObject | 动作执行 + 内联白名单校验 + 移动可达性预检/失败归因 | FR-29, FR-32, FR-32A |
 | USmartObjectBridge | 槽位查找/占用/释放/位置获取 | FR-31 |
 | FSSEParser | SSE 流式解析器 | FR-4 |
 | UAnthropicProvider | Anthropic 接入 | FR-1 |

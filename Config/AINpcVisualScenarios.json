@@ -7,7 +7,8 @@
     "storyIds": ["US-1"],
     "phaseIds": ["phase2.7"],
     "fixture": {
-      "type": "npcWithSmartObject"
+      "adapterId": "builtin.characterFixture",
+      "kind": "characterWithSmartObject"
     },
     "persona": {
       "file": "AINpcVisualHarnessUs1Persona.txt",
@@ -46,6 +47,8 @@
       {
         "type": "action.executeLatestIntent",
         "payload": {
+          "adapterId": "builtin.smartObjectAction",
+          "actorRef": "fixture.npc",
           "allowActionRejection": false
         }
       },
@@ -75,7 +78,8 @@
     "storyIds": ["US-2"],
     "phaseIds": ["phase2.7"],
     "fixture": {
-      "type": "npcWithSmartObject"
+      "adapterId": "builtin.characterFixture",
+      "kind": "characterWithSmartObject"
     },
     "persona": {
       "file": "AINpcVisualHarnessUs2Persona.txt",
@@ -99,7 +103,9 @@
       {
         "type": "world.event",
         "payload": {
-          "eventTag": "AINpc.Tests.Route.Match"
+          "adapterId": "builtin.npcEvent",
+          "eventTag": "AINpc.Tests.Route.Match",
+          "targetRef": "fixture.npc"
         }
       },
       {
@@ -123,6 +129,8 @@
       {
         "type": "action.executeLatestIntent",
         "payload": {
+          "adapterId": "builtin.smartObjectAction",
+          "actorRef": "fixture.npc",
           "allowActionRejection": true
         }
       }
@@ -149,7 +157,8 @@
     "storyIds": ["US-1"],
     "phaseIds": ["phase2.7"],
     "fixture": {
-      "type": "npcWithSmartObject"
+      "adapterId": "builtin.characterFixture",
+      "kind": "characterWithSmartObject"
     },
     "persona": {
       "file": "AINpcVisualHarnessPhase27Persona.txt",
@@ -185,6 +194,8 @@
       {
         "type": "action.executeLatestIntent",
         "payload": {
+          "adapterId": "builtin.smartObjectAction",
+          "actorRef": "fixture.npc",
           "allowActionRejection": false
         }
       },

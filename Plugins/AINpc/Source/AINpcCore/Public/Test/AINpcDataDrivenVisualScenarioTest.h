@@ -6,11 +6,12 @@
 class AAINpcTestCharacter;
 class AAINpcTestSmartObjectActor;
 class UNpcPersonaDataAsset;
+struct FAINpcVisualScenarioRuntimeView;
 
 class FAINpcDataDrivenVisualScenarioTest final : public IAINpcVisualTest
 {
 public:
-	FAINpcDataDrivenVisualScenarioTest(AAINpcTestCharacter& InNpc, AAINpcTestSmartObjectActor& InSmartObject, FAINpcVisualScenarioConfig InConfig);
+	FAINpcDataDrivenVisualScenarioTest(const FAINpcVisualTestContext& Context, FAINpcVisualScenarioConfig InConfig);
 	~FAINpcDataDrivenVisualScenarioTest();
 
 	bool Start(FString& OutFailureReason) override;
@@ -23,7 +24,7 @@ public:
 	TArray<FAINpcVisualTestStepDiagnostic> BuildStepDiagnostics() const override;
 
 private:
-	void BindNpcDelegates();
+	bool StartDialogueObservation(FString& OutFailureReason);
 	void StartNextStep();
 	void PollActiveStep();
 	bool RunStep(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason);
@@ -46,30 +47,12 @@ private:
 	void CompleteCurrentStep();
 	void FinalizeActiveStepDiagnostic(const FString& Status, const FString& Reason);
 
-	void OnNpcSessionStarted();
-	void OnNpcResponse(const FString& Text);
-	void OnNpcPartialResponse(const FString& Text);
-	void OnNpcError(const FString& ErrorMessage);
-	void OnNpcSessionEnded();
-	void OnNpcDegraded(const FString& FallbackResponse, const FString& FailureReason);
-	void OnNpcDelayMaskingStart(UAnimMontage* Montage, const FText& FillerText);
-	void OnNpcDelayMaskingEnd();
-
 private:
-	AAINpcTestCharacter& Npc;
-	AAINpcTestSmartObjectActor& SmartObject;
+	TUniquePtr<FAINpcVisualScenarioRuntimeView> Runtime;
 	FAINpcVisualScenarioConfig Config;
 	TObjectPtr<UNpcPersonaDataAsset> VisualHarnessPersona;
 	FTimerHandle StepTimerHandle;
 	FTimerHandle TimeoutTimerHandle;
-	FDelegateHandle SessionStartedHandle;
-	FDelegateHandle ResponseHandle;
-	FDelegateHandle PartialResponseHandle;
-	FDelegateHandle ErrorHandle;
-	FDelegateHandle SessionEndedHandle;
-	FDelegateHandle DegradedHandle;
-	FDelegateHandle DelayMaskingStartHandle;
-	FDelegateHandle DelayMaskingEndHandle;
 	TMap<FString, bool> BoolObservations;
 	TMap<FString, int32> IntegerObservations;
 	TMap<FString, double> NumberObservations;
@@ -81,8 +64,5 @@ private:
 	bool bFailed = false;
 	bool bStarted = false;
 	FString FailureReason;
-	FString LastNpcResponseText;
-	FString LastPartialResponseText;
-	FString LastDelayFillerText;
 	FString LastActionFailureReason;
 };

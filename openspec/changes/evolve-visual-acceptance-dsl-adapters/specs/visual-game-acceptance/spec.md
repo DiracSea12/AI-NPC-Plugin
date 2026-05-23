@@ -34,6 +34,10 @@
 - **WHEN** 真实 provider 配置缺失或不完整
 - **THEN** 最终行为验收被报告为 blocked 或 failed，并带安全 provider diagnostics；不得 fallback 到 fake provider 或 validate-only result
 
+#### Scenario: Provider chain 使用 fallback 或 degraded response
+- **WHEN** provider chain 使用 template fallback、degraded response、fallback-only content 或其它未完成真实 provider success path 的响应
+- **THEN** 该响应可以进入安全 diagnostics，但不得满足 final player-visible success observation，最终 NPC 行为验收必须 reported failed 或 blocked
+
 #### Scenario: Runtime process 写出 result
 - **WHEN** visual game scenario 到达 terminal outcome
 - **THEN** result artifact 记录 game executable path、process id、map、redacted command summary、run id、test id、result path，以及从游戏进程内部写出的 runtime observations

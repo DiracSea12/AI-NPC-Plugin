@@ -102,12 +102,15 @@
 - 外部模型 review
 - 大重构
 - 给另一个 agent handoff context
+- 零上下文子代理审阅
 
 主动生成 repo pack：
 
 `pwsh ./scripts/dev/pack-context.ps1`
 
 使用 `.artifacts/ai/` 下最新 artifact 作为 handoff bundle。
+
+零上下文子代理审阅必须无锚定：prompt 只给 bundle/目标文件、任务类型、禁止改文件、通用审查维度和输出格式；禁止塞入主代理结论、怀疑点、上一轮 findings、刚改内容或期望验证的 fix。要验证已知问题时必须标成定向复核，不准冒充零上下文。
 
 ### 验证循环
 

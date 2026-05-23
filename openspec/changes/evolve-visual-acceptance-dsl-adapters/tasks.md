@@ -15,22 +15,42 @@
 - [x] 1.13 更新 `DEVELOPMENT.md`、`AGENTS.md` 等 test-discovery 文档，说明 visual game scenarios 从 `Config/AINpcVisualScenarios.json` 发现，而 shared harness scripts 仍位于 `scripts/dev/game/`。
 - [x] 1.14 增加个人开源维护性检查：Phase 2.7 不引入远程服务、数据库、Web 控制台、分布式调度、私有服务或必须长期运营的新基础设施。
 - [x] 1.15 增加开源可复现 setup 说明：区分可提交 example/template 和本地私有 provider config，不把 `G:\UE5\...` 这类本机路径、私有 key 或隐藏服务当作外部贡献者必需条件。
-- [ ] 1.16 使用 `pwsh -NoProfile -File ./scripts/dev/verify-test-system-contract.ps1`、VerifierHostEditor UBT build command，以及 `Config/AINpcLocalProvider.json` 真实 provider 配置下的 `pwsh -NoProfile -File ./scripts/dev/test-game.ps1` 可见游戏运行验证 Phase 2.7。
+- [x] 1.16 使用 `pwsh -NoProfile -File ./scripts/dev/verify-test-system-contract.ps1`、VerifierHostEditor UBT build command，以及 `Config/AINpcLocalProvider.json` 真实 provider 配置下的 `pwsh -NoProfile -File ./scripts/dev/test-game.ps1` 可见游戏运行验证 Phase 2.7。
 
-## 2.8 - Internal Adapter Registry
+## 2.8 - Internal Adapter Registry（分段闭环）
 
-- [ ] 2.1 引入 visual scenario runtime context，持有 world、test id、run id、fixture references、NPC component、runtime variables、observation store、current step、failure recorder、provider state summary 和 NPC state summary。
-- [ ] 2.2 将 built-in fixture preparation 抽成 internal fixture adapters，覆盖 character-only 与 character-with-SmartObject scenarios，同时让 `AAINpcTestGameMode` 只负责 lifecycle、camera、polling 和 result writing。
-- [ ] 2.2a 增加 internal built-in character driver seam，使 runner 不直接依赖 concrete test actor API；project character driver 仍留到 Phase 2.9 才公开。
-- [ ] 2.3 将 dialogue delegate binding 和 dialogue observation collection 抽成 internal dialogue observation provider，产出 typed/sourced `dialogue.*` observations。
-- [ ] 2.4 将 NPC event subsystem emission 抽成 internal event adapter，使 runner 不再硬编码 gift-event 或 scenario-specific event construction。
-- [ ] 2.5 将 SmartObject action intent execution 抽成 internal action adapter，使 `action.executeLatestIntent` 调用 adapter，runner 不再拥有 SmartObject execution details。
-- [ ] 2.6 将 Phase 2.7 最小 observation store 扩展为 typed/sourced observation store，记录 name、value type、value、source kind、适用时的 source object/class 或 subsystem、sampling method、source adapter/provider id、step index、timestamp 或 elapsed time。
-- [ ] 2.7 将 Phase 2.7 最小 assertion evaluator 扩展到 `notEquals`、numeric comparisons、`notExists` ready/window 语义，并在 step-scoped 或显式 global observations 上运行。
-- [ ] 2.8 增加 contract checks 或 API 边界，拒绝 adapter 在没有 runtime observation provider 或真实 runtime state source 的情况下标记最终玩家可见成功。
-- [ ] 2.9 删除针对具体 test id（例如 `us2.perception-behavior`）的脚本侧和 runtime 侧特殊分支；这些差异必须通过 DSL steps 和 expectations 表达。
-- [ ] 2.10 增加 Phase 2.8 负向验证：bad adapter id、duplicate internal adapter id、adapter-faked final observation、stale observation、`notExists` 未采样成功假阳性都必须失败。
-- [ ] 2.11 通过重跑 Phase 2.7 scenario suite、新增 internal adapter fixture test、以及 visible `UnrealEditor.exe -game` + `Config/AINpcLocalProvider.json` 真实 provider + runtime observations 验证 Phase 2.8。
+- [x] 2.0 前置门禁：先完成 1.16 的 static contract、VerifierHostEditor UBT build、visible `UnrealEditor.exe -game` + `Config/AINpcLocalProvider.json` 真实 provider 验证；任一项未通过时不得开始 2.8 实现。
+
+### 2.8a - Runtime context、fixture 和 GameMode 边界
+
+- [x] 2.1 引入 visual scenario runtime context，只保存当前 run 的 references/state view：world、test id、run id、fixture references、NPC component、runtime variables、observation store view、current step、failure recorder、provider state summary、NPC state summary 和 reset boundary；禁止 static mutable runtime context、跨 run observation store、跨 world fixture cache，也禁止 context 拥有 result writer、adapter registry owner、provider resolver 或其它长期 owner 职责。
+- [x] 2.2 将 built-in fixture preparation 抽成 internal fixture adapters，只覆盖当前使用的 character-only 与 character-with-SmartObject scenarios，同时让 `AAINpcTestGameMode` 只负责 lifecycle、camera、polling 和 result writing；result JSON 组装仍保留在现有 result owner，不能顺手新增 report 层。
+- [x] 2.3 增加 internal built-in character driver seam，使 runner 不直接依赖 concrete test actor API；project character driver 仍留到 Phase 2.9，Phase 2.8 不新增 public project character API。
+- [x] 2.4 更新 C++ scenario schema descriptor、`Config/AINpcVisualScenarios.json` 和 `verify-test-system-contract.ps1` 对 fixture adapter id / fixture kind 的验证，移除 `npcWithSmartObject` 单类型硬编码；Phase 2.8 fixture schema 只允许 `adapterId: "builtin.characterFixture"` 与 `kind: "character" | "characterWithSmartObject"`；迁移后旧 fixture serialized fields 必须 validation fail，不允许双读、fallback 或静默迁移；PowerShell 只能核对 C++ contract，不得成为第二套 schema 真源。
+- [x] 2.5 增加 Phase 2.8 no-public-API guard：本阶段不得新增 project adapter public interface、public registry、public character driver、public capability declaration、Blueprint-exposed adapter type、runtime module public dependency 或项目扩展文档入口；Phase 2.8 adapter 类型只能处于 internal/private test boundary，发现这些 surface 时 static/review contract fail，并把需求移回 Phase 2.9。
+- [x] 2.6 验证 2.8a：重跑 Phase 2.7 scenario static contract 和 build，证明 GameMode 职责收口后现有 scenarios 行为不变，且 scenario start 创建 per-run registry view / adapter instances / observation store、terminal result 前冻结 observation snapshot、scenario end 释放 per-run refs、world teardown 使残留 refs 失效，context/fixture reset 不跨 run 泄漏。
+
+### 2.8b - Internal dialogue/event/action adapters
+
+- [ ] 2.7 将 dialogue delegate binding 和 dialogue observation collection 抽成 internal dialogue observation provider，产出当前 scenarios 实际使用的 typed/sourced `dialogue.*` observations；不要预先实现未被 scenario 或负向验证使用的 observation namespace。
+- [ ] 2.8 将 NPC event subsystem emission 抽成 internal event adapter，使 `world.event` 通过 built-in event adapter id、event tag/id 和声明过的 payload fields 执行；runner 不再硬编码 gift-event 或 scenario-specific event construction。
+- [ ] 2.9 将 SmartObject action intent execution 抽成 internal action adapter，使 `action.executeLatestIntent` 通过 built-in action adapter id、actor ref 和当前支持的 rejection policy 执行；runner 不再拥有 SmartObject execution details。
+- [ ] 2.10 更新 C++ schema descriptor、scenario config 和 static contract，使 `world.event` / `action.executeLatestIntent` 明确声明 adapter id 与当前支持 capability；`world.event` 只允许 `adapterId: "builtin.npcEvent"`、`eventTag` 或 `eventId` 二选一、可选 `targetRef`、可选 `payload`；`action.executeLatestIntent` 只允许 `adapterId: "builtin.smartObjectAction"`、`actorRef`、`allowActionRejection`；迁移后旧 event/action serialized fields 必须 validation fail，不允许双读、fallback 或静默迁移；bad adapter id、unsupported capability 和 malformed adapter payload 必须在 runtime execution 前 fail。
+- [ ] 2.11 删除针对具体 test id（例如 `us2.perception-behavior`）的脚本侧和 runtime 侧特殊分支；这些差异必须通过 DSL steps、adapter id、payload 和 expectations 表达。
+- [ ] 2.12 验证 2.8b：重跑现有 Phase 2.7 scenarios 和新增 internal adapter routing tests，证明 runner 没有新增 test-id-specific branch，PowerShell 没有 NPC 业务判断。
+
+### 2.8c - Typed observations 和有限 assertion 语义
+
+- [ ] 2.13 将 Phase 2.7 最小 observation store 扩展为 typed/sourced observation records，最小字段为 name、value type、value、source kind、适用时的 source object/class 或 subsystem、sampling method、source adapter/provider id、step index、timestamp 或 elapsed time；只覆盖当前 scenarios 和 2.8 负向验证需要的 fields。
+- [ ] 2.14 定义 final player-visible observation 的可接受 source kind：必须来自真实 runtime callback、actor、component、subsystem、provider-chain successful primary path state、perception source 或声明过的 observation provider；fallback template、degraded response、fallback-only content 或 provider-chain failure path 只能写入 diagnostics，不得满足 final success observation；action adapter 只能通过 API/type 边界记录 attempt/accepted/rejected facts，不能调用 final player-visible observation 写入路径，也不能仅凭执行函数被调用写 final success observation。
+- [ ] 2.15 将 Phase 2.7 最小 assertion evaluator 只扩展到当前 2.8 scenarios 或负向验证实际使用的 operator；本阶段默认只保留 `all`、`any`、`anyOf`、`equals`、`exists` 和最小 `notExists` ready/window 语义，`notEquals` 与 numeric comparisons 只有被 Phase 2.8 scenario 或负向验证实际使用时才允许加入，否则留到 Phase 2.95，不得预先铺完整表达式框架。
+- [ ] 2.16 明确 step-scoped、global/latest、event-history 和 hold-window reads 的 reset/read 规则；默认 `wait.until` 和 `observe.hold` 不得使用旧 step 的 stale observation，`notExists` 必须证明 provider/source ready 且采样窗口覆盖。
+- [ ] 2.17 验证 2.8c：增加 stale observation、`notExists` 未采样假阳性、boolean false、fallback/degraded response 满足 final success、adapter-faked final observation 的负向验证；只有本阶段实际加入 numeric comparison 时才增加 numeric mismatch 验证；必须证明 action attempt facts 与 final player-visible observations 在 API/type 层隔离，失败诊断必须包含 test id、step index、adapter/source id、observation name 和 source kind。
+
+### 2.8d - Phase 2.8 集成验收
+
+- [ ] 2.18 增加 Phase 2.8 internal adapter lifecycle 负向验证：bad adapter id、duplicate internal adapter id、unsupported capability、malformed adapter payload、旧 fixture/event/action serialized fields、stale fixture/context/observation、连续运行两个 scenarios 串味、world teardown 后 per-run refs 失效都必须失败或被隔离；旧字段失败不得通过双读、fallback 或静默迁移绕过。
+- [ ] 2.19 通过重跑 Phase 2.7 scenario suite、2.8a/2.8b/2.8c static/automation 负向验证、VerifierHostEditor UBT build，以及 visible `UnrealEditor.exe -game` + `Config/AINpcLocalProvider.json` 真实 provider + runtime observations 验证 Phase 2.8；没有真实 provider/runtime observation 时只能报告 blocked/failed，不能报告 final behavior acceptance。
 
 ## 2.9 - 项目即插即用扩展接口
 

@@ -43,8 +43,6 @@ private:
 
 	void StartHarness();
 	bool SpawnFixture(EAINpcVisualTestFixtureKind FixtureKind, FString& OutFailureReason);
-	bool SpawnNpc(FString& OutFailureReason);
-	bool SpawnSmartObject(FString& OutFailureReason);
 	bool PositionObserverCamera(FString& OutFailureReason);
 	void StartSelectedTest();
 	void StartCurrentSuiteTest();

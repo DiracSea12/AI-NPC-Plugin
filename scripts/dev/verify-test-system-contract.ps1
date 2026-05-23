@@ -299,7 +299,10 @@ foreach ($entry in $scenarios) {
     if ([double]$entry.timeoutSec -le 0) { Add-Failure "$context timeoutSec must be greater than zero." }
     [void](Test-NonEmptyJsonArray $entry "storyIds" $context)
     [void](Test-NonEmptyJsonArray $entry "phaseIds" $context)
-    if ([string]$entry.fixture.type -ne "npcWithSmartObject") { Add-Failure "$context fixture.type must be npcWithSmartObject." }
+    if ($entry.fixture.PSObject.Properties.Name -contains "type") { Add-Failure "$context fixture.type is rejected; use fixture.adapterId and fixture.kind." }
+    foreach ($unknown in @($entry.fixture.PSObject.Properties.Name | Where-Object { @("adapterId", "kind") -notcontains $_ })) { Add-Failure "$context fixture has unknown field $unknown." }
+    if ([string]$entry.fixture.adapterId -ne "builtin.characterFixture") { Add-Failure "$context fixture.adapterId must be builtin.characterFixture." }
+    if (@("character", "characterWithSmartObject") -notcontains [string]$entry.fixture.kind) { Add-Failure "$context fixture.kind must be character or characterWithSmartObject." }
     foreach ($field in @("file", "delayFillerFile")) {
         $fileName = [string]$entry.persona.$field
         if ([string]::IsNullOrWhiteSpace($fileName)) { Add-Failure "$context persona.$field must not be empty." }
@@ -332,9 +335,14 @@ foreach ($entry in $scenarios) {
         if ([string]$step.type -ne "wait.until" -and ($step.PSObject.Properties.Name -contains "condition")) { Add-Failure "$context condition is only supported by wait.until." }
         switch ([string]$step.type) {
             "dialogue.start" { if ([string]$step.payload.promptRef -ne "prompt") { Add-Failure "$context dialogue.start payload.promptRef must be prompt." } }
-            "world.event" { foreach ($unknown in @($step.payload.PSObject.Properties.Name | Where-Object { @("eventTag") -notcontains $_ })) { Add-Failure "$context world.event payload has unknown field $unknown." }; if ([string]::IsNullOrWhiteSpace([string]$step.payload.eventTag)) { Add-Failure "$context world.event payload.eventTag must not be empty." } }
+            "world.event" {
+                if ([string]$step.payload.adapterId -ne "builtin.npcEvent") { Add-Failure "$context world.event step must use builtin.npcEvent adapterId from the C++ schema descriptor." }
+                if ($step.payload.PSObject.Properties.Name -contains "eventTriggerId") { Add-Failure "$context world.event step uses legacy eventTriggerId payload field." }
+            }
             "wait.until" { if ([double]$step.payload.timeoutSec -le 0) { Add-Failure "$context wait.until payload.timeoutSec must be positive." }; if (-not $step.condition) { Add-Failure "$context wait.until must include condition." } else { foreach ($failure in @(Test-VisualScenarioAssertion $step.condition "$context wait.until condition")) { Add-Failure $failure } } }
-            "action.executeLatestIntent" { if (-not ($step.payload.allowActionRejection -is [bool])) { Add-Failure "$context action.executeLatestIntent payload.allowActionRejection must be boolean." } }
+            "action.executeLatestIntent" {
+                if ([string]$step.payload.adapterId -ne "builtin.smartObjectAction") { Add-Failure "$context action.executeLatestIntent step must use builtin.smartObjectAction adapterId from the C++ schema descriptor." }
+            }
             "observe.hold" { foreach ($unknown in @($step.payload.PSObject.Properties.Name | Where-Object { @("observation", "durationSec") -notcontains $_ })) { Add-Failure "$context observe.hold payload has unknown field $unknown." }; if ([string]::IsNullOrWhiteSpace([string]$step.payload.observation)) { Add-Failure "$context observe.hold payload.observation must not be empty." }; if ([double]$step.payload.durationSec -le 0) { Add-Failure "$context observe.hold payload.durationSec must be positive." }; foreach ($failure in @(Test-KnownVisualObservation ([string]$step.payload.observation) "$context observe.hold")) { Add-Failure $failure } }
         }
     }
@@ -343,6 +351,35 @@ foreach ($entry in $scenarios) {
 }
 
 
+$registryText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcVisualTestRegistry.cpp") -Raw
+$visualTestHeaderText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Public/Test/AINpcVisualTest.h") -Raw
+if ($registryText -notmatch 'builtin\.npcEvent' -or $registryText -notmatch 'builtin\.smartObjectAction' -or $registryText -notmatch 'eventId' -or $registryText -notmatch 'actorRef') {
+    Add-Failure "C++ visual scenario schema descriptor must validate Phase 2.8b event/action adapter payload ids and required fields."
+}
+if ($registryText -notmatch 'fixture\.type' -or $registryText -notmatch 'fixture\.adapterId' -or $registryText -notmatch 'fixture\.kind' -or $registryText -notmatch 'builtin\.characterFixture' -or $registryText -notmatch 'characterWithSmartObject') {
+    Add-Failure "C++ visual scenario schema descriptor must reject fixture.type and validate fixture.adapterId/fixture.kind."
+}
+if ($visualTestHeaderText -notmatch 'AdapterId' -or $visualTestHeaderText -notmatch 'Kind' -or $visualTestHeaderText -match 'struct\s+FAINpcVisualScenarioFixtureSpec[^}]*FString\s+Type\s*;') {
+    Add-Failure "C++ visual fixture spec must expose adapterId/kind storage only, not legacy type."
+}
+$publicApiScanFiles = Get-ChildItem -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Public") -Recurse -Include "*.h", "*.cpp" -File
+foreach ($file in $publicApiScanFiles) {
+    $text = Get-Content -Path $file.FullName -Raw
+    foreach ($pattern in @(
+        'I[A-Za-z0-9_]*Project[A-Za-z0-9_]*Adapter',
+        'Public[A-Za-z0-9_]*AdapterRegistry',
+        'I[A-Za-z0-9_]*CharacterDriver',
+        'CapabilityDeclaration',
+        'BlueprintType[\s\S]{0,200}Adapter'
+    )) {
+        if ($text -match $pattern) { Add-Failure "Phase 2.8a public adapter API guard matched '$pattern' in $(Get-RelativePath $file.FullName)." }
+    }
+}
+$buildFiles = Get-ChildItem -Path (Join-Path $repoRoot "Plugins/AINpc/Source") -Recurse -Filter "*.Build.cs" -File
+foreach ($file in $buildFiles) {
+    $text = Get-Content -Path $file.FullName -Raw
+    if ($text -match 'PublicDependencyModuleNames[\s\S]*Project[A-Za-z0-9_]*Adapter') { Add-Failure "Phase 2.8a must not add runtime module public dependency for project adapter API in $(Get-RelativePath $file.FullName)." }
+}
 $runnerText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcDataDrivenVisualScenarioTest.cpp") -Raw
 foreach ($id in @("us1.dialogue-action", "us2.perception-behavior", "phase27.prompt-only-dialogue-action")) {
     if ($runnerText -match [regex]::Escape($id)) { Add-Failure "Scenario runner contains test-id-specific branch/text '$id'." }

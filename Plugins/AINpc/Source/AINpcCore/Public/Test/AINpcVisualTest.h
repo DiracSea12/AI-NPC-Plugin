@@ -4,10 +4,12 @@
 
 class AAINpcTestCharacter;
 class AAINpcTestSmartObjectActor;
+class UWorld;
 
 struct FAINpcVisualScenarioFixtureSpec
 {
-	FString Type;
+	FString AdapterId;
+	FString Kind;
 };
 
 struct FAINpcVisualScenarioPersonaSpec
@@ -26,7 +28,11 @@ struct FAINpcVisualScenarioPromptSpec
 struct FAINpcVisualScenarioStepPayload
 {
 	FString PromptRef;
+	FString AdapterId;
 	FString EventTag;
+	FString EventId;
+	FString TargetRef;
+	FString ActorRef;
 	FString Observation;
 	float TimeoutSec = 0.0f;
 	float DurationSec = 0.0f;
@@ -102,7 +108,9 @@ enum class EAINpcVisualTestFixtureKind : uint8
 struct FAINpcVisualTestContext
 {
 	FAINpcVisualTestFixture& Fixture;
+	UWorld* World = nullptr;
 	FString TestId;
+	FString RunId;
 };
 
 class IAINpcVisualTest

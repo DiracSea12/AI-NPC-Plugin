@@ -30,6 +30,10 @@ Visual acceptance system MUST 支持 fixture adapters，用来创建或解析 sc
 - **WHEN** Phase 2.8 scenario 使用 fixture adapter
 - **THEN** 它只能使用 built-in/internal fixture adapter，并且该 adapter 仍绑定当前 world/scenario/run context
 
+#### Scenario: Phase 2.8 误新增 public adapter surface
+- **WHEN** Phase 2.8 implementation 新增 project adapter public interface、public registry、public character driver、public capability declaration、Blueprint-exposed adapter type、runtime module public dependency，或把 internal adapter 类型放进 public project extension surface
+- **THEN** static/review contract fail；该 surface 必须移回 internal/private test boundary 或推迟到 Phase 2.9
+
 #### Scenario: Phase 2.9 使用现有 project actor fixture
 - **WHEN** Phase 2.9 或后续 project scenario 通过 tag、class 或 object reference 声明 existing actor fixture
 - **THEN** fixture adapter 从 loaded map 解析 actor；如果找不到 actor，则报告 validation 或 startup failure

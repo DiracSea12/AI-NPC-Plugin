@@ -7,6 +7,10 @@
 - **WHEN** 加载 visual scenario
 - **THEN** 它包含 `schemaVersion`、`testId`、`map`、`timeoutSec`、`storyIds`、`phaseIds`、`fixture`、`persona`、`prompt`、`steps`、`expect` 字段
 
+#### Scenario: Phase 2.8 使用内置 fixture schema
+- **WHEN** Phase 2.8 scenario 声明 `fixture`
+- **THEN** 它使用 `adapterId: "builtin.characterFixture"` 和 `kind: "character" | "characterWithSmartObject"`，旧 `fixture.type` 或其它未声明 fixture fields validation fail
+
 #### Scenario: 遇到不支持的 schema version
 - **WHEN** visual scenario 声明不支持的 `schemaVersion`
 - **THEN** 在最终验收开始前 validation fail，并报告 unsupported version 和 test id
@@ -30,6 +34,10 @@ Visual scenario DSL MUST 只支持声明过的 step type，且每个 step type M
 - **WHEN** step 声明 `type: "world.event"`
 - **THEN** 它声明 event adapter id、event tag 或 event id、adapter 所需 target reference，以及仅 adapter 声明过的 payload fields
 
+#### Scenario: Phase 2.8 使用内置 world event adapter
+- **WHEN** Phase 2.8 scenario 声明 `world.event`
+- **THEN** payload 使用 `adapterId: "builtin.npcEvent"`、`eventTag` 或 `eventId` 二选一、可选 `targetRef`、可选 `payload`，且其它 event payload fields validation fail
+
 #### Scenario: 使用 Wait step
 - **WHEN** step 声明 `type: "wait.until"`
 - **THEN** 它声明正数 timeout，并声明至少一个受支持 assertion group，例如 `all`、`any` 或 `anyOf`
@@ -37,6 +45,10 @@ Visual scenario DSL MUST 只支持声明过的 step type，且每个 step type M
 #### Scenario: 使用 Action execution step
 - **WHEN** step 声明 `type: "action.executeLatestIntent"`
 - **THEN** 它声明 action adapter id、actor reference，以及仅支持的 policy fields，例如 rejection handling
+
+#### Scenario: Phase 2.8 使用内置 SmartObject action adapter
+- **WHEN** Phase 2.8 scenario 声明 `action.executeLatestIntent`
+- **THEN** payload 使用 `adapterId: "builtin.smartObjectAction"`、`actorRef`、`allowActionRejection`，且其它 action payload fields validation fail
 
 #### Scenario: 使用 Observation hold step
 - **WHEN** step 声明 `type: "observe.hold"`

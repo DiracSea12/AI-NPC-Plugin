@@ -26,7 +26,7 @@ $editorExitCode = $null
 $commandArgs = @(
     $uproject,
     "-AbsLog=$logFile",
-    "-ReportOutputPath=$reportDir",
+    "-ReportExportPath=$reportDir",
     "-TestExit=Automation Test Queue Empty",
     "-ExecCmds=Automation RunTests AINpc"
 )

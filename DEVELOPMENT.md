@@ -118,6 +118,8 @@ Aider 配置始终加载：
 
 大上下文 review、外部模型 handoff、零上下文分析时，主动使用 Repomix。
 
+零上下文子代理审阅必须无锚定：prompt 只给 bundle/目标文件、任务类型、禁止改文件、通用审查维度和输出格式；禁止塞入主代理结论、怀疑点、上一轮 findings、刚改内容或期望验证的 fix。要验证已知问题时必须标成定向复核，不准冒充零上下文。
+
 ### Langfuse
 
 - 用途：runtime LLM observability、prompt/version tracking、evals

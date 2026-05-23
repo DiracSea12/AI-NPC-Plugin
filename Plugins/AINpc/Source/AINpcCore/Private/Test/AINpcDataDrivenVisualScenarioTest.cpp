@@ -21,10 +21,155 @@ namespace
 {
 	const float InitialDialogueDelaySeconds = 3.0f;
 	const TCHAR* SmartObjectTargetIdVariable = TEXT("SmartObjectTargetId");
-	const TCHAR* EventTriggerIdVariable = TEXT("EventTriggerId");
+	const TCHAR* BuiltInNpcEventAdapterId = TEXT("builtin.npcEvent");
+	const TCHAR* BuiltInSmartObjectActionAdapterId = TEXT("builtin.smartObjectAction");
+	const TCHAR* FixtureNpcRef = TEXT("fixture.npc");
 	const float SmartObjectSearchRadius = 1200.0f;
 	const int32 SmartObjectClaimPriority = 2;
 
+	struct FAINpcBuiltInCharacterDriver
+	{
+		AAINpcTestCharacter& Character;
+
+		explicit FAINpcBuiltInCharacterDriver(AAINpcTestCharacter& InCharacter)
+			: Character(InCharacter)
+		{
+		}
+
+		UWorld* GetWorld() const { return Character.GetWorld(); }
+		AActor* GetActor() const { return &Character; }
+		UObject* CreatePersonaOuter() const { return &Character; }
+		UAINpcComponent* GetNpcComponent() const { return Character.NpcComponent; }
+		void SetVisibleStateText(const FString& Text) const { Character.SetVisibleStateText(Text); }
+		void SetVisibleDialogueText(const FString& Text) const { Character.SetVisibleDialogueText(Text); }
+		void BeginVisualActionMove(const FTransform& Transform, const FString& TargetId) const { Character.BeginVisualActionMove(Transform, TargetId); }
+		bool HasReachedVisualActionTarget() const { return Character.HasReachedVisualActionTarget(); }
+		double GetVisualActionTargetDistance() const { return Character.GetVisualActionTargetDistance(); }
+	};
+}
+
+struct FAINpcInternalDialogueObservationProvider
+	{
+		UAINpcComponent* NpcComponent = nullptr;
+		TFunction<void(const FString&, bool)> RecordBool;
+		TFunction<bool(const FString&)> HasBool;
+		TFunction<void(const FString&)> SetVisibleDialogueText;
+		TFunction<void()> UpdateDialogueStateEvidence;
+		TFunction<bool()> HasLatestActionIntent;
+		TFunction<void(const FString&)> Fail;
+		TFunction<void(const FString&, const FColor&, float)> ShowStatus;
+		FDelegateHandle SessionStartedHandle;
+		FDelegateHandle ResponseHandle;
+		FDelegateHandle PartialResponseHandle;
+		FDelegateHandle ErrorHandle;
+		FDelegateHandle SessionEndedHandle;
+		FDelegateHandle DegradedHandle;
+		FDelegateHandle DelayMaskingStartHandle;
+		FDelegateHandle DelayMaskingEndHandle;
+		FString LastNpcResponseText;
+		FString LastPartialResponseText;
+		FString LastDelayFillerText;
+
+		bool Start(UAINpcComponent& InNpcComponent, FString& OutFailureReason)
+		{
+			if (NpcComponent)
+			{
+				OutFailureReason = TEXT("Dialogue observation provider is already bound.");
+				return false;
+			}
+			NpcComponent = &InNpcComponent;
+			SessionStartedHandle = NpcComponent->OnDialogueSessionStartedNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnSessionStarted);
+			ResponseHandle = NpcComponent->OnDialogueResponseNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnResponse);
+			PartialResponseHandle = NpcComponent->OnDialoguePartialResponseNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnPartialResponse);
+			ErrorHandle = NpcComponent->OnDialogueErrorNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnError);
+			SessionEndedHandle = NpcComponent->OnDialogueSessionEndedNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnSessionEnded);
+			DegradedHandle = NpcComponent->OnDialogueDegradedNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnDegraded);
+			DelayMaskingStartHandle = NpcComponent->OnDelayMaskingStartNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnDelayMaskingStart);
+			DelayMaskingEndHandle = NpcComponent->OnDelayMaskingEndNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnDelayMaskingEnd);
+			return true;
+		}
+
+		void Stop()
+		{
+			if (!NpcComponent) { return; }
+			NpcComponent->OnDialogueSessionStartedNative().Remove(SessionStartedHandle);
+			NpcComponent->OnDialogueResponseNative().Remove(ResponseHandle);
+			NpcComponent->OnDialoguePartialResponseNative().Remove(PartialResponseHandle);
+			NpcComponent->OnDialogueErrorNative().Remove(ErrorHandle);
+			NpcComponent->OnDialogueSessionEndedNative().Remove(SessionEndedHandle);
+			NpcComponent->OnDialogueDegradedNative().Remove(DegradedHandle);
+			NpcComponent->OnDelayMaskingStartNative().Remove(DelayMaskingStartHandle);
+			NpcComponent->OnDelayMaskingEndNative().Remove(DelayMaskingEndHandle);
+			NpcComponent = nullptr;
+		}
+
+		void OnSessionStarted()
+		{
+			RecordBool(TEXT("sessionStarted"), true);
+			ShowStatus(TEXT("Dialogue session started through the real provider chain."), FColor::Green, 6.0f);
+		}
+
+		void OnResponse(const FString& Text)
+		{
+			LastNpcResponseText = Text;
+			LastNpcResponseText.TrimStartAndEndInline();
+			if (LastNpcResponseText.IsEmpty())
+			{
+				Fail(TEXT("Provider returned an empty dialogue response."));
+				return;
+			}
+			RecordBool(TEXT("dialogueResponseObserved"), true);
+			RecordBool(TEXT("structuredResponseObserved"), true);
+			if (HasLatestActionIntent()) { RecordBool(TEXT("actionIntentObserved"), true); }
+			SetVisibleDialogueText(LastNpcResponseText);
+			UpdateDialogueStateEvidence();
+			ShowStatus(FString::Printf(TEXT("<<< NPC response received. Length=%d"), LastNpcResponseText.Len()), FColor::Yellow, 8.0f);
+		}
+
+		void OnPartialResponse(const FString& Text)
+		{
+			if (!Text.IsEmpty())
+			{
+				LastPartialResponseText = Text;
+				RecordBool(TEXT("partialResponseObserved"), true);
+			}
+			ShowStatus(FString::Printf(TEXT("[stream] partial response. Length=%d"), Text.Len()), FColor::Orange, 3.0f);
+		}
+
+		void OnError(const FString& ErrorMessage)
+		{
+			Fail(FString::Printf(TEXT("Provider chain reported an error. Length=%d"), ErrorMessage.Len()));
+		}
+
+		void OnSessionEnded()
+		{
+			UpdateDialogueStateEvidence();
+		}
+
+		void OnDegraded(const FString& FallbackResponse, const FString& DegradedFailureReason)
+		{
+			(void)FallbackResponse;
+			Fail(FString::Printf(TEXT("Provider chain degraded. ReasonLength=%d"), DegradedFailureReason.Len()));
+		}
+
+		void OnDelayMaskingStart(UAnimMontage* Montage, const FText& FillerText)
+		{
+			(void)Montage;
+			LastDelayFillerText = FillerText.ToString();
+			RecordBool(TEXT("delayMaskingStartObserved"), true);
+			if (HasBool(TEXT("eventTriggerBroadcast"))) { RecordBool(TEXT("eventDelayMaskingStartObserved"), true); }
+			ShowStatus(FString::Printf(TEXT("Delay masking started. FillerLength=%d"), LastDelayFillerText.Len()), FColor::Purple, 5.0f);
+		}
+
+		void OnDelayMaskingEnd()
+		{
+			RecordBool(TEXT("delayMaskingEndObserved"), true);
+			ShowStatus(TEXT("Delay masking ended."), FColor::Purple, 3.0f);
+		}
+};
+
+namespace
+{
 	bool IsKnownBooleanObservation(const FString& Name)
 	{
 		static const TSet<FString> KnownBooleanObservations = {
@@ -84,47 +229,163 @@ namespace
 	}
 }
 
-FAINpcDataDrivenVisualScenarioTest::FAINpcDataDrivenVisualScenarioTest(AAINpcTestCharacter& InNpc, AAINpcTestSmartObjectActor& InSmartObject, FAINpcVisualScenarioConfig InConfig)
-	: Npc(InNpc)
-	, SmartObject(InSmartObject)
+struct FAINpcVisualScenarioRuntimeView
+{
+	UWorld* World = nullptr;
+	FString TestId;
+	FString RunId;
+	AAINpcTestSmartObjectActor* SmartObject = nullptr;
+	TUniquePtr<FAINpcBuiltInCharacterDriver> CharacterDriver;
+	TUniquePtr<FAINpcInternalDialogueObservationProvider> DialogueObservationProvider;
+
+	UWorld* GetWorld() const
+	{
+		return CharacterDriver ? CharacterDriver->GetWorld() : World;
+	}
+
+	double GetTimeSeconds(const double FallbackSeconds) const
+	{
+		const UWorld* RunWorld = GetWorld();
+		return RunWorld ? RunWorld->GetTimeSeconds() : FallbackSeconds;
+	}
+
+	UAINpcComponent* GetNpcComponent() const
+	{
+		return CharacterDriver ? CharacterDriver->GetNpcComponent() : nullptr;
+	}
+
+	AActor* GetNpcActor() const { return CharacterDriver ? CharacterDriver->GetActor() : nullptr; }
+	UObject* CreatePersonaOuter() const { return CharacterDriver ? CharacterDriver->CreatePersonaOuter() : GetWorld(); }
+	bool HasSmartObjectFixture() const { return SmartObject != nullptr; }
+	void SetSmartObjectInteractionState(const bool bEnabled) const { if (SmartObject) { SmartObject->SetInteractionState(bEnabled); } }
+	TArray<FString> GetAvailableSmartObjectTargetsForExecution() const { return GetNpcComponent() ? GetNpcComponent()->GetAvailableSmartObjectTargetsForExecution() : TArray<FString>(); }
+	bool TryGetLatestActionIntent(FNpcAction& OutAction) const { return GetNpcComponent() && GetNpcComponent()->TryGetLatestActionIntent(OutAction); }
+	void AddEventSubscriptionTag(const FGameplayTag& RouteTag) const { if (UAINpcComponent* NpcComponent = GetNpcComponent()) { NpcComponent->EventSubscriptionTags.AddTag(RouteTag); } }
+	void SetPersonaData(UNpcPersonaDataAsset* Persona) const { if (UAINpcComponent* NpcComponent = GetNpcComponent()) { NpcComponent->SetPersonaData(Persona); } }
+	void SetVisibleStateText(const FString& Text) const { if (CharacterDriver) { CharacterDriver->SetVisibleStateText(Text); } }
+	void SetVisibleDialogueText(const FString& Text) const { if (CharacterDriver) { CharacterDriver->SetVisibleDialogueText(Text); } }
+	void BeginVisualActionMove(const FTransform& Transform, const FString& TargetId) const { if (CharacterDriver) { CharacterDriver->BeginVisualActionMove(Transform, TargetId); } }
+	bool HasReachedVisualActionTarget() const { return CharacterDriver && CharacterDriver->HasReachedVisualActionTarget(); }
+	double GetVisualActionTargetDistance() const { return CharacterDriver ? CharacterDriver->GetVisualActionTargetDistance() : 0.0; }
+};
+
+
+namespace
+{
+	struct FAINpcBuiltInEventAdapter
+	{
+		bool Execute(const FAINpcVisualScenarioStep& Step, const FAINpcVisualScenarioRuntimeView& Runtime, FString& OutFailureReason) const
+		{
+			if (Step.Payload.AdapterId != BuiltInNpcEventAdapterId)
+			{
+				OutFailureReason = FString::Printf(TEXT("world.event adapter '%s' is unsupported."), *Step.Payload.AdapterId);
+				return false;
+			}
+			if (!Step.Payload.TargetRef.IsEmpty() && Step.Payload.TargetRef != FixtureNpcRef)
+			{
+				OutFailureReason = FString::Printf(TEXT("world.event targetRef '%s' is unsupported."), *Step.Payload.TargetRef);
+				return false;
+			}
+			UWorld* World = Runtime.GetWorld();
+			UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
+			UNpcEventSubsystem* EventSubsystem = GameInstance ? GameInstance->GetSubsystem<UNpcEventSubsystem>() : nullptr;
+			if (!EventSubsystem)
+			{
+				OutFailureReason = TEXT("world.event could not find UNpcEventSubsystem.");
+				return false;
+			}
+			const FString EventRoute = Step.Payload.EventTag.IsEmpty() ? Step.Payload.EventId : Step.Payload.EventTag;
+			const FGameplayTag EventTag = FGameplayTag::RequestGameplayTag(FName(*EventRoute), false);
+			if (!EventTag.IsValid())
+			{
+				OutFailureReason = FString::Printf(TEXT("world.event requires gameplay tag '%s'."), *EventRoute);
+				return false;
+			}
+			FGameplayTagContainer RoutingTags;
+			RoutingTags.AddTag(EventTag);
+			const FNpcEventMessage EventMessage = UNpcEventPayloadBlueprintLibrary::MakeGiftEventMessage(EventTag, RoutingTags, nullptr, Runtime.GetNpcActor(), FGameplayTag(), 1);
+			EventSubsystem->BroadcastEvent(EventMessage);
+			return true;
+		}
+	};
+
+	enum class EAINpcActionAdapterExecuteResult
+	{
+		Accepted,
+		Rejected,
+		Invalid
+	};
+
+	struct FAINpcBuiltInActionAdapter
+	{
+		EAINpcActionAdapterExecuteResult Execute(const FAINpcVisualScenarioStep& Step, const FAINpcVisualScenarioRuntimeView& Runtime, FAINpcVisualSmartObjectActionExecution& OutExecution, FString& OutFailureReason) const
+		{
+			if (Step.Payload.AdapterId != BuiltInSmartObjectActionAdapterId)
+			{
+				OutFailureReason = FString::Printf(TEXT("action.executeLatestIntent adapter '%s' is unsupported."), *Step.Payload.AdapterId);
+				return EAINpcActionAdapterExecuteResult::Invalid;
+			}
+			if (Step.Payload.ActorRef != FixtureNpcRef)
+			{
+				OutFailureReason = FString::Printf(TEXT("action.executeLatestIntent actorRef '%s' is unsupported."), *Step.Payload.ActorRef);
+				return EAINpcActionAdapterExecuteResult::Invalid;
+			}
+			if (!Runtime.HasSmartObjectFixture())
+			{
+				OutFailureReason = TEXT("action.executeLatestIntent requires a SmartObject fixture.");
+				return EAINpcActionAdapterExecuteResult::Invalid;
+			}
+			AActor* NpcActor = Runtime.GetNpcActor();
+			if (!NpcActor)
+			{
+				OutFailureReason = TEXT("action.executeLatestIntent NPC actor is null.");
+				return EAINpcActionAdapterExecuteResult::Invalid;
+			}
+			return AINpcSmartObjectActionTestSupport::TryExecuteLatestActionIntent(Runtime.GetNpcComponent(), *NpcActor, SmartObjectSearchRadius, SmartObjectClaimPriority, OutExecution, OutFailureReason)
+				? EAINpcActionAdapterExecuteResult::Accepted
+				: EAINpcActionAdapterExecuteResult::Rejected;
+		}
+	};
+}
+
+FAINpcDataDrivenVisualScenarioTest::FAINpcDataDrivenVisualScenarioTest(const FAINpcVisualTestContext& Context, FAINpcVisualScenarioConfig InConfig)
+	: Runtime(MakeUnique<FAINpcVisualScenarioRuntimeView>())
 	, Config(MoveTemp(InConfig))
 {
+	Runtime->World = Context.World;
+	Runtime->TestId = Context.TestId;
+	Runtime->RunId = Context.RunId;
+	Runtime->SmartObject = Context.Fixture.SmartObject;
+	if (Context.Fixture.Npc)
+	{
+		Runtime->CharacterDriver = MakeUnique<FAINpcBuiltInCharacterDriver>(*Context.Fixture.Npc);
+	}
 }
 
 FAINpcDataDrivenVisualScenarioTest::~FAINpcDataDrivenVisualScenarioTest()
 {
-	if (UWorld* World = Npc.GetWorld())
+	if (UWorld* World = Runtime->GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(StepTimerHandle);
 		World->GetTimerManager().ClearTimer(TimeoutTimerHandle);
 	}
-	if (UAINpcComponent* NpcComponent = Npc.NpcComponent)
-	{
-		NpcComponent->OnDialogueSessionStartedNative().Remove(SessionStartedHandle);
-		NpcComponent->OnDialogueResponseNative().Remove(ResponseHandle);
-		NpcComponent->OnDialoguePartialResponseNative().Remove(PartialResponseHandle);
-		NpcComponent->OnDialogueErrorNative().Remove(ErrorHandle);
-		NpcComponent->OnDialogueSessionEndedNative().Remove(SessionEndedHandle);
-		NpcComponent->OnDialogueDegradedNative().Remove(DegradedHandle);
-		NpcComponent->OnDelayMaskingStartNative().Remove(DelayMaskingStartHandle);
-		NpcComponent->OnDelayMaskingEndNative().Remove(DelayMaskingEndHandle);
-	}
+	if (Runtime->DialogueObservationProvider) { Runtime->DialogueObservationProvider->Stop(); }
 }
 
 bool FAINpcDataDrivenVisualScenarioTest::Start(FString& OutFailureReason)
 {
-	if (!Npc.NpcComponent)
+	if (!Runtime->GetNpcComponent())
 	{
 		OutFailureReason = FString::Printf(TEXT("Visual scenario '%s' cannot start because NPC component is null."), *Config.TestId);
 		return false;
 	}
 	if (!ConfigurePersona(OutFailureReason)) { return false; }
-	if (!AINpcDialogueVisualTestSupport::ValidateProviderConfiguration(Npc.NpcComponent, OutFailureReason)) { return false; }
+	if (!AINpcDialogueVisualTestSupport::ValidateProviderConfiguration(Runtime->GetNpcComponent(), OutFailureReason)) { return false; }
 
-	BindNpcDelegates();
+	if (!StartDialogueObservation(OutFailureReason)) { return false; }
 	bStarted = true;
 	ShowStatus(FString::Printf(TEXT("Visual scenario '%s' ready. Starting DSL steps in %.0fs."), *Config.TestId, InitialDialogueDelaySeconds), FColor::Green, 15.0f);
-	if (UWorld* World = Npc.GetWorld())
+	if (UWorld* World = Runtime->GetWorld())
 	{
 		World->GetTimerManager().SetTimer(TimeoutTimerHandle, FTimerDelegate::CreateRaw(this, &FAINpcDataDrivenVisualScenarioTest::HandleTimeout), static_cast<float>(Config.TimeoutSec), false);
 		World->GetTimerManager().SetTimer(StepTimerHandle, FTimerDelegate::CreateRaw(this, &FAINpcDataDrivenVisualScenarioTest::StartNextStep), InitialDialogueDelaySeconds, false);
@@ -135,17 +396,23 @@ bool FAINpcDataDrivenVisualScenarioTest::Start(FString& OutFailureReason)
 	return false;
 }
 
-void FAINpcDataDrivenVisualScenarioTest::BindNpcDelegates()
+bool FAINpcDataDrivenVisualScenarioTest::StartDialogueObservation(FString& OutFailureReason)
 {
-	UAINpcComponent& NpcComponent = *Npc.NpcComponent;
-	SessionStartedHandle = NpcComponent.OnDialogueSessionStartedNative().AddRaw(this, &FAINpcDataDrivenVisualScenarioTest::OnNpcSessionStarted);
-	ResponseHandle = NpcComponent.OnDialogueResponseNative().AddRaw(this, &FAINpcDataDrivenVisualScenarioTest::OnNpcResponse);
-	PartialResponseHandle = NpcComponent.OnDialoguePartialResponseNative().AddRaw(this, &FAINpcDataDrivenVisualScenarioTest::OnNpcPartialResponse);
-	ErrorHandle = NpcComponent.OnDialogueErrorNative().AddRaw(this, &FAINpcDataDrivenVisualScenarioTest::OnNpcError);
-	SessionEndedHandle = NpcComponent.OnDialogueSessionEndedNative().AddRaw(this, &FAINpcDataDrivenVisualScenarioTest::OnNpcSessionEnded);
-	DegradedHandle = NpcComponent.OnDialogueDegradedNative().AddRaw(this, &FAINpcDataDrivenVisualScenarioTest::OnNpcDegraded);
-	DelayMaskingStartHandle = NpcComponent.OnDelayMaskingStartNative().AddRaw(this, &FAINpcDataDrivenVisualScenarioTest::OnNpcDelayMaskingStart);
-	DelayMaskingEndHandle = NpcComponent.OnDelayMaskingEndNative().AddRaw(this, &FAINpcDataDrivenVisualScenarioTest::OnNpcDelayMaskingEnd);
+	UAINpcComponent* NpcComponent = Runtime->GetNpcComponent();
+	if (!NpcComponent)
+	{
+		OutFailureReason = FString::Printf(TEXT("Scenario '%s' cannot observe dialogue because NPC component is null."), *Config.TestId);
+		return false;
+	}
+	Runtime->DialogueObservationProvider = MakeUnique<FAINpcInternalDialogueObservationProvider>();
+	Runtime->DialogueObservationProvider->RecordBool = [this](const FString& Name, const bool bValue) { RecordBoolObservation(Name, bValue); };
+	Runtime->DialogueObservationProvider->HasBool = [this](const FString& Name) { bool Value = false; return TryGetObservationBool(Name, Value) && Value; };
+	Runtime->DialogueObservationProvider->SetVisibleDialogueText = [this](const FString& Text) { Runtime->SetVisibleDialogueText(Text); };
+	Runtime->DialogueObservationProvider->UpdateDialogueStateEvidence = [this]() { UpdateDialogueStateEvidence(); };
+	Runtime->DialogueObservationProvider->HasLatestActionIntent = [this]() { FNpcAction LatestAction; return Runtime->TryGetLatestActionIntent(LatestAction); };
+	Runtime->DialogueObservationProvider->Fail = [this](const FString& Reason) { Fail(Reason); };
+	Runtime->DialogueObservationProvider->ShowStatus = [this](const FString& Message, const FColor& Color, const float DurationSeconds) { ShowStatus(Message, Color, DurationSeconds); };
+	return Runtime->DialogueObservationProvider->Start(*NpcComponent, OutFailureReason);
 }
 
 void FAINpcDataDrivenVisualScenarioTest::Poll()
@@ -170,11 +437,11 @@ FAINpcVisualTestObservations FAINpcDataDrivenVisualScenarioTest::BuildObservatio
 	FAINpcVisualTestObservations Observations;
 	Observations.BooleanFields = BoolObservations;
 	Observations.IntegerFields = IntegerObservations;
-	Observations.IntegerFields.Add(TEXT("responseLength"), LastNpcResponseText.Len());
-	Observations.IntegerFields.Add(TEXT("partialResponseLength"), LastPartialResponseText.Len());
-	Observations.IntegerFields.Add(TEXT("delayFillerLength"), LastDelayFillerText.Len());
+	Observations.IntegerFields.Add(TEXT("responseLength"), Runtime->DialogueObservationProvider ? Runtime->DialogueObservationProvider->LastNpcResponseText.Len() : 0);
+	Observations.IntegerFields.Add(TEXT("partialResponseLength"), Runtime->DialogueObservationProvider ? Runtime->DialogueObservationProvider->LastPartialResponseText.Len() : 0);
+	Observations.IntegerFields.Add(TEXT("delayFillerLength"), Runtime->DialogueObservationProvider ? Runtime->DialogueObservationProvider->LastDelayFillerText.Len() : 0);
 	Observations.NumberFields = NumberObservations;
-	Observations.NumberFields.Add(TEXT("distanceToActionTarget"), Npc.GetVisualActionTargetDistance());
+	Observations.NumberFields.Add(TEXT("distanceToActionTarget"), Runtime->GetVisualActionTargetDistance());
 	Observations.StringFields = StringObservations;
 	Observations.StringFields.Add(TEXT("lastActionFailure"), LastActionFailureReason);
 	return Observations;
@@ -202,7 +469,7 @@ void FAINpcDataDrivenVisualScenarioTest::StartNextStep()
 		return;
 	}
 
-	ActiveStepStartSeconds = Npc.GetWorld() ? Npc.GetWorld()->GetTimeSeconds() : 0.0;
+	ActiveStepStartSeconds = Runtime->GetTimeSeconds(0.0);
 	FAINpcVisualTestStepDiagnostic Diagnostic;
 	Diagnostic.StepIndex = ActiveStepIndex;
 	Diagnostic.StepType = Config.Steps[ActiveStepIndex].Type;
@@ -226,7 +493,7 @@ void FAINpcDataDrivenVisualScenarioTest::PollActiveStep()
 			CompleteCurrentStep();
 			return;
 		}
-		const double Now = Npc.GetWorld() ? Npc.GetWorld()->GetTimeSeconds() : ActiveStepStartSeconds;
+		const double Now = Runtime->GetTimeSeconds(ActiveStepStartSeconds);
 		if (Now - ActiveStepStartSeconds > Step.Payload.TimeoutSec)
 		{
 			Fail(FString::Printf(TEXT("Scenario '%s' step[%d] wait.until timed out after %.1fs."), *Config.TestId, ActiveStepIndex, Step.Payload.TimeoutSec));
@@ -234,7 +501,7 @@ void FAINpcDataDrivenVisualScenarioTest::PollActiveStep()
 	}
 	else if (Step.Type == TEXT("observe.hold"))
 	{
-		const double Now = Npc.GetWorld() ? Npc.GetWorld()->GetTimeSeconds() : ActiveStepStartSeconds;
+		const double Now = Runtime->GetTimeSeconds(ActiveStepStartSeconds);
 		bool bObserved = false;
 		if (!TryGetObservationBool(Step.Payload.Observation, bObserved) || !bObserved)
 		{
@@ -266,9 +533,9 @@ bool FAINpcDataDrivenVisualScenarioTest::RunDialogueStart(const FAINpcVisualScen
 	FString Prompt = BuildPrompt(OutFailureReason);
 	if (Prompt.IsEmpty()) { return false; }
 	ShowStatus(FString::Printf(TEXT(">>> %s"), *Prompt.Left(220)), FColor::Cyan, 10.0f);
-	if (!Npc.NpcComponent->StartDialogue(Prompt))
+	if (!Runtime->GetNpcComponent()->StartDialogue(Prompt))
 	{
-		OutFailureReason = FString::Printf(TEXT("Scenario '%s' step[%d] StartDialogue rejected. %s"), *Config.TestId, ActiveStepIndex, *AINpcDialogueVisualTestSupport::DescribeDialogueState(Npc.NpcComponent));
+		OutFailureReason = FString::Printf(TEXT("Scenario '%s' step[%d] StartDialogue rejected. %s"), *Config.TestId, ActiveStepIndex, *AINpcDialogueVisualTestSupport::DescribeDialogueState(Runtime->GetNpcComponent()));
 		return false;
 	}
 	UpdateDialogueStateEvidence();
@@ -278,49 +545,35 @@ bool FAINpcDataDrivenVisualScenarioTest::RunDialogueStart(const FAINpcVisualScen
 
 bool FAINpcDataDrivenVisualScenarioTest::RunWorldEvent(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason)
 {
-	UWorld* World = Npc.GetWorld();
-	UGameInstance* GameInstance = World ? World->GetGameInstance() : nullptr;
-	UNpcEventSubsystem* EventSubsystem = GameInstance ? GameInstance->GetSubsystem<UNpcEventSubsystem>() : nullptr;
-	if (!EventSubsystem)
-	{
-		OutFailureReason = FString::Printf(TEXT("Scenario '%s' step[%d] could not find UNpcEventSubsystem."), *Config.TestId, ActiveStepIndex);
-		return false;
-	}
-	const FGameplayTag EventTag = FGameplayTag::RequestGameplayTag(FName(*Step.Payload.EventTag), false);
-	if (!EventTag.IsValid())
-	{
-		OutFailureReason = FString::Printf(TEXT("Scenario '%s' step[%d] requires gameplay tag '%s'."), *Config.TestId, ActiveStepIndex, *Step.Payload.EventTag);
-		return false;
-	}
-	FGameplayTagContainer RoutingTags;
-	RoutingTags.AddTag(EventTag);
-	const FNpcEventMessage EventMessage = UNpcEventPayloadBlueprintLibrary::MakeGiftEventMessage(EventTag, RoutingTags, nullptr, &Npc, FGameplayTag(), 1);
+	FAINpcBuiltInEventAdapter Adapter;
+	if (!Adapter.Execute(Step, *Runtime, OutFailureReason)) { return false; }
 	RecordBoolObservation(TEXT("eventTriggerBroadcast"), true);
 	ShowStatus(TEXT("Gameplay event trigger broadcast while provider request is in flight."), FColor::Orange, 7.0f);
-	EventSubsystem->BroadcastEvent(EventMessage);
 	CompleteCurrentStep();
 	return true;
 }
 
 bool FAINpcDataDrivenVisualScenarioTest::RunActionExecuteLatestIntent(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason)
 {
+	FAINpcBuiltInActionAdapter Adapter;
 	FAINpcVisualSmartObjectActionExecution Execution;
 	FString ActionFailureReason;
-	if (AINpcSmartObjectActionTestSupport::TryExecuteLatestActionIntent(Npc.NpcComponent, Npc, SmartObjectSearchRadius, SmartObjectClaimPriority, Execution, ActionFailureReason))
+	const EAINpcActionAdapterExecuteResult ExecuteResult = Adapter.Execute(Step, *Runtime, Execution, ActionFailureReason);
+	if (ExecuteResult == EAINpcActionAdapterExecuteResult::Accepted)
 	{
 		RecordBoolObservation(TEXT("actionExecutionAccepted"), true);
-		SmartObject.SetInteractionState(true);
-		Npc.BeginVisualActionMove(Execution.ClaimedSlotTransform, Execution.RequestedTarget);
+		Runtime->SetSmartObjectInteractionState(true);
+		Runtime->BeginVisualActionMove(Execution.ClaimedSlotTransform, Execution.RequestedTarget);
 		ShowStatus(FString::Printf(TEXT("SmartObject action accepted: %s -> %s."), *Execution.ActionType, *Execution.RequestedTarget), FColor::Green, 8.0f);
 		CompleteCurrentStep();
 		return true;
 	}
 
 	LastActionFailureReason = ActionFailureReason;
-	if (Step.Payload.bAllowActionRejection)
+	if (ExecuteResult == EAINpcActionAdapterExecuteResult::Rejected && Step.Payload.bAllowActionRejection)
 	{
 		RecordBoolObservation(TEXT("actionRejectedVisible"), true);
-		SmartObject.SetInteractionState(false);
+		Runtime->SetSmartObjectInteractionState(false);
 		ShowStatus(FString::Printf(TEXT("SmartObject action rejected (allowed): %s"), *ActionFailureReason), FColor::Orange, 8.0f);
 		CompleteCurrentStep();
 		return true;
@@ -404,7 +657,7 @@ FString FAINpcDataDrivenVisualScenarioTest::BuildPrompt(FString& OutFailureReaso
 	TMap<FString, FString> RuntimeVariables = Config.Prompt.Variables;
 	if (RuntimeVariables.Contains(SmartObjectTargetIdVariable))
 	{
-		const TArray<FString> AvailableTargets = Npc.NpcComponent->GetAvailableSmartObjectTargetsForExecution();
+		const TArray<FString> AvailableTargets = Runtime->GetAvailableSmartObjectTargetsForExecution();
 		if (AvailableTargets.IsEmpty())
 		{
 			OutFailureReason = FString::Printf(TEXT("Scenario '%s' prompt variable '%s' cannot resolve because SmartObject target list is empty."), *Config.TestId, SmartObjectTargetIdVariable);
@@ -423,15 +676,15 @@ void FAINpcDataDrivenVisualScenarioTest::HandleTimeout()
 {
 	if (!bComplete && !bFailed)
 	{
-		Fail(FString::Printf(TEXT("Timed out after %ds. Evidence={%s}. %s"), Config.TimeoutSec, *BuildSummary(), *AINpcDialogueVisualTestSupport::DescribeDialogueState(Npc.NpcComponent)));
+		Fail(FString::Printf(TEXT("Timed out after %ds. Evidence={%s}. %s"), Config.TimeoutSec, *BuildSummary(), *AINpcDialogueVisualTestSupport::DescribeDialogueState(Runtime->GetNpcComponent())));
 	}
 }
 
 void FAINpcDataDrivenVisualScenarioTest::UpdateDialogueStateEvidence()
 {
-	if (!Npc.NpcComponent) { return; }
-	const ENpcDialogueState State = Npc.NpcComponent->GetDialogueState();
-	Npc.SetVisibleStateText(AINpcDialogueVisualTestSupport::GetDialogueStateText(Npc.NpcComponent));
+	if (!Runtime->GetNpcComponent()) { return; }
+	const ENpcDialogueState State = Runtime->GetNpcComponent()->GetDialogueState();
+	Runtime->SetVisibleStateText(AINpcDialogueVisualTestSupport::GetDialogueStateText(Runtime->GetNpcComponent()));
 	if (State == ENpcDialogueState::WaitingForLLM) { RecordBoolObservation(TEXT("waitingStateObserved"), true); }
 	else if (State == ENpcDialogueState::Speaking) { RecordBoolObservation(TEXT("speakingStateObserved"), true); }
 }
@@ -443,7 +696,7 @@ bool FAINpcDataDrivenVisualScenarioTest::ConfigurePersona(FString& OutFailureRea
 	AINpcDialogueVisualTestSupport::FVisualHarnessPersonaText PersonaText;
 	if (!AINpcDialogueVisualTestSupport::LoadPersonaText(*Config.Persona.File, PersonaText, OutFailureReason)) { return false; }
 
-	VisualHarnessPersona = NewObject<UNpcPersonaDataAsset>(&Npc, *FString::Printf(TEXT("%sPersona"), *Config.TestId.Replace(TEXT("."), TEXT("_"))));
+	VisualHarnessPersona = NewObject<UNpcPersonaDataAsset>(Runtime->CreatePersonaOuter(), *FString::Printf(TEXT("%sPersona"), *Config.TestId.Replace(TEXT("."), TEXT("_"))));
 	if (!VisualHarnessPersona)
 	{
 		OutFailureReason = FString::Printf(TEXT("Failed to allocate persona for scenario '%s'."), *Config.TestId);
@@ -466,10 +719,10 @@ bool FAINpcDataDrivenVisualScenarioTest::ConfigurePersona(FString& OutFailureRea
 				OutFailureReason = FString::Printf(TEXT("Scenario '%s' requires gameplay tag '%s'."), *Config.TestId, *Step.Payload.EventTag);
 				return false;
 			}
-			Npc.NpcComponent->EventSubscriptionTags.AddTag(RouteTag);
+			Runtime->AddEventSubscriptionTag(RouteTag);
 		}
 	}
-	Npc.NpcComponent->SetPersonaData(VisualHarnessPersona);
+	Runtime->SetPersonaData(VisualHarnessPersona);
 	return true;
 }
 
@@ -479,7 +732,7 @@ void FAINpcDataDrivenVisualScenarioTest::Fail(const FString& Reason)
 	bFailed = true;
 	FailureReason = Reason;
 	FinalizeActiveStepDiagnostic(TEXT("FAIL"), Reason);
-	if (UWorld* World = Npc.GetWorld())
+	if (UWorld* World = Runtime->GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(StepTimerHandle);
 		World->GetTimerManager().ClearTimer(TimeoutTimerHandle);
@@ -499,7 +752,7 @@ void FAINpcDataDrivenVisualScenarioTest::RecordBoolObservation(const FString& Na
 
 void FAINpcDataDrivenVisualScenarioTest::RefreshActionTargetObservation()
 {
-	const bool bReached = Npc.HasReachedVisualActionTarget();
+	const bool bReached = Runtime->HasReachedVisualActionTarget();
 	if (bReached) { RecordBoolObservation(TEXT("actionTargetReached"), true); }
 }
 
@@ -514,73 +767,8 @@ void FAINpcDataDrivenVisualScenarioTest::FinalizeActiveStepDiagnostic(const FStr
 	if (!StepDiagnostics.IsValidIndex(StepDiagnostics.Num() - 1)) { return; }
 	FAINpcVisualTestStepDiagnostic& Diagnostic = StepDiagnostics.Last();
 	if (Diagnostic.StepIndex != ActiveStepIndex || Diagnostic.Status != TEXT("running")) { return; }
-	const double Now = Npc.GetWorld() ? Npc.GetWorld()->GetTimeSeconds() : ActiveStepStartSeconds;
+	const double Now = Runtime->GetTimeSeconds(ActiveStepStartSeconds);
 	Diagnostic.Status = Status;
 	Diagnostic.FailureReason = Reason;
 	Diagnostic.DurationMs = FMath::Max(0.0, Now - ActiveStepStartSeconds) * 1000.0;
-}
-
-void FAINpcDataDrivenVisualScenarioTest::OnNpcSessionStarted()
-{
-	RecordBoolObservation(TEXT("sessionStarted"), true);
-	ShowStatus(TEXT("Dialogue session started through the real provider chain."), FColor::Green, 6.0f);
-}
-
-void FAINpcDataDrivenVisualScenarioTest::OnNpcResponse(const FString& Text)
-{
-	LastNpcResponseText = Text;
-	LastNpcResponseText.TrimStartAndEndInline();
-	if (LastNpcResponseText.IsEmpty())
-	{
-		Fail(TEXT("Provider returned an empty dialogue response."));
-		return;
-	}
-	RecordBoolObservation(TEXT("dialogueResponseObserved"), true);
-	RecordBoolObservation(TEXT("structuredResponseObserved"), true);
-	FNpcAction LatestAction;
-	if (Npc.NpcComponent && Npc.NpcComponent->TryGetLatestActionIntent(LatestAction)) { RecordBoolObservation(TEXT("actionIntentObserved"), true); }
-	Npc.SetVisibleDialogueText(LastNpcResponseText);
-	UpdateDialogueStateEvidence();
-	ShowStatus(FString::Printf(TEXT("<<< NPC response received. Length=%d"), LastNpcResponseText.Len()), FColor::Yellow, 8.0f);
-}
-
-void FAINpcDataDrivenVisualScenarioTest::OnNpcPartialResponse(const FString& Text)
-{
-	if (!Text.IsEmpty())
-	{
-		LastPartialResponseText = Text;
-		RecordBoolObservation(TEXT("partialResponseObserved"), true);
-	}
-	ShowStatus(FString::Printf(TEXT("[stream] partial response. Length=%d"), Text.Len()), FColor::Orange, 3.0f);
-}
-
-void FAINpcDataDrivenVisualScenarioTest::OnNpcError(const FString& ErrorMessage)
-{
-	Fail(FString::Printf(TEXT("Provider chain reported an error. Length=%d"), ErrorMessage.Len()));
-}
-
-void FAINpcDataDrivenVisualScenarioTest::OnNpcSessionEnded()
-{
-	UpdateDialogueStateEvidence();
-}
-
-void FAINpcDataDrivenVisualScenarioTest::OnNpcDegraded(const FString& FallbackResponse, const FString& DegradedFailureReason)
-{
-	(void)FallbackResponse;
-	Fail(FString::Printf(TEXT("Provider chain degraded. ReasonLength=%d"), DegradedFailureReason.Len()));
-}
-
-void FAINpcDataDrivenVisualScenarioTest::OnNpcDelayMaskingStart(UAnimMontage* Montage, const FText& FillerText)
-{
-	(void)Montage;
-	LastDelayFillerText = FillerText.ToString();
-	RecordBoolObservation(TEXT("delayMaskingStartObserved"), true);
-	if (BoolObservations.Contains(TEXT("eventTriggerBroadcast"))) { RecordBoolObservation(TEXT("eventDelayMaskingStartObserved"), true); }
-	ShowStatus(FString::Printf(TEXT("Delay masking started. FillerLength=%d"), LastDelayFillerText.Len()), FColor::Purple, 5.0f);
-}
-
-void FAINpcDataDrivenVisualScenarioTest::OnNpcDelayMaskingEnd()
-{
-	RecordBoolObservation(TEXT("delayMaskingEndObserved"), true);
-	ShowStatus(TEXT("Delay masking ended."), FColor::Purple, 3.0f);
 }
