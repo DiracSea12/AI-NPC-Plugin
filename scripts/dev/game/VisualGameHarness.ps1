@@ -1,11 +1,13 @@
 param(
     [string]$TestId,
+    [string[]]$TestIds = @(),
     [int]$TimeoutSec = 0,
     [int]$HoldSeconds = 8,
     [double]$ActionObservationHoldSeconds = 3.0,
     [switch]$AllowExistingUEProcess,
     [switch]$ValidateOnly,
-    [string]$RunId
+    [string]$RunId,
+    [string]$ResultDir
 )
 
 $ErrorActionPreference = "Stop"
@@ -119,11 +121,29 @@ function Assert-AINpcSingleVisibleInstance {
     }
 }
 
+function Get-AINpcVisualRuntimeFailureSummary($RuntimeResult) {
+    $parts = @()
+    foreach ($failure in @($RuntimeResult.failures)) {
+        if ($failure.message) { $parts += [string]$failure.message }
+        elseif ($failure.failureReason) { $parts += [string]$failure.failureReason }
+        elseif ($failure) { $parts += [string]$failure }
+    }
+    foreach ($step in @($RuntimeResult.stepDiagnostics)) {
+        if ($step.status -and [string]$step.status -ne 'PASS' -and [string]$step.status -ne 'pass' -and [string]$step.status -ne 'completed') {
+            if ($step.failureReason) { $parts += "step[$($step.stepIndex)] $($step.stepType): $($step.failureReason)" }
+        }
+    }
+    if ($RuntimeResult.diagnostics.failureReason) { $parts += [string]$RuntimeResult.diagnostics.failureReason }
+    if ($parts.Count -eq 0) { return '<no runtime failure details>' }
+    return ($parts | Select-Object -First 4) -join ' | '
+}
+
 function Test-AINpcVisualRuntimeResult {
     param(
         [Parameter(Mandatory = $true)][string]$ResultPath,
         [Parameter(Mandatory = $true)]$ManifestEntry,
-        [int]$ProcessExitCode = 0
+        [int]$ProcessExitCode = 0,
+        [string]$ExpectedRunId
     )
 
     if (-not (Test-Path $ResultPath)) {
@@ -147,7 +167,9 @@ function Test-AINpcVisualRuntimeResult {
     if ([int]$result.schemaVersion -ne 1) { throw "Visual runtime result schemaVersion must be 1." }
     if ([string]$result.layer -ne "visual-game") { throw "Visual runtime result layer must be visual-game." }
     if ([string]$result.testId -ne [string]$ManifestEntry.testId) { throw "Visual runtime result testId mismatch. Expected '$($ManifestEntry.testId)', got '$($result.testId)'." }
-    if (@($ManifestEntry.allowedTerminalOutcomes) -notcontains [string]$result.status) { throw "Visual runtime result status '$($result.status)' is not allowed for '$($ManifestEntry.testId)'." }
+    $runtimeExpectedRunId = $(if ([string]::IsNullOrWhiteSpace($ExpectedRunId)) { $RunId } else { $ExpectedRunId })
+    if ([string]$result.runId -ne [string]$runtimeExpectedRunId) { throw "Visual runtime result runId mismatch. Expected '$runtimeExpectedRunId', got '$($result.runId)'." }
+    if ([string]$result.status -ne "PASS") { throw "Visual runtime result status '$($result.status)' is not PASS for '$($ManifestEntry.testId)'. $(Get-AINpcVisualRuntimeFailureSummary $result)" }
     if ($ProcessExitCode -ne 0) { throw "Visual runtime process exited with code $ProcessExitCode." }
 
     foreach ($storyId in @($ManifestEntry.storyIds)) {
@@ -158,14 +180,101 @@ function Test-AINpcVisualRuntimeResult {
     }
 
     if (-not ($result.PSObject.Properties.Name -contains "providerIdentity")) { throw "Visual runtime result missing providerIdentity evidence." }
+    if (-not ($result.PSObject.Properties.Name -contains "providerRuntimeEvidence")) { throw "Visual runtime result missing providerRuntimeEvidence." }
     if (-not ($result.PSObject.Properties.Name -contains "runtimeObservationSummary")) { throw "Visual runtime result missing runtimeObservationSummary." }
     if (-not ($result.PSObject.Properties.Name -contains "visibleLaunchGuardrail")) { throw "Visual runtime result missing visibleLaunchGuardrail." }
+    if (-not ($result.PSObject.Properties.Name -contains "visibleBehaviorEvidence")) { throw "Visual runtime result missing visibleBehaviorEvidence." }
+    if (-not ($result.PSObject.Properties.Name -contains "stepDiagnostics") -or @($result.stepDiagnostics).Count -eq 0) { throw "Visual runtime result missing non-empty stepDiagnostics." }
+    if ($result.providerRuntimeEvidence.configOnly -eq $true) { throw "Visual runtime provider evidence is config-only; runtime request path was not observed." }
+    if ($result.providerRuntimeEvidence.dialogueSessionStarted -ne $true -or $result.providerRuntimeEvidence.dialogueResponseReceived -ne $true) { throw "Visual runtime provider evidence must include observed dialogue session and response delegates." }
+    if ($result.runtimeObservationSummary.sessionStartedObserved -ne $true -or $result.runtimeObservationSummary.responseObserved -ne $true) { throw "Visual runtime observation summary must include real session and response observations." }
+    if ($result.visibleBehaviorEvidence.dialogueVisible -ne $true) { throw "Visible behavior evidence must include dialogueVisible=true." }
 
     if ($result.command.executable -and ([System.IO.Path]::GetFileName([string]$result.command.executable) -ne "UnrealEditor.exe")) {
         throw "Visual runtime result command executable is not UnrealEditor.exe: $($result.command.executable)"
     }
 
     return $result
+}
+
+function Invoke-AINpcVisualGameSuite {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$TestIds,
+        [int]$TimeoutSec = 0,
+        [int]$HoldSeconds = 8,
+        [double]$ActionObservationHoldSeconds = 3.0,
+        [switch]$AllowExistingUEProcess,
+        [switch]$ValidateOnly,
+        [string]$RunId,
+        [string]$ResultDir
+    )
+
+    $suiteTestIds = @($TestIds | ForEach-Object { @(([string]$_).Split(',', [System.StringSplitOptions]::RemoveEmptyEntries)) } | ForEach-Object { ([string]$_).Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($suiteTestIds.Count -eq 0) { throw "At least one visual suite TestId is required." }
+    $manifestEntries = @($suiteTestIds | ForEach-Object { Get-AINpcVisualTestEntry -TestId $_ })
+    $maps = @($manifestEntries | ForEach-Object { [string]$_.map } | Select-Object -Unique)
+    if ($maps.Count -ne 1) { throw "Visual suite mode requires all scenarios to use one map; found: $($maps -join ', ')" }
+    if ($TimeoutSec -le 0) { $TimeoutSec = [int](($manifestEntries | Measure-Object -Property timeoutSec -Sum).Sum) }
+
+    $repoRoot = Get-AINpcRepoRoot
+    $uproject = Join-Path $repoRoot "VerifierHost.uproject"
+    $editor = "G:\UE5\UnrealEngine-AINpc\Engine\Binaries\Win64\UnrealEditor.exe"
+    $mapPath = [string]$maps[0]
+    $mapAssetPath = Resolve-AINpcGameMapFile -MapPath $mapPath
+    if ([string]::IsNullOrWhiteSpace($RunId)) { $RunId = New-AINpcRunId "visual-suite" }
+    if ([string]::IsNullOrWhiteSpace($ResultDir)) { $ResultDir = Join-Path (Join-Path $repoRoot "Saved/TestLogs") "visual-game" }
+    $context = New-AINpcTestRunContext -Layer "visual-game" -RunId "$RunId-harness"
+    $logFile = Join-Path $context.RunDir "visual-game-suite.log"
+    $testIdsFile = Join-Path $context.RunDir "visual-test-ids.txt"
+    Set-Content -Path $testIdsFile -Value ($suiteTestIds -join "`n") -Encoding UTF8
+
+    $arguments = @(
+        "`"$uproject`"",
+        $mapPath,
+        "-game",
+        "-nosplash",
+        "-log",
+        "-AbsLog=`"$logFile`"",
+        "-AINpcVisualHoldSeconds=$HoldSeconds",
+        "-AINpcVisualSuiteRunId=$RunId",
+        "-AINpcVisualTestIdsFile=`"$testIdsFile`"",
+        "-AINpcVisualResultDir=`"$ResultDir`"",
+        "-AINpcActionObservationHoldSeconds=$ActionObservationHoldSeconds"
+    )
+
+    try {
+        Assert-AINpcVisibleLaunchContract -EditorPath $editor -Arguments $arguments
+        if (-not (Test-Path $uproject)) { throw "Project file not found at $uproject" }
+        if (-not (Test-Path $mapAssetPath)) { throw "Visual scenario map not found for '$mapPath': $mapAssetPath" }
+        if ($ValidateOnly) {
+            Write-Host "SKIP: visual game suite validate-only checks passed; no runtime acceptance result claimed."
+            return 0
+        }
+        if (-not (Test-Path $editor)) { throw "UnrealEditor.exe not found at $editor" }
+        Assert-AINpcSingleVisibleInstance -AllowExistingUEProcess:$AllowExistingUEProcess
+
+        $buildProcess = Start-Process -FilePath "pwsh" -ArgumentList @("-NoProfile", "-File", (Join-Path (Split-Path -Parent $PSScriptRoot) "build-editor.ps1")) -Wait -PassThru
+        if ($buildProcess.ExitCode -ne 0) { throw "build-editor.ps1 failed with exit code $($buildProcess.ExitCode)" }
+
+        Write-Host "Launching one visible NPC gameplay suite harness instance."
+        Write-Host "Map: $mapPath"
+        Write-Host "TestIds: $($suiteTestIds -join ', ')"
+        Write-Host "ResultDir: $ResultDir"
+        Write-Host "Log: $logFile"
+
+        $process = Start-Process -FilePath $editor -ArgumentList $arguments -PassThru
+        if (-not $process.WaitForExit($TimeoutSec * 1000)) {
+            Stop-Process -Id $process.Id -Force
+            throw "Visual gameplay suite timed out after $TimeoutSec seconds."
+        }
+        return $process.ExitCode
+    }
+    catch {
+        $message = ConvertTo-AINpcRedactedErrorSummary -ErrorRecord $_
+        Write-AINpcVisualLogTail -LogPath $logFile
+        Write-Host "FAIL: $message"
+        return 1
+    }
 }
 
 function Invoke-AINpcVisualGameTest {
@@ -184,7 +293,7 @@ function Invoke-AINpcVisualGameTest {
 
     $repoRoot = Get-AINpcRepoRoot
     $uproject = Join-Path $repoRoot "VerifierHost.uproject"
-    $editor = "G:\UE5\UnrealEngine\Engine\Binaries\Win64\UnrealEditor.exe"
+    $editor = "G:\UE5\UnrealEngine-AINpc\Engine\Binaries\Win64\UnrealEditor.exe"
     $mapPath = [string]$manifestEntry.map
     $mapAssetPath = Resolve-AINpcGameMapFile -MapPath $mapPath
     if ([string]::IsNullOrWhiteSpace($RunId)) {
@@ -208,6 +317,7 @@ function Invoke-AINpcVisualGameTest {
         "-AbsLog=`"$logFile`"",
         "-AINpcVisualHoldSeconds=$HoldSeconds",
         "-AINpcVisualTestId=$TestId",
+        "-AINpcVisualRunId=$RunId",
         "-AINpcVisualResultPath=`"$runtimeResultPath`"",
         "-AINpcActionObservationHoldSeconds=$ActionObservationHoldSeconds"
     )
@@ -227,8 +337,8 @@ function Invoke-AINpcVisualGameTest {
 
             Assert-AINpcSingleVisibleInstance -AllowExistingUEProcess:$AllowExistingUEProcess
 
-            & (Join-Path (Split-Path -Parent $PSScriptRoot) "build-editor.ps1")
-            if ($LASTEXITCODE -ne 0) { throw "build-editor.ps1 failed with exit code $LASTEXITCODE" }
+            $buildProcess = Start-Process -FilePath "pwsh" -ArgumentList @("-NoProfile", "-File", (Join-Path (Split-Path -Parent $PSScriptRoot) "build-editor.ps1")) -Wait -PassThru
+            if ($buildProcess.ExitCode -ne 0) { throw "build-editor.ps1 failed with exit code $($buildProcess.ExitCode)" }
 
             Write-Host "Launching one visible NPC gameplay harness instance."
             Write-Host "Map: $mapPath"
@@ -278,6 +388,19 @@ function Invoke-AINpcVisualGameTest {
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
+    if ($TestIds.Count -gt 0) {
+        $exitCode = Invoke-AINpcVisualGameSuite `
+            -TestIds $TestIds `
+            -TimeoutSec $TimeoutSec `
+            -HoldSeconds $HoldSeconds `
+            -ActionObservationHoldSeconds $ActionObservationHoldSeconds `
+            -AllowExistingUEProcess:$AllowExistingUEProcess `
+            -ValidateOnly:$ValidateOnly `
+            -RunId $RunId `
+            -ResultDir $ResultDir
+        exit $exitCode
+    }
+
     if ([string]::IsNullOrWhiteSpace($TestId)) {
         throw "-TestId is required."
     }

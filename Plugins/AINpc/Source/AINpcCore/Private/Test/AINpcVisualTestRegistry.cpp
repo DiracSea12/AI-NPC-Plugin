@@ -25,6 +25,36 @@ namespace
 		TEXT("dialogue.start"), TEXT("world.event"), TEXT("wait.until"), TEXT("action.executeLatestIntent"), TEXT("observe.hold")
 	};
 
+	bool IsKnownVisualObservationName(const FString& Name)
+	{
+		static const TSet<FString> KnownNames = {
+			TEXT("sessionStarted"), TEXT("waitingStateObserved"), TEXT("speakingStateObserved"),
+			TEXT("dialogueResponseObserved"), TEXT("partialResponseObserved"), TEXT("structuredResponseObserved"),
+			TEXT("actionIntentObserved"), TEXT("eventTriggerBroadcast"), TEXT("eventDelayMaskingStartObserved"),
+			TEXT("delayMaskingStartObserved"), TEXT("delayMaskingEndObserved"), TEXT("actionExecutionAccepted"),
+			TEXT("actionRejectedVisible"), TEXT("actionTargetReached"), TEXT("actionTargetReachedHoldElapsed"),
+			TEXT("responseLength"), TEXT("partialResponseLength"), TEXT("delayFillerLength"),
+			TEXT("distanceToActionTarget"), TEXT("lastActionFailure")
+		};
+		return KnownNames.Contains(Name);
+	}
+
+	TArray<FString> FindPromptPlaceholders(const FString& Text)
+	{
+		TArray<FString> Placeholders;
+		int32 SearchFrom = 0;
+		while (SearchFrom < Text.Len())
+		{
+			const int32 OpenIndex = Text.Find(TEXT("{"), ESearchCase::CaseSensitive, ESearchDir::FromStart, SearchFrom);
+			if (OpenIndex == INDEX_NONE) { break; }
+			const int32 CloseIndex = Text.Find(TEXT("}"), ESearchCase::CaseSensitive, ESearchDir::FromStart, OpenIndex + 1);
+			if (CloseIndex == INDEX_NONE) { break; }
+			if (CloseIndex > OpenIndex + 1) { Placeholders.AddUnique(Text.Mid(OpenIndex + 1, CloseIndex - OpenIndex - 1)); }
+			SearchFrom = CloseIndex + 1;
+		}
+		return Placeholders;
+	}
+
 	FString ScenarioName(const FString& TestId)
 	{
 		return TestId.IsEmpty() ? FString(TEXT("<unknown>")) : TestId;
@@ -99,6 +129,16 @@ namespace
 
 		static const TSet<FString> AssertionFields = { TEXT("all"), TEXT("any"), TEXT("anyOf"), TEXT("exists"), TEXT("equals") };
 		if (!RejectUnknownFields(*Object, TestId, AssertionFields, Context, OutError)) { return false; }
+		int32 OperatorCount = 0;
+		for (const FString& AssertionField : AssertionFields)
+		{
+			if (Object->HasField(AssertionField)) { ++OperatorCount; }
+		}
+		if (OperatorCount != 1)
+		{
+			OutError = FString::Printf(TEXT("scenario '%s' %s assertion must use exactly one operator"), *ScenarioName(TestId), *Context);
+			return false;
+		}
 
 		const TArray<TSharedPtr<FJsonValue>>* Children = nullptr;
 		if (Object->TryGetArrayField(TEXT("all"), Children) || Object->TryGetArrayField(TEXT("any"), Children) || Object->TryGetArrayField(TEXT("anyOf"), Children))
@@ -132,6 +172,11 @@ namespace
 				OutError = FString::Printf(TEXT("scenario '%s' %s exists assertion has empty observation"), *ScenarioName(TestId), *Context);
 				return false;
 			}
+			if (!IsKnownVisualObservationName(ExistsObservation))
+			{
+				OutError = FString::Printf(TEXT("scenario '%s' %s exists assertion references unknown observation '%s'"), *ScenarioName(TestId), *Context, *ExistsObservation);
+				return false;
+			}
 			OutAssertion.Operator = TEXT("exists");
 			OutAssertion.Observation = MoveTemp(ExistsObservation);
 			return true;
@@ -143,6 +188,11 @@ namespace
 			static const TSet<FString> EqualsFields = { TEXT("observation"), TEXT("value") };
 			if (!RejectUnknownFields(**EqualsObject, TestId, EqualsFields, Context + TEXT(".equals"), OutError)) { return false; }
 			if (!RequireStringField(**EqualsObject, TestId, TEXT("observation"), OutAssertion.Observation, OutError)) { return false; }
+			if (!IsKnownVisualObservationName(OutAssertion.Observation))
+			{
+				OutError = FString::Printf(TEXT("scenario '%s' %s equals assertion references unknown observation '%s'"), *ScenarioName(TestId), *Context, *OutAssertion.Observation);
+				return false;
+			}
 			const TSharedPtr<FJsonValue> Value = (*EqualsObject)->TryGetField(TEXT("value"));
 			if (!Value.IsValid())
 			{
@@ -184,6 +234,14 @@ namespace
 				return false;
 			}
 		}
+		for (const FString& Placeholder : FindPromptPlaceholders(PromptText))
+		{
+			if (!Config.Prompt.Variables.Contains(Placeholder))
+			{
+				OutError = FString::Printf(TEXT("scenario '%s' prompt file '%s' contains undeclared placeholder '{%s}'"), *Config.TestId, *Config.Prompt.File, *Placeholder);
+				return false;
+			}
+		}
 		return true;
 	}
 
@@ -202,7 +260,13 @@ namespace
 
 		double SchemaVersion = 0.0;
 		if (!RequireNumberField(JsonObject, OutConfig.TestId, TEXT("schemaVersion"), SchemaVersion, OutError)) { return false; }
-		OutConfig.SchemaVersion = static_cast<int32>(SchemaVersion);
+		const int32 SchemaVersionInt = static_cast<int32>(SchemaVersion);
+		if (SchemaVersion != static_cast<double>(SchemaVersionInt))
+		{
+			OutError = FString::Printf(TEXT("scenario '%s' field 'schemaVersion' must be integer 2"), *ScenarioName(OutConfig.TestId));
+			return false;
+		}
+		OutConfig.SchemaVersion = SchemaVersionInt;
 		if (OutConfig.SchemaVersion != 2) { OutError = FString::Printf(TEXT("scenario '%s' field 'schemaVersion' must be 2"), *ScenarioName(OutConfig.TestId)); return false; }
 		if (!RequireStringField(JsonObject, OutConfig.TestId, TEXT("testId"), OutConfig.TestId, OutError)) { return false; }
 		if (!RequireStringField(JsonObject, OutConfig.TestId, TEXT("map"), OutConfig.Map, OutError)) { return false; }
@@ -253,6 +317,11 @@ namespace
 			FAINpcVisualScenarioStep Step;
 			if (!RequireStringField(**StepObject, OutConfig.TestId, TEXT("type"), Step.Type, OutError)) { return false; }
 			if (!GSupportedStepTypes.Contains(Step.Type)) { OutError = FString::Printf(TEXT("scenario '%s' step[%d] has unknown type '%s'"), *OutConfig.TestId, StepIndex, *Step.Type); return false; }
+			if (Step.Type != TEXT("wait.until") && (*StepObject)->HasField(TEXT("condition")))
+			{
+				OutError = FString::Printf(TEXT("scenario '%s' step[%d] field 'condition' is only supported by wait.until"), *OutConfig.TestId, StepIndex);
+				return false;
+			}
 			const TSharedPtr<FJsonObject>* PayloadObject = nullptr;
 			if (!(*StepObject)->TryGetObjectField(TEXT("payload"), PayloadObject) || !PayloadObject || !PayloadObject->IsValid()) { OutError = FString::Printf(TEXT("scenario '%s' step[%d] field 'payload' must be an object"), *OutConfig.TestId, StepIndex); return false; }
 
@@ -264,9 +333,8 @@ namespace
 			}
 			else if (Step.Type == TEXT("world.event"))
 			{
-				if (!RejectUnknownFields(**PayloadObject, OutConfig.TestId, { TEXT("eventTag"), TEXT("eventId") }, FString::Printf(TEXT("step[%d].payload"), StepIndex), OutError)) { return false; }
+				if (!RejectUnknownFields(**PayloadObject, OutConfig.TestId, { TEXT("eventTag") }, FString::Printf(TEXT("step[%d].payload"), StepIndex), OutError)) { return false; }
 				if (!RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("eventTag"), Step.Payload.EventTag, OutError)) { return false; }
-				if (!RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("eventId"), Step.Payload.EventId, OutError)) { return false; }
 			}
 			else if (Step.Type == TEXT("wait.until"))
 			{
@@ -286,14 +354,13 @@ namespace
 			}
 			else if (Step.Type == TEXT("observe.hold"))
 			{
-				if (!RejectUnknownFields(**PayloadObject, OutConfig.TestId, { TEXT("observation"), TEXT("durationSec"), TEXT("scope") }, FString::Printf(TEXT("step[%d].payload"), StepIndex), OutError)) { return false; }
+				if (!RejectUnknownFields(**PayloadObject, OutConfig.TestId, { TEXT("observation"), TEXT("durationSec") }, FString::Printf(TEXT("step[%d].payload"), StepIndex), OutError)) { return false; }
 				if (!RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("observation"), Step.Payload.Observation, OutError)) { return false; }
-				if (!RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("scope"), Step.Payload.AssertionScope, OutError)) { return false; }
 				double Duration = 0.0;
 				if (!RequireNumberField(**PayloadObject, OutConfig.TestId, TEXT("durationSec"), Duration, OutError)) { return false; }
 				Step.Payload.DurationSec = static_cast<float>(Duration);
-				if (Step.Payload.DurationSec < 0.0f) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.durationSec must not be negative"), *OutConfig.TestId, StepIndex); return false; }
-				if (Step.Payload.AssertionScope != TEXT("step") && Step.Payload.AssertionScope != TEXT("global")) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.scope must be 'step' or 'global'"), *OutConfig.TestId, StepIndex); return false; }
+				if (Step.Payload.DurationSec <= 0.0f) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.durationSec must be positive"), *OutConfig.TestId, StepIndex); return false; }
+				if (!IsKnownVisualObservationName(Step.Payload.Observation)) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.observation references unknown observation '%s'"), *OutConfig.TestId, StepIndex, *Step.Payload.Observation); return false; }
 			}
 			OutConfig.Steps.Add(MoveTemp(Step));
 		}

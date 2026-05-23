@@ -27,9 +27,7 @@ struct FAINpcVisualScenarioStepPayload
 {
 	FString PromptRef;
 	FString EventTag;
-	FString EventId;
 	FString Observation;
-	FString AssertionScope;
 	float TimeoutSec = 0.0f;
 	float DurationSec = 0.0f;
 	bool bAllowActionRejection = false;
@@ -80,6 +78,15 @@ struct FAINpcVisualTestObservations
 	TMap<FString, FString> StringFields;
 };
 
+struct FAINpcVisualTestStepDiagnostic
+{
+	int32 StepIndex = INDEX_NONE;
+	FString StepType;
+	FString Status;
+	FString FailureReason;
+	double DurationMs = 0.0;
+};
+
 struct FAINpcVisualTestFixture
 {
 	AAINpcTestCharacter* Npc = nullptr;
@@ -110,6 +117,7 @@ public:
 	virtual const FString& GetFailureReason() const = 0;
 	virtual FString BuildSummary() const = 0;
 	virtual FAINpcVisualTestObservations BuildObservations() const = 0;
+	virtual TArray<FAINpcVisualTestStepDiagnostic> BuildStepDiagnostics() const = 0;
 };
 
 struct FAINpcVisualTestDescriptor

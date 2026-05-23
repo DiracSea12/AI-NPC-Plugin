@@ -45,6 +45,43 @@ namespace
 		};
 		return KnownBooleanObservations.Contains(Name);
 	}
+
+	TArray<FString> FindPromptPlaceholders(const FString& Text)
+	{
+		TArray<FString> Placeholders;
+		int32 SearchFrom = 0;
+		while (SearchFrom < Text.Len())
+		{
+			const int32 OpenIndex = Text.Find(TEXT("{"), ESearchCase::CaseSensitive, ESearchDir::FromStart, SearchFrom);
+			if (OpenIndex == INDEX_NONE) { break; }
+			const int32 CloseIndex = Text.Find(TEXT("}"), ESearchCase::CaseSensitive, ESearchDir::FromStart, OpenIndex + 1);
+			if (CloseIndex == INDEX_NONE) { break; }
+			if (CloseIndex > OpenIndex + 1)
+			{
+				Placeholders.AddUnique(Text.Mid(OpenIndex + 1, CloseIndex - OpenIndex - 1));
+			}
+			SearchFrom = CloseIndex + 1;
+		}
+		return Placeholders;
+	}
+
+	TArray<FString> FindUnknownPromptPlaceholders(const FString& Text, const TMap<FString, FString>& Variables)
+	{
+		TArray<FString> Unknown;
+		for (const FString& Placeholder : FindPromptPlaceholders(Text))
+		{
+			if (!Variables.Contains(Placeholder))
+			{
+				Unknown.Add(FString::Printf(TEXT("{%s}"), *Placeholder));
+			}
+		}
+		return Unknown;
+	}
+
+	FString DescribeUnresolvedPromptPlaceholders(const TArray<FString>& Placeholders)
+	{
+		return Placeholders.IsEmpty() ? TEXT("<none>") : FString::Join(Placeholders, TEXT(", "));
+	}
 }
 
 FAINpcDataDrivenVisualScenarioTest::FAINpcDataDrivenVisualScenarioTest(AAINpcTestCharacter& InNpc, AAINpcTestSmartObjectActor& InSmartObject, FAINpcVisualScenarioConfig InConfig)
@@ -132,13 +169,20 @@ FAINpcVisualTestObservations FAINpcDataDrivenVisualScenarioTest::BuildObservatio
 {
 	FAINpcVisualTestObservations Observations;
 	Observations.BooleanFields = BoolObservations;
+	Observations.IntegerFields = IntegerObservations;
 	Observations.IntegerFields.Add(TEXT("responseLength"), LastNpcResponseText.Len());
 	Observations.IntegerFields.Add(TEXT("partialResponseLength"), LastPartialResponseText.Len());
 	Observations.IntegerFields.Add(TEXT("delayFillerLength"), LastDelayFillerText.Len());
+	Observations.NumberFields = NumberObservations;
 	Observations.NumberFields.Add(TEXT("distanceToActionTarget"), Npc.GetVisualActionTargetDistance());
 	Observations.StringFields = StringObservations;
 	Observations.StringFields.Add(TEXT("lastActionFailure"), LastActionFailureReason);
 	return Observations;
+}
+
+TArray<FAINpcVisualTestStepDiagnostic> FAINpcDataDrivenVisualScenarioTest::BuildStepDiagnostics() const
+{
+	return StepDiagnostics;
 }
 
 void FAINpcDataDrivenVisualScenarioTest::StartNextStep()
@@ -159,6 +203,11 @@ void FAINpcDataDrivenVisualScenarioTest::StartNextStep()
 	}
 
 	ActiveStepStartSeconds = Npc.GetWorld() ? Npc.GetWorld()->GetTimeSeconds() : 0.0;
+	FAINpcVisualTestStepDiagnostic Diagnostic;
+	Diagnostic.StepIndex = ActiveStepIndex;
+	Diagnostic.StepType = Config.Steps[ActiveStepIndex].Type;
+	Diagnostic.Status = TEXT("running");
+	StepDiagnostics.Add(MoveTemp(Diagnostic));
 	FString StepFailureReason;
 	if (!RunStep(Config.Steps[ActiveStepIndex], StepFailureReason))
 	{
@@ -305,7 +354,7 @@ bool FAINpcDataDrivenVisualScenarioTest::IsAssertionSatisfied(const FAINpcVisual
 	}
 	if (Assertion.Operator == TEXT("exists"))
 	{
-		return BoolObservations.Contains(Assertion.Observation) || StringObservations.Contains(Assertion.Observation);
+		return HasObservation(Assertion.Observation);
 	}
 	if (Assertion.Operator == TEXT("equals"))
 	{
@@ -333,10 +382,25 @@ bool FAINpcDataDrivenVisualScenarioTest::TryGetObservationString(const FString& 
 	return false;
 }
 
+bool FAINpcDataDrivenVisualScenarioTest::HasObservation(const FString& Name) const
+{
+	const FAINpcVisualTestObservations Observations = BuildObservations();
+	return Observations.BooleanFields.Contains(Name)
+		|| Observations.IntegerFields.Contains(Name)
+		|| Observations.NumberFields.Contains(Name)
+		|| Observations.StringFields.Contains(Name);
+}
+
 FString FAINpcDataDrivenVisualScenarioTest::BuildPrompt(FString& OutFailureReason) const
 {
 	FString Prompt;
 	if (!AINpcDialogueVisualTestSupport::LoadRequiredConfigText(*Config.Prompt.File, TEXT("prompt template"), Prompt, OutFailureReason)) { return FString(); }
+	const TArray<FString> UnknownPlaceholders = FindUnknownPromptPlaceholders(Prompt, Config.Prompt.Variables);
+	if (!UnknownPlaceholders.IsEmpty())
+	{
+		OutFailureReason = FString::Printf(TEXT("Scenario '%s' prompt file '%s' contains undeclared placeholder(s): %s"), *Config.TestId, *Config.Prompt.File, *DescribeUnresolvedPromptPlaceholders(UnknownPlaceholders));
+		return FString();
+	}
 	TMap<FString, FString> RuntimeVariables = Config.Prompt.Variables;
 	if (RuntimeVariables.Contains(SmartObjectTargetIdVariable))
 	{
@@ -351,11 +415,6 @@ FString FAINpcDataDrivenVisualScenarioTest::BuildPrompt(FString& OutFailureReaso
 	for (const TPair<FString, FString>& Variable : RuntimeVariables)
 	{
 		Prompt = Prompt.Replace(*FString::Printf(TEXT("{%s}"), *Variable.Key), *Variable.Value, ESearchCase::CaseSensitive);
-	}
-	if (Prompt.Contains(TEXT("{")) && Prompt.Contains(TEXT("}")))
-	{
-		OutFailureReason = FString::Printf(TEXT("Scenario '%s' prompt file '%s' still contains unresolved placeholder after variable replacement."), *Config.TestId, *Config.Prompt.File);
-		return FString();
 	}
 	return Prompt;
 }
@@ -419,6 +478,7 @@ void FAINpcDataDrivenVisualScenarioTest::Fail(const FString& Reason)
 	if (bComplete || bFailed) { return; }
 	bFailed = true;
 	FailureReason = Reason;
+	FinalizeActiveStepDiagnostic(TEXT("FAIL"), Reason);
 	if (UWorld* World = Npc.GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(StepTimerHandle);
@@ -445,7 +505,19 @@ void FAINpcDataDrivenVisualScenarioTest::RefreshActionTargetObservation()
 
 void FAINpcDataDrivenVisualScenarioTest::CompleteCurrentStep()
 {
+	FinalizeActiveStepDiagnostic(TEXT("PASS"), FString());
 	StartNextStep();
+}
+
+void FAINpcDataDrivenVisualScenarioTest::FinalizeActiveStepDiagnostic(const FString& Status, const FString& Reason)
+{
+	if (!StepDiagnostics.IsValidIndex(StepDiagnostics.Num() - 1)) { return; }
+	FAINpcVisualTestStepDiagnostic& Diagnostic = StepDiagnostics.Last();
+	if (Diagnostic.StepIndex != ActiveStepIndex || Diagnostic.Status != TEXT("running")) { return; }
+	const double Now = Npc.GetWorld() ? Npc.GetWorld()->GetTimeSeconds() : ActiveStepStartSeconds;
+	Diagnostic.Status = Status;
+	Diagnostic.FailureReason = Reason;
+	Diagnostic.DurationMs = FMath::Max(0.0, Now - ActiveStepStartSeconds) * 1000.0;
 }
 
 void FAINpcDataDrivenVisualScenarioTest::OnNpcSessionStarted()

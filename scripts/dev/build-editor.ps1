@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "TestResult.ps1")
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$ubt = "G:\UE5\UnrealEngine\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"
+$ubt = "G:\UE5\UnrealEngine-AINpc\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe"
 $uproject = Join-Path $repoRoot "VerifierHost.uproject"
 $context = New-AINpcTestRunContext -Layer "build" -RunId $RunId
 $startTime = (Get-Date).ToUniversalTime()

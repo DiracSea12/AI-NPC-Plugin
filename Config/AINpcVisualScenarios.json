@@ -53,8 +53,7 @@
         "type": "observe.hold",
         "payload": {
           "observation": "actionTargetReached",
-          "durationSec": 3.0,
-          "scope": "step"
+          "durationSec": 3.0
         }
       }
     ],
@@ -100,8 +99,7 @@
       {
         "type": "world.event",
         "payload": {
-          "eventTag": "AINpc.Tests.Route.Match",
-          "eventId": "US2_EVENT_TRIGGER_GIFT_001"
+          "eventTag": "AINpc.Tests.Route.Match"
         }
       },
       {
@@ -194,8 +192,7 @@
         "type": "observe.hold",
         "payload": {
           "observation": "actionTargetReached",
-          "durationSec": 3.0,
-          "scope": "step"
+          "durationSec": 3.0
         }
       }
     ],

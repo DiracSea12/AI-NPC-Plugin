@@ -20,6 +20,7 @@ public:
 	const FString& GetFailureReason() const override;
 	FString BuildSummary() const override;
 	FAINpcVisualTestObservations BuildObservations() const override;
+	TArray<FAINpcVisualTestStepDiagnostic> BuildStepDiagnostics() const override;
 
 private:
 	void BindNpcDelegates();
@@ -33,6 +34,7 @@ private:
 	bool IsAssertionSatisfied(const FAINpcVisualScenarioAssertion& Assertion) const;
 	bool TryGetObservationBool(const FString& Name, bool& OutValue) const;
 	bool TryGetObservationString(const FString& Name, FString& OutValue) const;
+	bool HasObservation(const FString& Name) const;
 	FString BuildPrompt(FString& OutFailureReason) const;
 	void HandleTimeout();
 	void UpdateDialogueStateEvidence();
@@ -42,6 +44,7 @@ private:
 	void RecordBoolObservation(const FString& Name, bool bValue);
 	void RefreshActionTargetObservation();
 	void CompleteCurrentStep();
+	void FinalizeActiveStepDiagnostic(const FString& Status, const FString& Reason);
 
 	void OnNpcSessionStarted();
 	void OnNpcResponse(const FString& Text);
@@ -68,7 +71,10 @@ private:
 	FDelegateHandle DelayMaskingStartHandle;
 	FDelegateHandle DelayMaskingEndHandle;
 	TMap<FString, bool> BoolObservations;
+	TMap<FString, int32> IntegerObservations;
+	TMap<FString, double> NumberObservations;
 	TMap<FString, FString> StringObservations;
+	TArray<FAINpcVisualTestStepDiagnostic> StepDiagnostics;
 	int32 ActiveStepIndex = INDEX_NONE;
 	double ActiveStepStartSeconds = 0.0;
 	bool bComplete = false;

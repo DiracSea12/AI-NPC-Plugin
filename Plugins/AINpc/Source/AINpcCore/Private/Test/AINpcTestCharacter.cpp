@@ -28,6 +28,7 @@ AAINpcTestCharacter::AAINpcTestCharacter()
 	{
 		Movement->MaxWalkSpeed = VisualActionMoveSpeed;
 		Movement->bOrientRotationToMovement = true;
+		Movement->bRunPhysicsWithNoController = true;
 		Movement->RotationRate = FRotator(0.0f, 360.0f, 0.0f);
 	}
 
@@ -105,19 +106,19 @@ void AAINpcTestCharacter::Tick(float DeltaTime)
 	if (bVisualActionMoveActive && !bVisualActionTargetReached)
 	{
 		const FVector CurrentLocation = GetActorLocation();
-		const FVector NextLocation = FMath::VInterpConstantTo(CurrentLocation, VisualActionTargetLocation, DeltaTime, VisualActionMoveSpeed);
-		SetActorLocation(NextLocation);
-
-		const FVector ToTarget = VisualActionTargetLocation - NextLocation;
-		if (!ToTarget.IsNearlyZero())
-		{
-			SetActorRotation(FVector(ToTarget.X, ToTarget.Y, 0.0f).Rotation());
-		}
-
-		if (FVector::DistSquared2D(NextLocation, VisualActionTargetLocation) <= FMath::Square(VisualActionAcceptanceDistance))
+		const FVector ToTarget2D(VisualActionTargetLocation.X - CurrentLocation.X, VisualActionTargetLocation.Y - CurrentLocation.Y, 0.0f);
+		if (ToTarget2D.SizeSquared() <= FMath::Square(VisualActionAcceptanceDistance))
 		{
 			bVisualActionMoveActive = false;
 			bVisualActionTargetReached = true;
+			if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+			{
+				Movement->StopMovementImmediately();
+			}
+		}
+		else
+		{
+			AddMovementInput(ToTarget2D.GetSafeNormal(), 1.0f);
 		}
 	}
 

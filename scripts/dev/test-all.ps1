@@ -11,6 +11,7 @@ $context = New-AINpcTestRunContext -Layer "full-suite" -RunId $RunId
 $startTime = (Get-Date).ToUniversalTime()
 $layers = @()
 $failures = @()
+$suitePhaseIds = New-Object System.Collections.Generic.HashSet[string]
 $status = "PASS"
 $commandArgs = @("-File", $MyInvocation.MyCommand.Path)
 if (-not [string]::IsNullOrWhiteSpace($RunId)) { $commandArgs += @("-RunId", $RunId) }
@@ -54,7 +55,12 @@ foreach ($step in $steps) {
     if ($resultPath -and (Test-Path $resultPath)) {
         try {
             $layerResult = Get-Content -Path $resultPath -Raw | ConvertFrom-Json
-            $stepStatus = [string]$layerResult.status
+            if ($exitCode -eq 0) {
+                $stepStatus = [string]$layerResult.status
+            }
+            foreach ($phaseId in @($layerResult.phaseIds)) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$phaseId)) { [void]$suitePhaseIds.Add([string]$phaseId) }
+            }
         }
         catch {
             $stepStatus = "FAIL"
@@ -96,7 +102,7 @@ Write-AINpcTestResult -Context $context -Status $status -StartTimeUtc $startTime
     failedOrBlockedCount = $failures.Count
 }) -Observations ([ordered]@{
     layers = @($layers)
-}) -Failures $failures | Out-Null
+}) -Failures $failures -PhaseIds @($suitePhaseIds) | Out-Null
 
 if ($status -ne "PASS") {
     Write-Host "FAIL: full AI NPC test suite had $($failures.Count) failing or blocked layer(s)"

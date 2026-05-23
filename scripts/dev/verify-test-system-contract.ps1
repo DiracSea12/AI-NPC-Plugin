@@ -14,7 +14,7 @@ $supportedEntries = @(
 )
 $requiredResultFields = @(
     "schemaVersion", "runId", "layer", "testId", "storyIds", "phaseIds", "status",
-    "startTimeUtc", "endTimeUtc", "durationMs", "command", "artifacts", "diagnostics", "observations", "failures"
+    "startTimeUtc", "endTimeUtc", "durationMs", "command", "artifacts", "diagnostics", "observations", "stepDiagnostics", "providerRuntimeEvidence", "visibleBehaviorEvidence", "failures"
 )
 $validStatuses = @("PASS", "FAIL", "SKIP", "BLOCKED")
 $validLayers = @("build", "static", "editor-automation", "provider-connectivity", "visual-game", "full-suite")
@@ -197,14 +197,13 @@ $knownVisualObservationNames = @(
     "actionExecutionAccepted",
     "actionRejectedVisible",
     "actionTargetReached",
-    "actionObservationHoldElapsed",
+    "actionTargetReachedHoldElapsed",
     "responseLength",
     "partialResponseLength",
     "delayFillerLength",
     "distanceToActionTarget",
     "lastActionFailure"
 )
-$validTerminalOutcomes = @("PASS", "FAIL", "SKIP", "BLOCKED")
 $requiredScenarioFields = @(
     "schemaVersion", "testId", "map", "timeoutSec", "storyIds", "phaseIds", "fixture", "persona", "prompt", "steps", "expect"
 )
@@ -240,6 +239,42 @@ function Resolve-VisualScenarioMapPath([string]$MapPath) {
     return Join-Path (Join-Path $repoRoot "Content") ($relative + ".umap")
 }
 
+function Test-KnownVisualObservation([string]$Observation, [string]$Context) {
+    if ([string]::IsNullOrWhiteSpace($Observation)) { return @("$Context observation must not be empty.") }
+    if ($knownVisualObservationNames -notcontains $Observation) { return @("$Context references unknown observation '$Observation'.") }
+    return @()
+}
+
+function Test-VisualScenarioAssertion($Assertion, [string]$Context) {
+    $localFailures = New-Object System.Collections.Generic.List[string]
+    $operatorFields = @("all", "any", "anyOf", "exists", "equals")
+    if (-not $Assertion) {
+        [void]$localFailures.Add("$Context assertion must be an object.")
+        return @($localFailures)
+    }
+    $presentOperators = @($operatorFields | Where-Object { $Assertion.PSObject.Properties.Name -contains $_ })
+    if ($presentOperators.Count -ne 1) { [void]$localFailures.Add("$Context assertion must use exactly one operator.") }
+    foreach ($field in @($Assertion.PSObject.Properties.Name)) {
+        if ($operatorFields -notcontains $field) { [void]$localFailures.Add("$Context assertion has unknown field $field.") }
+    }
+    if ($Assertion.PSObject.Properties.Name -contains "exists") {
+        foreach ($failure in @(Test-KnownVisualObservation ([string]$Assertion.exists) "$Context exists")) { [void]$localFailures.Add($failure) }
+    }
+    if ($Assertion.PSObject.Properties.Name -contains "equals") {
+        foreach ($failure in @(Test-KnownVisualObservation ([string]$Assertion.equals.observation) "$Context equals")) { [void]$localFailures.Add($failure) }
+    }
+    foreach ($groupField in @("all", "any", "anyOf")) {
+        if ($Assertion.PSObject.Properties.Name -contains $groupField) {
+            $children = @($Assertion.$groupField)
+            if ($children.Count -eq 0) { [void]$localFailures.Add("$Context assertion $groupField must contain child assertions.") }
+            for ($i = 0; $i -lt $children.Count; $i++) {
+                foreach ($failure in @(Test-VisualScenarioAssertion $children[$i] "$Context.$groupField[$i]")) { [void]$localFailures.Add($failure) }
+            }
+        }
+    }
+    return @($localFailures)
+}
+
 $scenariosPath = Join-Path $repoRoot "Config/AINpcVisualScenarios.json"
 $scenarios = @(Get-JsonFile $scenariosPath)
 $scenarioIds = @($scenarios | ForEach-Object { [string]$_.testId })
@@ -258,7 +293,8 @@ foreach ($entry in $scenarios) {
     foreach ($topField in @($entry.PSObject.Properties.Name)) {
         if ($requiredScenarioFields -notcontains $topField) { Add-Failure "$context has unknown top-level field '$topField'." }
     }
-    if ([int]$entry.schemaVersion -ne 2) { Add-Failure "$context schemaVersion must be 2." }
+    $schemaVersionNumber = [double]$entry.schemaVersion
+    if ($schemaVersionNumber -ne [Math]::Truncate($schemaVersionNumber) -or [int]$schemaVersionNumber -ne 2) { Add-Failure "$context schemaVersion must be integer 2." }
     foreach ($field in @("testId", "map")) { if ([string]::IsNullOrWhiteSpace([string]$entry.$field)) { Add-Failure "$context field '$field' must not be empty." } }
     if ([double]$entry.timeoutSec -le 0) { Add-Failure "$context timeoutSec must be greater than zero." }
     [void](Test-NonEmptyJsonArray $entry "storyIds" $context)
@@ -282,6 +318,10 @@ foreach ($entry in $scenarios) {
         foreach ($variable in @($entry.prompt.variables.PSObject.Properties)) {
             if ($promptText -notmatch ('\{' + [regex]::Escape($variable.Name) + '\}')) { Add-Failure "$context unresolved prompt variable '$($variable.Name)' for $promptFile." }
         }
+        foreach ($match in [regex]::Matches($promptText, '\{([^{}]+)\}')) {
+            $placeholder = [string]$match.Groups[1].Value
+            if (-not ($entry.prompt.variables.PSObject.Properties.Name -contains $placeholder)) { Add-Failure "$context prompt.file contains undeclared placeholder '$placeholder' for $promptFile." }
+        }
     }
     $mapAssetPath = Resolve-VisualScenarioMapPath ([string]$entry.map)
     if (-not $mapAssetPath) { Add-Failure "$context map must be a /Game asset path, got '$($entry.map)'." }
@@ -289,15 +329,17 @@ foreach ($entry in $scenarios) {
     foreach ($step in @($entry.steps)) {
         if (@("dialogue.start", "world.event", "wait.until", "action.executeLatestIntent", "observe.hold") -notcontains [string]$step.type) { Add-Failure "$context has unknown step type '$($step.type)'." }
         if (-not $step.payload) { Add-Failure "$context step '$($step.type)' missing payload." }
+        if ([string]$step.type -ne "wait.until" -and ($step.PSObject.Properties.Name -contains "condition")) { Add-Failure "$context condition is only supported by wait.until." }
         switch ([string]$step.type) {
             "dialogue.start" { if ([string]$step.payload.promptRef -ne "prompt") { Add-Failure "$context dialogue.start payload.promptRef must be prompt." } }
-            "world.event" { foreach ($f in @("eventTag", "eventId")) { if ([string]::IsNullOrWhiteSpace([string]$step.payload.$f)) { Add-Failure "$context world.event payload.$f must not be empty." } } }
-            "wait.until" { if ([double]$step.payload.timeoutSec -le 0) { Add-Failure "$context wait.until payload.timeoutSec must be positive." }; if (-not $step.condition) { Add-Failure "$context wait.until must include condition." } }
+            "world.event" { foreach ($unknown in @($step.payload.PSObject.Properties.Name | Where-Object { @("eventTag") -notcontains $_ })) { Add-Failure "$context world.event payload has unknown field $unknown." }; if ([string]::IsNullOrWhiteSpace([string]$step.payload.eventTag)) { Add-Failure "$context world.event payload.eventTag must not be empty." } }
+            "wait.until" { if ([double]$step.payload.timeoutSec -le 0) { Add-Failure "$context wait.until payload.timeoutSec must be positive." }; if (-not $step.condition) { Add-Failure "$context wait.until must include condition." } else { foreach ($failure in @(Test-VisualScenarioAssertion $step.condition "$context wait.until condition")) { Add-Failure $failure } } }
             "action.executeLatestIntent" { if (-not ($step.payload.allowActionRejection -is [bool])) { Add-Failure "$context action.executeLatestIntent payload.allowActionRejection must be boolean." } }
-            "observe.hold" { if ([string]::IsNullOrWhiteSpace([string]$step.payload.observation)) { Add-Failure "$context observe.hold payload.observation must not be empty." }; if ([double]$step.payload.durationSec -lt 0) { Add-Failure "$context observe.hold payload.durationSec must not be negative." }; if (@("step", "global") -notcontains [string]$step.payload.scope) { Add-Failure "$context observe.hold payload.scope must be step or global." } }
+            "observe.hold" { foreach ($unknown in @($step.payload.PSObject.Properties.Name | Where-Object { @("observation", "durationSec") -notcontains $_ })) { Add-Failure "$context observe.hold payload has unknown field $unknown." }; if ([string]::IsNullOrWhiteSpace([string]$step.payload.observation)) { Add-Failure "$context observe.hold payload.observation must not be empty." }; if ([double]$step.payload.durationSec -le 0) { Add-Failure "$context observe.hold payload.durationSec must be positive." }; foreach ($failure in @(Test-KnownVisualObservation ([string]$step.payload.observation) "$context observe.hold")) { Add-Failure $failure } }
         }
     }
     if (-not $entry.expect) { Add-Failure "$context missing expect assertion." }
+    else { foreach ($failure in @(Test-VisualScenarioAssertion $entry.expect "$context expect")) { Add-Failure $failure } }
 }
 
 
@@ -314,75 +356,9 @@ foreach ($forbiddenInfra in @("remote service", "database", "web console", "dist
 }
 
 
-# 7.4b / 1.12: focused Phase 2.7 negative validation fixtures. These exercise the same
-# contract rules in this script with synthetic objects.
-function Test-Phase27ScenarioValidationFailures($Entry, [string]$PromptText) {
-    $localFailures = New-Object System.Collections.Generic.List[string]
-    $context = "Synthetic visual scenario $($Entry.testId)"
-    foreach ($field in $requiredScenarioFields) {
-        if (-not ($Entry.PSObject.Properties.Name -contains $field)) { [void]$localFailures.Add("$context missing required field $field.") }
-    }
-    foreach ($legacyField in @("requiresProvider", "promptFile", "personaFile", "delayFillerFile", "delayFillerThreshold", "requireEventTrigger", "eventTag", "eventTriggerId", "requirePartialResponse", "requireStructuredResponse", "requireActionIntent", "allowActionRejection", "requiredObservations", "allowedTerminalOutcomes", "script")) {
-        if ($Entry.PSObject.Properties.Name -contains $legacyField) { [void]$localFailures.Add("$context uses legacy v1 visual scenario field $legacyField.") }
-    }
-    foreach ($topField in @($Entry.PSObject.Properties.Name)) {
-        if ($requiredScenarioFields -notcontains $topField) { [void]$localFailures.Add("$context has unknown top-level field $topField.") }
-    }
-    if ([int]$Entry.schemaVersion -ne 2) { [void]$localFailures.Add("$context schemaVersion must be 2.") }
-    foreach ($variable in @($Entry.prompt.variables.PSObject.Properties)) {
-        if ($PromptText -notmatch ("\{" + [regex]::Escape($variable.Name) + "\}")) { [void]$localFailures.Add("$context unresolved prompt variable $($variable.Name).") }
-    }
-    foreach ($step in @($Entry.steps)) {
-        if ((@("dialogue.start", "world.event", "wait.until", "action.executeLatestIntent", "observe.hold") -notcontains [string]$step.type)) { [void]$localFailures.Add("$context has unknown step type $($step.type).") }
-        if (-not $step.payload) { [void]$localFailures.Add("$context step $($step.type) missing payload.") }
-        switch ([string]$step.type) {
-            "dialogue.start" { if ([string]$step.payload.promptRef -ne "prompt") { [void]$localFailures.Add("$context dialogue.start payload.promptRef must be prompt.") } }
-            "world.event" { foreach ($f in @("eventTag", "eventId")) { if ([string]::IsNullOrWhiteSpace([string]$step.payload.$f)) { [void]$localFailures.Add("$context world.event payload.$f must not be empty.") } } }
-            "wait.until" { if ([double]$step.payload.timeoutSec -le 0) { [void]$localFailures.Add("$context wait.until payload.timeoutSec must be positive.") }; if (-not $step.condition) { [void]$localFailures.Add("$context wait.until must include condition.") } }
-            "action.executeLatestIntent" { if (-not ($step.payload.allowActionRejection -is [bool])) { [void]$localFailures.Add("$context action.executeLatestIntent payload.allowActionRejection must be boolean.") } }
-            "observe.hold" { if ([string]::IsNullOrWhiteSpace([string]$step.payload.observation)) { [void]$localFailures.Add("$context observe.hold payload.observation must not be empty.") }; if ([double]$step.payload.durationSec -lt 0) { [void]$localFailures.Add("$context observe.hold payload.durationSec must not be negative.") }; if (@("step", "global") -notcontains [string]$step.payload.scope) { [void]$localFailures.Add("$context observe.hold payload.scope must be step or global.") } }
-        }
-    }
-    return @($localFailures)
-}
-
-function New-Phase27ValidSyntheticScenario {
-    return ([pscustomobject]@{
-        schemaVersion = 2
-        testId = "synthetic.negative-contract"
-        map = "/Game/Maps/AINpcTestMap"
-        timeoutSec = 30
-        storyIds = @("US-X")
-        phaseIds = @("phase2.7")
-        fixture = [pscustomobject]@{ type = "npcWithSmartObject" }
-        persona = [pscustomobject]@{ file = "Persona.txt"; delayFillerFile = "Delay.txt"; delayFillerThreshold = 0.0 }
-        prompt = [pscustomobject]@{ file = "Prompt.txt"; variables = [pscustomobject]@{ SmartObjectTargetId = "runtime.smartObjectTargetId" } }
-        steps = @(
-            [pscustomobject]@{ type = "dialogue.start"; payload = [pscustomobject]@{ promptRef = "prompt" } },
-            [pscustomobject]@{ type = "wait.until"; payload = [pscustomobject]@{ timeoutSec = 1 }; condition = [pscustomobject]@{ equals = [pscustomobject]@{ observation = "sessionStarted"; value = $true } } },
-            [pscustomobject]@{ type = "action.executeLatestIntent"; payload = [pscustomobject]@{ allowActionRejection = $false } },
-            [pscustomobject]@{ type = "observe.hold"; payload = [pscustomobject]@{ observation = "actionTargetReached"; durationSec = 0.1; scope = "step" } }
-        )
-        expect = [pscustomobject]@{ equals = [pscustomobject]@{ observation = "actionTargetReachedHoldElapsed"; value = $true } }
-    })
-}
-
-function Assert-Phase27NegativeCase([string]$Name, [scriptblock]$Mutate, [string]$ExpectedPattern) {
-    $entry = New-Phase27ValidSyntheticScenario
-    & $Mutate $entry
-    $caseFailures = @(Test-Phase27ScenarioValidationFailures $entry "Use target {SmartObjectTargetId}.")
-    if (-not ($caseFailures -match $ExpectedPattern)) {
-        Add-Failure "Phase 2.7 negative validation case $Name did not fail with expected diagnostic $ExpectedPattern. Actual: $($caseFailures -join ' | ')"
-    }
-}
-
-Assert-Phase27NegativeCase "unsupported schema" { param($e) $e.schemaVersion = 1 } "schemaVersion must be 2"
-Assert-Phase27NegativeCase "legacy field" { param($e) $e | Add-Member -NotePropertyName "requiresProvider" -NotePropertyValue $true } "legacy v1 visual scenario field requiresProvider"
-Assert-Phase27NegativeCase "unknown top-level field" { param($e) $e | Add-Member -NotePropertyName "mystery" -NotePropertyValue "trash" } "unknown top-level field mystery"
-Assert-Phase27NegativeCase "unknown step" { param($e) $e.steps[0].type = "npc.doMagic" } "unknown step type npc.doMagic"
-Assert-Phase27NegativeCase "malformed step payload" { param($e) $e.steps[2].payload.allowActionRejection = "false" } "allowActionRejection must be boolean"
-Assert-Phase27NegativeCase "unresolved prompt var" { param($e) $e.prompt.variables | Add-Member -NotePropertyName "MissingPromptVar" -NotePropertyValue "x" } "unresolved prompt variable MissingPromptVar"
-
+# 7.4b / 1.12: keep the concrete negative checks that are not already covered by
+# the live manifest walk above. Do not mirror the whole DSL validator here; that
+# duplication is how schema drift hides in plain sight.
 function Assert-AINpcVisibleLaunchContract {
     param(
         [Parameter(Mandatory = $true)][string]$EditorPath,
@@ -396,23 +372,18 @@ function Assert-AINpcVisibleLaunchContract {
     }
     if (@($Arguments | Where-Object { $_ -eq "-game" }).Count -ne 1) { throw "Visual acceptance must launch with exactly one -game argument." }
 }
-
-function Assert-Phase27ForbiddenLaunchCase([string]$Name, [string[]]$Arguments, [string]$ExpectedPattern) {
-    try {
-        Assert-AINpcVisibleLaunchContract -EditorPath "G:\UE5\UnrealEngine\Engine\Binaries\Win64\UnrealEditor.exe" -Arguments $Arguments
-        Add-Failure "Phase 2.7 negative validation case $Name unexpectedly passed visible launch validation."
-    }
-    catch {
-        if ([string]$_.Exception.Message -notmatch $ExpectedPattern) { Add-Failure "Phase 2.7 negative validation case $Name failed with wrong diagnostic: $($_.Exception.Message)" }
-    }
+try {
+    Assert-AINpcVisibleLaunchContract -EditorPath "G:\UE5\UnrealEngine-AINpc\Engine\Binaries\Win64\UnrealEditor.exe" -Arguments @("VerifierHost.uproject", "/Game/Maps/AINpcTestMap", "-game", "-nullrhi")
+    Add-Failure "Phase 2.7 negative validation case forbidden final-acceptance mode unexpectedly passed visible launch validation."
 }
-
-Assert-Phase27ForbiddenLaunchCase "forbidden final-acceptance mode" @("VerifierHost.uproject", "/Game/Maps/AINpcTestMap", "-game", "-nullrhi") "Forbidden final visual acceptance mode"
+catch {
+    if ([string]$_.Exception.Message -notmatch "Forbidden final visual acceptance mode") { Add-Failure "Phase 2.7 negative validation case forbidden final-acceptance mode failed with wrong diagnostic: $($_.Exception.Message)" }
+}
 
 $validateOnlyFinalResult = [pscustomobject]@{
     schemaVersion = 1; runId = "negative"; layer = "visual-game"; testId = "synthetic.negative-contract"; storyIds = @("US-X"); phaseIds = @("phase2.7"); status = "PASS";
     startTimeUtc = "2026-01-01T00:00:00Z"; endTimeUtc = "2026-01-01T00:00:00Z"; durationMs = 0; command = [pscustomobject]@{}; artifacts = [pscustomobject]@{};
-    diagnostics = [pscustomobject]@{ validateOnly = $true }; observations = [pscustomobject]@{}; failures = @()
+    diagnostics = [pscustomobject]@{ validateOnly = $true }; observations = [pscustomobject]@{}; stepDiagnostics = @(); providerRuntimeEvidence = [pscustomobject]@{}; visibleBehaviorEvidence = [pscustomobject]@{}; failures = @()
 }
 $beforeValidateOnlyFailures = $failures.Count
 Assert-ResultSchema $validateOnlyFinalResult (Join-Path $repoRoot "Saved/TestLogs/_contract-negative/validate-only-pass.json")
@@ -423,20 +394,6 @@ else {
     $failures.RemoveRange($beforeValidateOnlyFailures, $failures.Count - $beforeValidateOnlyFailures)
 }
 
-function Test-Phase27ArtifactIdentity($RuntimeResult, $ManifestEntry, [int]$ProcessExitCode) {
-    $localFailures = New-Object System.Collections.Generic.List[string]
-    if ([string]$RuntimeResult.testId -ne [string]$ManifestEntry.testId) { [void]$localFailures.Add("Visual runtime result testId mismatch.") }
-    if (@($ManifestEntry.allowedTerminalOutcomes) -notcontains [string]$RuntimeResult.status) { [void]$localFailures.Add("Visual runtime result status $($RuntimeResult.status) is not allowed.") }
-    if ($ProcessExitCode -ne 0) { [void]$localFailures.Add("Visual runtime process exited with code $ProcessExitCode.") }
-    foreach ($storyId in @($ManifestEntry.storyIds)) { if (@($RuntimeResult.storyIds) -notcontains [string]$storyId) { [void]$localFailures.Add("Visual runtime result missing storyId $storyId.") } }
-    foreach ($phaseId in @($ManifestEntry.phaseIds)) { if (@($RuntimeResult.phaseIds) -notcontains [string]$phaseId) { [void]$localFailures.Add("Visual runtime result missing phaseId $phaseId.") } }
-    return @($localFailures)
-}
-$artifactFailures = @(Test-Phase27ArtifactIdentity `
-    ([pscustomobject]@{ testId = "wrong.id"; status = "PASS"; storyIds = @("US-X"); phaseIds = @("phase2.7") }) `
-    ([pscustomobject]@{ testId = "synthetic.negative-contract"; allowedTerminalOutcomes = @("PASS"); storyIds = @("US-X"); phaseIds = @("phase2.7") }) `
-    0)
-if (-not ($artifactFailures -match "testId mismatch")) { Add-Failure "Phase 2.7 negative validation case artifact identity mismatch did not fail." }
 # 7.5: C++ Automation test paths under Private/Tests use AINpc. prefix.
 $testFiles = Get-ChildItem -Path (Join-Path $repoRoot "Plugins/AINpc/Source") -Recurse -Filter "*.cpp" -File |
     Where-Object { $_.FullName -replace '\\', '/' -match '/Private/Tests/' }
@@ -456,11 +413,14 @@ $testGameText = Get-Content -Path $testGameScript -Raw
 if ($testGameText -match "Get-AINpcLatestResultPath") {
     Add-Failure "test-game.ps1 must not use Get-AINpcLatestResultPath; pass deterministic child RunId/ResultPath instead."
 }
-if ($testGameText -notmatch "foreach.*manifestEntries") {
-    Add-Failure "test-game.ps1 must iterate manifest entries directly."
+if ($testGameText -notmatch "Invoke-AINpcVisualGameSuite") {
+    Add-Failure "test-game.ps1 must launch the visual-game manifest through one suite harness invocation."
 }
-if ($testGameText -notmatch '"-RunId"' -or $testGameText -notmatch "childRunId") {
-    Add-Failure "test-game.ps1 must pass a deterministic child RunId to visual game scripts."
+if ($testGameText -match 'Start-Process\s+-FilePath\s+"pwsh"[\s\S]*VisualGameHarness\.ps1') {
+    Add-Failure "test-game.ps1 must not launch VisualGameHarness.ps1 once per scenario."
+}
+if ($testGameText -notmatch "expectedRunId" -or $testGameText -notmatch "runtime-result\.json") {
+    Add-Failure "test-game.ps1 must validate deterministic per-scenario runtime result paths."
 }
 
 $testAllScript = Join-Path $repoRoot "scripts/dev/test-all.ps1"
@@ -480,7 +440,7 @@ foreach ($entryScript in @("build-editor.ps1", "test-static.ps1", "test-editor-c
 
 # 7.6: final visual acceptance scripts must not use forbidden headless/mock/bypass final modes.
 $visualScripts = @()
-$visualScripts += Get-ChildItem -Path (Join-Path $repoRoot "scripts/dev/game") -Filter "test-*.ps1" -File
+$visualScripts += Get-ChildItem -Path (Join-Path $repoRoot "scripts/dev/game") -Filter "*.ps1" -File
 $visualScripts += Get-Item (Join-Path $repoRoot "scripts/dev/test-game.ps1")
 $forbiddenVisualPatterns = @(
     "UnrealEditor-Cmd",
@@ -496,8 +456,9 @@ $forbiddenVisualPatterns = @(
 )
 foreach ($file in $visualScripts) {
     $text = Get-Content -Path $file.FullName -Raw
+    $textForForbiddenScan = [regex]::Replace($text, '(?ms)^\s*\$forbiddenPatterns\s*=\s*@\([\s\S]*?^\s*\)\s*', '')
     foreach ($pattern in $forbiddenVisualPatterns) {
-        if ($text -match $pattern) {
+        if ($textForForbiddenScan -match $pattern) {
             Add-Failure "Forbidden visual acceptance mode '$pattern' appears in $(Get-RelativePath $file.FullName)."
         }
     }
@@ -536,6 +497,15 @@ if ($visualGameModeText -notmatch 'TEXT\("bearer"\)') {
 }
 if ($visualGameModeText -match 'SetStringField\s*\(\s*Field\.Key\s*,\s*Field\.Value\s*\)') {
     Add-Failure "BuildObservationJson writes raw observation string fields without redaction."
+}
+
+$testCharacterPath = Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcTestCharacter.cpp"
+$testCharacterText = Get-Content -Path $testCharacterPath -Raw
+if ($testCharacterText -match 'VInterpConstantTo|SetActorLocation\s*\(') {
+    Add-Failure "AAINpcTestCharacter action movement must use CharacterMovement/AddMovementInput, not direct actor relocation."
+}
+if ($testCharacterText -notmatch 'AddMovementInput' -or $testCharacterText -notmatch 'StopMovementImmediately' -or $testCharacterText -notmatch 'bRunPhysicsWithNoController') {
+    Add-Failure "AAINpcTestCharacter action movement must drive CharacterMovement without a controller and stop it at the target."
 }
 
 $visualTestPaths = @(
@@ -588,6 +558,9 @@ $sampleResult = [pscustomobject]@{
     artifacts = [pscustomobject]@{}
     diagnostics = [pscustomobject]@{ validateOnly = $true }
     observations = [pscustomobject]@{}
+    stepDiagnostics = @([pscustomobject]@{ stepIndex = 0; stepType = "sample"; status = "FAIL"; durationMs = 0; failureReason = "sample" })
+    providerRuntimeEvidence = [pscustomobject]@{ configOnly = $false; dialogueSessionStarted = $false; dialogueResponseReceived = $false }
+    visibleBehaviorEvidence = [pscustomobject]@{}
     failures = $sampleFailures
 }
 Assert-ResultSchema $sampleResult $sampleResultPath

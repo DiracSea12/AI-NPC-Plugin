@@ -1,8 +1,8 @@
 ﻿# AINpc 插件系统设计文档（SDD）
 
-> 来源：docs/PRD.md v1.4
-> 版本：1.7
-> 日期：2026-03-01
+> 来源：docs/PRD.md v1.8
+> 版本：1.8
+> 日期：2026-05-23
 
 ---
 
@@ -38,7 +38,7 @@
 │                 └──────────┘ └───────────────────┘  │
 ├─────────────────────────────────────────────────────┤
 │              UE5 引擎标准模块                         │
-│  Core │ AIModule │ StateTree │ SmartObjects │  │
+│  Core │ AIModule │ StateTree │ NavigationSystem │ SmartObjects │
 │  HTTP │ SQLiteCore │ GameplayTags │ Json │ UMG/Slate│
 └─────────────────────────────────────────────────────┘
 ```
@@ -47,7 +47,7 @@
 
 | 模块 | 类型 | 职责 | 依赖 | Phase |
 |------|------|------|------|-------|
-| AINpcCore | Runtime | LLM 通信、行为执行、感知、Prompt、网络同步、调度 | Core, AIModule, HTTP, StateTree, GameplayTags, Json | 1 |
+| AINpcCore | Runtime | LLM 通信、行为执行、感知、Prompt、网络同步、调度 | Core, AIModule, NavigationSystem, HTTP, StateTree, GameplayTags, Json | 1 |
 | AINpcMemory | Runtime（可选） | 记忆系统、冲突解决、反思 | AINpcCore, SQLiteCore | 3a |
 | AINpcImmersion | Runtime（可选） | 情感、关系、安全、自主行为、社交 | AINpcCore | 4 |
 | AINpcUI | ClientOnly | 对话气泡、调试 HUD | AINpcCore, UMG, Slate | 1 |
@@ -55,6 +55,7 @@
 
 > AINpcUI 与 Runtime 隔离，Dedicated Server 编译时排除 UMG/Slate 依赖（NFR-6）。
 > SmartObjects 为 AINpcCore 硬依赖，Build.cs 无条件依赖 `SmartObjectsModule` 并定义 `WITH_SMARTOBJECTS=1`。
+> NavigationSystem 为 AINpcCore 直接依赖，用于移动动作的 NavMesh 投影、路径预检和 PathFollowing 失败归因；不得把寻路交给 LLM。
 > 最低引擎版本：UE5.4+（NFR-7，StateTree WeakExecutionContext 依赖）。
 > Phase 6 沉浸感增强功能（日程、主动交互、NPC 社交、情感外化）可通过 `UAINpcSettings::bEnableImmersionPack` 开关独立启用/禁用。
 
@@ -956,6 +957,48 @@ private:
 #### 4.2.2 SmartObjectBridge（FR-31）
 
 ```cpp
+UENUM(BlueprintType)
+enum class ENavigationReachability : uint8
+{
+    Unknown,        // 尚未检查
+    Reachable,      // 完整路径可达
+    Partial,        // 只有 partial path，默认不可执行
+    Unreachable,    // 不可达
+};
+
+UENUM(BlueprintType)
+enum class EMovementFailureReason : uint8
+{
+    None,
+    InvalidTarget,             // 目标不存在、已销毁或缺少可交互位置
+    MissingNavData,            // 当前 World 无可用 NavData/NavMesh
+    OffNavMesh,                // 目标无法投影到 NavMesh
+    NoPath,                    // 路径查询失败
+    PartialPathRejected,       // 只找到 partial path，但动作不允许 partial path
+    BlockedByStaticGeometry,   // 墙、不可通行土包、空气墙等静态碰撞阻挡
+    BlockedByDynamicObstacle,  // 角色、门、临时物体等动态阻挡
+    Aborted,                   // 被高优先级事件、玩家取消或 StateTree 中断
+    Timeout,                   // 超过动作移动时间预算仍未到达
+};
+
+USTRUCT(BlueprintType)
+struct FNavigationReachabilityResult
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadOnly)
+    ENavigationReachability Reachability = ENavigationReachability::Unknown;
+
+    UPROPERTY(BlueprintReadOnly)
+    EMovementFailureReason FailureReason = EMovementFailureReason::None;
+
+    UPROPERTY(BlueprintReadOnly)
+    bool bAllowPartialPath = false;
+
+    UPROPERTY(BlueprintReadOnly)
+    FString DebugSummary;
+};
+
 // GameInstanceSubsystem，全局管理 SmartObject 交互
 // 注意：USmartObjectSubsystem 是 WorldSubsystem，关卡切换时会重建；
 // 本 Bridge 作为 GameInstanceSubsystem 跨关卡持久，必须处理生命周期差异
@@ -1006,10 +1049,55 @@ struct FSmartObjectCandidate
 
     UPROPERTY(BlueprintReadOnly)
     bool bSlotAvailable = true;
+
+    UPROPERTY(BlueprintReadOnly)
+    bool bRequiresMovement = true;
+
+    UPROPERTY(BlueprintReadOnly)
+    FNavigationReachabilityResult Reachability;
 };
 ```
 
-#### 4.2.3 裁判架构（FR-32）
+#### 4.2.3 NavigationReachability 与移动失败语义（FR-32A）
+
+移动可达性是行为执行层的本地判定，不是 Prompt 文案，也不是 LLM 的“建议”。竞品和成熟 NPC SDK 的共同模式都是：LLM 只输出 action intent，真实游戏运行时负责能力列表、目标合法性、导航和执行结果；本插件沿用这条边界。
+
+**检查时机：**
+
+1. Prompt 注入前：`FindNearbyObjects()` 得到候选 SmartObject/目标后，只对当前候选集合做 NavMesh 投影和路径预检。`Reachable` 才能进入可执行动作列表；`Partial` 仅在动作定义显式允许 partial path 时进入；`Unreachable` 不作为可执行动作暴露给 LLM。
+2. 执行前：动作真正进入 `FStateTreeTask_ExecuteSmartObject` 时重新检查一次。原因很简单，槽位可能被占、门可能关上、目标可能移动，拿旧结果执行就是给 bug 铺红毯。
+3. 执行中：统一走 `AAIController::MoveTo` / PathFollowing 结果，不允许 `SetActorLocation` 瞬移兜底，不允许 LLM 输出路径点，不允许碰撞穿透。PathFollowing 失败必须映射到 `EMovementFailureReason`。
+
+**地形/阻挡归类：**
+
+| 场景 | 处理 |
+|------|------|
+| 墙或封闭门挡住目标 | 路径查询失败为 `NoPath`，或执行中归因 `BlockedByStaticGeometry` |
+| 土包、坡、台阶 | 由 NavMesh/Agent 半径/坡度配置决定；可走就是 `Reachable`，不可走就是 `OffNavMesh`/`NoPath`，插件不写地形特判 |
+| 空气墙 | 如果 NavMesh 已反映碰撞，预检阶段失败；如果 NavMesh 没反映但运行时碰撞阻挡，PathFollowing 失败归因 `BlockedByStaticGeometry` |
+| 玩家、NPC、移动物体临时挡路 | 执行中归因 `BlockedByDynamicObstacle`，最多允许一次短延迟重新规划 |
+| 目标离开 NavMesh 或被销毁 | `OffNavMesh` / `InvalidTarget`，直接失败，不重试 |
+| 只有 partial path | 默认 `PartialPathRejected`；项目动作显式声明允许 partial path 时才可执行到最近可达点 |
+
+**失败后的行为：**
+
+- 已 Claim 的 SmartObject 槽位必须立即释放。
+- 广播 `ActionFailed` / `MovementFailed` 事件，载荷包含 `ActionType`、`Target`、`Reachability`、`FailureReason` 和简短 `DebugSummary`。
+- StateTree 可以选择同类可达替代目标、转成对话说明（例如“我过不去”）、或回到 Idle。
+- 静态不可达（`OffNavMesh`、`NoPath`、`BlockedByStaticGeometry`、`PartialPathRejected`）不重试；动态阻挡最多一次短延迟重新规划，仍失败就结束。无限重试就是把 NPC 变成卡墙演示器，禁止。
+- 下一次 LLM 请求只接收结构化失败摘要和新的可用动作列表；LLM 不能获得“请自己规划路线”的权限。
+
+**可视化验收：**
+
+移动类玩家可感知动作必须在 `Config/AINpcVisualScenarios.json` 扩展真实可视化场景，至少覆盖：
+
+- 可达目标：NPC 真实移动到目标、朝向正确、动作完成、退出状态正常。
+- 静态不可达：墙/不可通行土包/目标离开 NavMesh 时 NPC 不瞬移、不原地无限尝试，并产生明确失败反馈。
+- 运行时阻挡：空气墙或动态物体导致 PathFollowing 失败时，NPC 停止无效移动、释放槽位、广播失败事件。
+
+无头测试、日志扫描、mock provider、手工注入响应只能证明局部逻辑，不算移动行为最终验收。
+
+#### 4.2.4 裁判架构（FR-32）
 
 ```
 LLM 建议动作 → FParsedLLMResponse.Actions
@@ -1017,14 +1105,16 @@ LLM 建议动作 → FParsedLLMResponse.Actions
   ▼
 FStateTreeTask_ExecuteSmartObject
   │
-  ├─ Phase 2: 内联白名单校验
+  ├─ Phase 2: 内联白名单校验 + NavigationReachability 预检
   │   if ActionTag NOT IN FindNearbyObjects() 结果集 → 拒绝，跳过该动作
+  │   if Reachability != Reachable 且动作未显式允许 Partial → 拒绝，广播 MovementFailed
   │
   └─ Phase 4: IActionValidator 接口
       │
       ▼
     UOutputValidator::ValidateAction()
       ├─ 白名单校验（同上）
+      ├─ 可达性校验（复用 Phase 2 结果，不重新发明路径规则）
       ├─ 人设边界检测（NPC 性格是否允许该动作）
       └─ 敏感动作过滤
 ```
@@ -2466,4 +2556,3 @@ CREATE TABLE IF NOT EXISTS npc_relationships (
 | SSE 首 Token 优化 | OnFirstTokenReceived 委托 + UI 即时显示 | FR-45 |
 | FEmotionAnimParams | VAD→动画蓝图参数映射 | FR-46 |
 | Immersion Pack 开关 | `UAINpcSettings::bEnableImmersionPack` 启用/禁用日程、主动交互、社交、情感外化整包能力 | FR-42/43/44/45/46 |
-

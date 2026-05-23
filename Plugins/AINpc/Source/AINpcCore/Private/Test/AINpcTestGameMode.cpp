@@ -30,9 +30,37 @@ namespace
 	const float PollSeconds = 0.1f;
 	const float SuccessExitDelaySeconds = 5.0f;
 	const float FailureExitDelaySeconds = 8.0f;
+	const float SuiteStepDelaySeconds = 1.0f;
 	const float MaxVisibleHoldSeconds = 300.0f;
 	const TCHAR* DefaultVisualTestId = TEXT("us1.dialogue-action");
 
+	FString SanitizeRunIdFragment(const FString& Value)
+	{
+		FString Result = Value;
+		for (TCHAR& Char : Result)
+		{
+			if (!FChar::IsAlnum(Char) && Char != TEXT('.') && Char != TEXT('_') && Char != TEXT('-'))
+			{
+				Char = TEXT('-');
+			}
+		}
+		return Result;
+	}
+
+	void ParseCommaSeparatedValues(const FString& Text, TArray<FString>& OutValues)
+	{
+		OutValues.Reset();
+		TArray<FString> Parts;
+		Text.ParseIntoArray(Parts, TEXT(","), true);
+		for (FString& Part : Parts)
+		{
+			Part.TrimStartAndEndInline();
+			if (!Part.IsEmpty())
+			{
+				OutValues.Add(Part);
+			}
+		}
+	}
 
 	FString RedactSensitiveText(const FString& Input)
 	{
@@ -168,6 +196,22 @@ namespace
 		return JsonValues;
 	}
 
+	TArray<TSharedPtr<FJsonValue>> BuildStepDiagnosticsJson(const TArray<FAINpcVisualTestStepDiagnostic>& Diagnostics)
+	{
+		TArray<TSharedPtr<FJsonValue>> Values;
+		for (const FAINpcVisualTestStepDiagnostic& Diagnostic : Diagnostics)
+		{
+			TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
+			Json->SetNumberField(TEXT("stepIndex"), Diagnostic.StepIndex);
+			Json->SetStringField(TEXT("stepType"), Diagnostic.StepType);
+			Json->SetStringField(TEXT("status"), Diagnostic.Status);
+			Json->SetNumberField(TEXT("durationMs"), Diagnostic.DurationMs);
+			Json->SetStringField(TEXT("failureReason"), RedactSensitiveText(Diagnostic.FailureReason));
+			Values.Add(MakeShared<FJsonValueObject>(Json));
+		}
+		return Values;
+	}
+
 	TSharedPtr<FJsonObject> BuildObservationJson(const FAINpcVisualTestObservations& Observations)
 	{
 		TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
@@ -226,8 +270,43 @@ void AAINpcTestGameMode::BeginPlay()
 	VisualStartTimeUtc = FDateTime::UtcNow();
 	VisualRunId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
 	FParse::Value(FCommandLine::Get(), TEXT("AINpcVisualTestId="), VisualTestId);
+	FParse::Value(FCommandLine::Get(), TEXT("AINpcVisualRunId="), VisualRunId);
+
+	FString SuiteTestIdsText;
+	FString SuiteTestIdsFile;
+	bSuiteMode = FParse::Value(FCommandLine::Get(), TEXT("AINpcVisualTestIds="), SuiteTestIdsText);
+	const bool bSuiteFileMode = FParse::Value(FCommandLine::Get(), TEXT("AINpcVisualTestIdsFile="), SuiteTestIdsFile);
+	bSuiteMode = bSuiteMode || bSuiteFileMode;
+	if (bSuiteMode)
+	{
+		if (bSuiteFileMode)
+		{
+			FString SuiteFileText;
+			if (FFileHelper::LoadFileToString(SuiteFileText, *FPaths::ConvertRelativePathToFull(SuiteTestIdsFile)))
+			{
+				ParseCommaSeparatedValues(SuiteFileText.Replace(TEXT("\r"), TEXT(",")).Replace(TEXT("\n"), TEXT(",")), VisualSuiteTestIds);
+			}
+		}
+		else
+		{
+			ParseCommaSeparatedValues(SuiteTestIdsText, VisualSuiteTestIds);
+		}
+		VisualSuiteRunId = VisualRunId;
+		FParse::Value(FCommandLine::Get(), TEXT("AINpcVisualSuiteRunId="), VisualSuiteRunId);
+		if (VisualSuiteRunId.IsEmpty())
+		{
+			VisualSuiteRunId = VisualRunId;
+		}
+		FParse::Value(FCommandLine::Get(), TEXT("AINpcVisualResultDir="), VisualSuiteResultDir);
+		if (VisualSuiteResultDir.IsEmpty())
+		{
+			VisualSuiteResultDir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("TestLogs"), TEXT("visual-game"));
+		}
+		VisualSuiteResultDir = FPaths::ConvertRelativePathToFull(VisualSuiteResultDir);
+	}
+
 	VisualResultPath = ResolveVisualResultPath();
-	UE_LOG(LogTemp, Warning, TEXT("=== AINpc Visual Test START: %s ResultPath=%s ==="), *VisualTestId, *VisualResultPath);
+	UE_LOG(LogTemp, Warning, TEXT("=== AINpc Visual Test START: %s ResultPath=%s SuiteMode=%s ==="), *VisualTestId, *VisualResultPath, bSuiteMode ? TEXT("true") : TEXT("false"));
 
 	StartHarness();
 }
@@ -239,6 +318,18 @@ AActor* AAINpcTestGameMode::ChoosePlayerStart_Implementation(AController* Player
 
 void AAINpcTestGameMode::StartHarness()
 {
+	if (bSuiteMode)
+	{
+		if (VisualSuiteTestIds.IsEmpty())
+		{
+			RecordFailure(TEXT("Visual suite mode requires at least one -AINpcVisualTestIds entry."));
+			return;
+		}
+		VisualSuiteIndex = 0;
+		StartCurrentSuiteTest();
+		return;
+	}
+
 	StartSelectedTest();
 }
 
@@ -284,7 +375,7 @@ bool AAINpcTestGameMode::SpawnNpc(FString& OutFailureReason)
 
 	const FVector SpawnLocation(500.0f, 0.0f, 100.0f);
 	FActorSpawnParameters NpcParams;
-	NpcParams.Name = TEXT("AutoTestNpc");
+	NpcParams.Name = FName(*FString::Printf(TEXT("AutoTestNpc_%d"), bSuiteMode ? VisualSuiteIndex : 0));
 	NpcParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
 	SpawnedNpc = World->SpawnActor<AAINpcTestCharacter>(AAINpcTestCharacter::StaticClass(), SpawnLocation, FRotator::ZeroRotator, NpcParams);
 	if (!SpawnedNpc || !SpawnedNpc->NpcComponent)
@@ -312,7 +403,7 @@ bool AAINpcTestGameMode::SpawnSmartObject(FString& OutFailureReason)
 
 	const FVector SmartObjectLocation(900.0f, 0.0f, 40.0f);
 	FActorSpawnParameters SmartObjectParams;
-	SmartObjectParams.Name = TEXT("AutoTestSmartObject");
+	SmartObjectParams.Name = FName(*FString::Printf(TEXT("AutoTestSmartObject_%d"), bSuiteMode ? VisualSuiteIndex : 0));
 	SmartObjectParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
 	SpawnedSmartObject = World->SpawnActor<AAINpcTestSmartObjectActor>(AAINpcTestSmartObjectActor::StaticClass(), SmartObjectLocation, FRotator::ZeroRotator, SmartObjectParams);
 	if (!SpawnedSmartObject)
@@ -359,6 +450,72 @@ bool AAINpcTestGameMode::PositionObserverCamera(FString& OutFailureReason)
 
 	UE_LOG(LogTemp, Warning, TEXT("=== Observer camera active. ObserverPawn=%s Npc=%s SmartObject=%s Camera=%s Focus=%s ==="), *ObserverPawn->GetName(), *SpawnedNpc->GetName(), SpawnedSmartObject ? *SpawnedSmartObject->GetName() : TEXT("None"), *CameraLoc.ToString(), *FocusPoint.ToString());
 	return true;
+}
+
+void AAINpcTestGameMode::StartCurrentSuiteTest()
+{
+	if (!VisualSuiteTestIds.IsValidIndex(VisualSuiteIndex))
+	{
+		const float VisibleHoldSeconds = bSuiteHadFailure ? FailureExitDelaySeconds : GetVisibleHoldSeconds(SuccessExitDelaySeconds);
+		ShowStatus(bSuiteHadFailure ? TEXT("AINpc visual suite completed with failures.") : TEXT("AINpc visual suite PASS."), bSuiteHadFailure ? FColor::Red : FColor::Green, VisibleHoldSeconds + 4.0f);
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().SetTimer(ExitTimerHandle, this, &AAINpcTestGameMode::RequestHarnessExit, VisibleHoldSeconds, false);
+		}
+		return;
+	}
+
+	VisualTestId = VisualSuiteTestIds[VisualSuiteIndex];
+	VisualRunId = FString::Printf(TEXT("%s-%s"), *VisualSuiteRunId, *SanitizeRunIdFragment(VisualTestId));
+	VisualResultPath = ResolveSuiteVisualResultPath(VisualRunId);
+	VisualStartTimeUtc = FDateTime::UtcNow();
+	bTerminalOutcomeRecorded = false;
+	ActiveDescriptor = nullptr;
+	ActiveTest.Reset();
+	UE_LOG(LogTemp, Warning, TEXT("=== AINpc Visual Suite START [%d/%d]: %s ResultPath=%s ==="), VisualSuiteIndex + 1, VisualSuiteTestIds.Num(), *VisualTestId, *VisualResultPath);
+	StartSelectedTest();
+}
+
+void AAINpcTestGameMode::AdvanceSuiteTest()
+{
+	CleanupActiveScenario();
+	++VisualSuiteIndex;
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().SetTimer(SuiteNextTestTimerHandle, this, &AAINpcTestGameMode::StartCurrentSuiteTest, SuiteStepDelaySeconds, false);
+	}
+}
+
+void AAINpcTestGameMode::CleanupActiveScenario()
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(PollTimerHandle);
+	}
+	if (SpawnedNpc && SpawnedNpc->NpcComponent && SpawnedNpc->NpcComponent->IsDialogueActive())
+	{
+		SpawnedNpc->NpcComponent->EndDialogue();
+	}
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (USmartObjectBridgeContext* BridgeContext = GameInstance->GetSubsystem<USmartObjectBridgeContext>())
+		{
+			BridgeContext->ReleaseSlotForUser(SpawnedNpc);
+		}
+	}
+	ActiveTest.Reset();
+	if (SpawnedSmartObject)
+	{
+		SpawnedSmartObject->SetInteractionState(false);
+		SpawnedSmartObject->Destroy();
+		SpawnedSmartObject = nullptr;
+	}
+	if (SpawnedNpc)
+	{
+		SpawnedNpc->Destroy();
+		SpawnedNpc = nullptr;
+	}
+	ActiveDescriptor = nullptr;
 }
 
 void AAINpcTestGameMode::StartSelectedTest()
@@ -436,23 +593,21 @@ void AAINpcTestGameMode::RecordFailure(const FString& Reason)
 	const FString Summary = ActiveTest ? ActiveTest->BuildSummary() : FString();
 	UE_LOG(LogTemp, Error, TEXT("AINpc visual test summary: %s Result=FAIL Reason=%s %s"), *VisualTestId, *Reason, *Summary);
 	WriteVisualResult(TEXT("FAIL"), TEXT("failure"), Reason, Summary);
+	bSuiteHadFailure = true;
+
+	if (bSuiteMode)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().SetTimer(SuiteNextTestTimerHandle, this, &AAINpcTestGameMode::AdvanceSuiteTest, SuiteStepDelaySeconds, false);
+		}
+		return;
+	}
 
 	if (SpawnedNpc && SpawnedNpc->NpcComponent && SpawnedNpc->NpcComponent->IsDialogueActive())
 	{
 		SpawnedNpc->NpcComponent->EndDialogue();
 	}
-	if (UGameInstance* GameInstance = GetGameInstance())
-	{
-		if (USmartObjectBridgeContext* BridgeContext = GameInstance->GetSubsystem<USmartObjectBridgeContext>())
-		{
-			BridgeContext->ReleaseSlotForUser(SpawnedNpc);
-		}
-	}
-	if (SpawnedSmartObject)
-	{
-		SpawnedSmartObject->SetInteractionState(false);
-	}
-
 	ActiveTest.Reset();
 	if (UWorld* World = GetWorld())
 	{
@@ -478,11 +633,19 @@ void AAINpcTestGameMode::RecordSuccess(const FString& Summary)
 	WriteVisualResult(TEXT("PASS"), TEXT("success"), FString(), Summary);
 	ShowStatus(FString::Printf(TEXT("AINpc visual test PASS: %s"), *VisualTestId), FColor::Green, GetVisibleHoldSeconds(SuccessExitDelaySeconds) + 6.0f);
 
+	if (bSuiteMode)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().SetTimer(SuiteNextTestTimerHandle, this, &AAINpcTestGameMode::AdvanceSuiteTest, SuiteStepDelaySeconds, false);
+		}
+		return;
+	}
+
 	if (SpawnedNpc && SpawnedNpc->NpcComponent && SpawnedNpc->NpcComponent->IsDialogueActive())
 	{
 		SpawnedNpc->NpcComponent->EndDialogue();
 	}
-
 	ActiveTest.Reset();
 	if (UWorld* World = GetWorld())
 	{
@@ -494,16 +657,19 @@ void AAINpcTestGameMode::RecordSuccess(const FString& Summary)
 
 void AAINpcTestGameMode::RequestHarnessExit()
 {
-	if (UGameInstance* GameInstance = GetGameInstance())
+	if (SpawnedNpc)
 	{
-		if (USmartObjectBridgeContext* BridgeContext = GameInstance->GetSubsystem<USmartObjectBridgeContext>())
+		if (UGameInstance* GameInstance = GetGameInstance())
 		{
-			BridgeContext->ReleaseSlotForUser(SpawnedNpc);
+			if (USmartObjectBridgeContext* BridgeContext = GameInstance->GetSubsystem<USmartObjectBridgeContext>())
+			{
+				BridgeContext->ReleaseSlotForUser(SpawnedNpc);
+			}
 		}
 	}
 
 	UE_LOG(LogTemp, Warning, TEXT("=== AAINpcTestGameMode exiting after visual QA result ==="));
-	FPlatformMisc::RequestExit(false);
+	FPlatformMisc::RequestExitWithStatus(false, (bSuiteMode && bSuiteHadFailure) ? 1 : 0);
 }
 
 void AAINpcTestGameMode::ShowStatus(const FString& Message, const FColor& Color, const float DurationSeconds) const
@@ -524,6 +690,11 @@ FString AAINpcTestGameMode::ResolveVisualResultPath() const
 	}
 
 	return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("TestLogs"), TEXT("visual-game"), VisualRunId, TEXT("result.json"));
+}
+
+FString AAINpcTestGameMode::ResolveSuiteVisualResultPath(const FString& RunId) const
+{
+	return FPaths::Combine(VisualSuiteResultDir, RunId, TEXT("runtime-result.json"));
 }
 
 void AAINpcTestGameMode::WriteVisualResult(const FString& Status, const FString& ExitReason, const FString& FailureReason, const FString& DiagnosticSummary)
@@ -560,6 +731,7 @@ void AAINpcTestGameMode::WriteVisualResult(const FString& Status, const FString&
 	Root->SetObjectField(TEXT("artifacts"), Artifacts);
 
 	const FAINpcVisualTestObservations Observations = ActiveTest ? ActiveTest->BuildObservations() : FAINpcVisualTestObservations();
+	const TArray<FAINpcVisualTestStepDiagnostic> StepDiagnostics = ActiveTest ? ActiveTest->BuildStepDiagnostics() : TArray<FAINpcVisualTestStepDiagnostic>();
 	TSharedPtr<FJsonObject> ProviderEvidence = MakeShared<FJsonObject>();
 	if (SpawnedNpc && SpawnedNpc->NpcComponent)
 	{
@@ -572,10 +744,29 @@ void AAINpcTestGameMode::WriteVisualResult(const FString& Status, const FString&
 		ProviderEvidence->SetBoolField(TEXT("apiKeyPresent"), !ProviderConfig.ApiKey.IsEmpty());
 	}
 	TSharedPtr<FJsonObject> RuntimeObservationSummary = MakeShared<FJsonObject>();
-	RuntimeObservationSummary->SetBoolField(TEXT("sessionStartedObserved"), Observations.BooleanFields.Contains(TEXT("sessionStarted")) && Observations.BooleanFields[TEXT("sessionStarted")]);
-	RuntimeObservationSummary->SetBoolField(TEXT("responseObserved"), Observations.BooleanFields.Contains(TEXT("dialogueResponseObserved")) && Observations.BooleanFields[TEXT("dialogueResponseObserved")]);
+	const bool bSessionStartedObserved = Observations.BooleanFields.Contains(TEXT("sessionStarted")) && Observations.BooleanFields[TEXT("sessionStarted")];
+	const bool bResponseObserved = Observations.BooleanFields.Contains(TEXT("dialogueResponseObserved")) && Observations.BooleanFields[TEXT("dialogueResponseObserved")];
+	const bool bActionAccepted = Observations.BooleanFields.Contains(TEXT("actionExecutionAccepted")) && Observations.BooleanFields[TEXT("actionExecutionAccepted")];
+	const bool bActionRejectedVisible = Observations.BooleanFields.Contains(TEXT("actionRejectedVisible")) && Observations.BooleanFields[TEXT("actionRejectedVisible")];
+	RuntimeObservationSummary->SetBoolField(TEXT("sessionStartedObserved"), bSessionStartedObserved);
+	RuntimeObservationSummary->SetBoolField(TEXT("responseObserved"), bResponseObserved);
+	RuntimeObservationSummary->SetBoolField(TEXT("actionOutcomeObserved"), bActionAccepted || bActionRejectedVisible);
+	RuntimeObservationSummary->SetNumberField(TEXT("booleanObservationCount"), Observations.BooleanFields.Num());
+	RuntimeObservationSummary->SetNumberField(TEXT("numericObservationCount"), Observations.IntegerFields.Num() + Observations.NumberFields.Num());
 	RuntimeObservationSummary->SetStringField(TEXT("statusSummary"), Status);
+	TSharedPtr<FJsonObject> ProviderRuntimeEvidence = MakeShared<FJsonObject>();
+	ProviderRuntimeEvidence->SetStringField(TEXT("source"), TEXT("UAINpcComponent dialogue delegates observed by visual harness"));
+	ProviderRuntimeEvidence->SetBoolField(TEXT("configOnly"), false);
+	ProviderRuntimeEvidence->SetBoolField(TEXT("dialogueSessionStarted"), bSessionStartedObserved);
+	ProviderRuntimeEvidence->SetBoolField(TEXT("dialogueResponseReceived"), bResponseObserved);
+	ProviderRuntimeEvidence->SetBoolField(TEXT("httpStatusAvailable"), false);
+	ProviderRuntimeEvidence->SetStringField(TEXT("httpStatus"), TEXT("unavailable: harness does not expose provider HTTP status"));
+	ProviderRuntimeEvidence->SetBoolField(TEXT("endpointAvailable"), false);
+	ProviderRuntimeEvidence->SetStringField(TEXT("endpoint"), TEXT("unavailable: harness does not expose resolved request endpoint"));
+	ProviderRuntimeEvidence->SetBoolField(TEXT("requestDurationAvailable"), false);
+	ProviderRuntimeEvidence->SetStringField(TEXT("requestDurationMs"), TEXT("unavailable: harness does not expose provider request duration"));
 	Root->SetObjectField(TEXT("providerIdentity"), ProviderEvidence);
+	Root->SetObjectField(TEXT("providerRuntimeEvidence"), ProviderRuntimeEvidence);
 	Root->SetObjectField(TEXT("runtimeObservationSummary"), RuntimeObservationSummary);
 	TSharedPtr<FJsonObject> VisibleGuardrail = MakeShared<FJsonObject>();
 	VisibleGuardrail->SetStringField(TEXT("executable"), FPaths::GetCleanFilename(FPlatformProcess::ExecutablePath()));
@@ -591,6 +782,16 @@ void AAINpcTestGameMode::WriteVisualResult(const FString& Status, const FString&
 	Root->SetObjectField(TEXT("diagnostics"), Diagnostics);
 
 	Root->SetObjectField(TEXT("observations"), BuildObservationJson(Observations));
+	Root->SetArrayField(TEXT("stepDiagnostics"), BuildStepDiagnosticsJson(StepDiagnostics));
+	TSharedPtr<FJsonObject> VisibleBehaviorEvidence = MakeShared<FJsonObject>();
+	VisibleBehaviorEvidence->SetStringField(TEXT("npcActor"), SpawnedNpc ? SpawnedNpc->GetPathName() : FString());
+	VisibleBehaviorEvidence->SetStringField(TEXT("npcComponent"), SpawnedNpc && SpawnedNpc->NpcComponent ? SpawnedNpc->NpcComponent->GetPathName() : FString());
+	VisibleBehaviorEvidence->SetStringField(TEXT("smartObjectActor"), SpawnedSmartObject ? SpawnedSmartObject->GetPathName() : FString());
+	VisibleBehaviorEvidence->SetStringField(TEXT("npcLocation"), SpawnedNpc ? SpawnedNpc->GetActorLocation().ToString() : FString());
+	VisibleBehaviorEvidence->SetStringField(TEXT("smartObjectLocation"), SpawnedSmartObject ? SpawnedSmartObject->GetActorLocation().ToString() : FString());
+	VisibleBehaviorEvidence->SetBoolField(TEXT("dialogueVisible"), bResponseObserved);
+	VisibleBehaviorEvidence->SetBoolField(TEXT("actionOutcomeVisible"), bActionAccepted || bActionRejectedVisible);
+	Root->SetObjectField(TEXT("visibleBehaviorEvidence"), VisibleBehaviorEvidence);
 
 	TArray<TSharedPtr<FJsonValue>> Failures;
 	if (!FailureReason.IsEmpty())
