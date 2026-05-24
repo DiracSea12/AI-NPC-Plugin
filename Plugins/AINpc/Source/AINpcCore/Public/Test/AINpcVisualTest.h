@@ -39,9 +39,16 @@ struct FAINpcVisualScenarioStepPayload
 	bool bAllowActionRejection = false;
 };
 
+enum class EAINpcVisualObservationScope : uint8
+{
+	CurrentStep,
+	ScenarioHistory
+};
+
 struct FAINpcVisualScenarioAssertion
 {
 	FString Operator;
+	EAINpcVisualObservationScope Scope = EAINpcVisualObservationScope::CurrentStep;
 	FString Observation;
 	FString EqualsString;
 	bool bHasEqualsBool = false;
@@ -76,20 +83,53 @@ struct FAINpcVisualScenarioConfig
 	FAINpcVisualScenarioExpectation Expect;
 };
 
+enum class EAINpcVisualObservationValueType : uint8
+{
+	Boolean,
+	Integer,
+	Number,
+	String
+};
+
+struct FAINpcVisualObservationRecord
+{
+	FString Name;
+	EAINpcVisualObservationValueType ValueType = EAINpcVisualObservationValueType::Boolean;
+	bool BoolValue = false;
+	int32 IntegerValue = 0;
+	double NumberValue = 0.0;
+	FString StringValue;
+	FString SourceKind;
+	FString SourceIdentity;
+	FString SourceObjectPath;
+	FString SourceClass;
+	FString SamplingMethod;
+	FString AdapterOrProviderId;
+	int32 StepIndex = INDEX_NONE;
+	double TimestampSeconds = 0.0;
+	double ElapsedSeconds = 0.0;
+};
+
 struct FAINpcVisualTestObservations
 {
 	TMap<FString, bool> BooleanFields;
 	TMap<FString, int32> IntegerFields;
 	TMap<FString, double> NumberFields;
 	TMap<FString, FString> StringFields;
+	TArray<FAINpcVisualObservationRecord> Records;
 };
 
 struct FAINpcVisualTestStepDiagnostic
 {
+	FString TestId;
 	int32 StepIndex = INDEX_NONE;
 	FString StepType;
 	FString Status;
 	FString FailureReason;
+	FString FailureCategory;
+	FString ObservationName;
+	FString SourceKind;
+	FString SourceId;
 	double DurationMs = 0.0;
 };
 

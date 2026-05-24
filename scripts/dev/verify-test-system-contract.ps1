@@ -106,7 +106,6 @@ function Assert-ResultSchema($Result, [string]$Path) {
     }
 }
 
-# 7.2: stale unrelated paths in matrix or gate scripts.
 $gateFiles = @()
 $gateFiles += Join-Path $repoRoot "docs/ralph/test-matrix.json"
 $gateFiles += Get-ChildItem -Path (Join-Path $repoRoot "scripts/dev") -Filter "*.ps1" -File -Recurse | ForEach-Object { $_.FullName }
@@ -118,7 +117,6 @@ foreach ($file in $gateFiles) {
     }
 }
 
-# 8.1-8.3: Ralph matrix delegates to supported scripts and declares expected result contract.
 $matrixPath = Join-Path $repoRoot "docs/ralph/test-matrix.json"
 $matrix = Get-JsonFile $matrixPath
 if ($matrix) {
@@ -153,7 +151,6 @@ if ($matrix) {
     }
 }
 
-# 7.3: root test-*.bat wrappers are thin wrappers around matching scripts/dev entry points.
 foreach ($bat in Get-ChildItem -Path $repoRoot -Filter "test-*.bat" -File) {
     $name = [System.IO.Path]::GetFileNameWithoutExtension($bat.Name)
     $expected = if ($name -eq "test-llm-connectivity") { "test-llm-connectivity.ps1" } else { "$name.ps1" }
@@ -176,7 +173,6 @@ foreach ($bat in Get-ChildItem -Path $repoRoot -Filter "test-*.bat" -File) {
     if ($logicLines.Count -gt 0) { Add-Failure "$($bat.Name) contains non-wrapper logic: $($logicLines -join ' | ')" }
 }
 
-# 7.4: visual scenarios are the single source of truth and must be strongly valid.
 $obsoleteManifestPath = Join-Path $repoRoot "scripts/dev/game/visual-tests.json"
 if (Test-Path $obsoleteManifestPath) {
     Add-Failure "Obsolete visual manifest still exists; use Config/AINpcVisualScenarios.json as the single source of truth: $(Get-RelativePath $obsoleteManifestPath)"
@@ -247,7 +243,7 @@ function Test-KnownVisualObservation([string]$Observation, [string]$Context) {
 
 function Test-VisualScenarioAssertion($Assertion, [string]$Context) {
     $localFailures = New-Object System.Collections.Generic.List[string]
-    $operatorFields = @("all", "any", "anyOf", "exists", "equals")
+    $operatorFields = @("all", "any", "anyOf", "exists", "equals", "notExists")
     if (-not $Assertion) {
         [void]$localFailures.Add("$Context assertion must be an object.")
         return @($localFailures)
@@ -260,6 +256,13 @@ function Test-VisualScenarioAssertion($Assertion, [string]$Context) {
     if ($Assertion.PSObject.Properties.Name -contains "exists") {
         foreach ($failure in @(Test-KnownVisualObservation ([string]$Assertion.exists) "$Context exists")) { [void]$localFailures.Add($failure) }
     }
+    if ($Assertion.PSObject.Properties.Name -contains "notExists") {
+        $notExistsObservation = [string]$Assertion.notExists
+        foreach ($failure in @(Test-KnownVisualObservation $notExistsObservation "$Context notExists")) { [void]$localFailures.Add($failure) }
+        if (@("waitingStateObserved", "speakingStateObserved", "actionTargetReached") -notcontains $notExistsObservation) {
+            [void]$localFailures.Add("$Context notExists cannot prove full-window absence for observation '$notExistsObservation'.")
+        }
+    }
     if ($Assertion.PSObject.Properties.Name -contains "equals") {
         foreach ($failure in @(Test-KnownVisualObservation ([string]$Assertion.equals.observation) "$Context equals")) { [void]$localFailures.Add($failure) }
     }
@@ -269,6 +272,30 @@ function Test-VisualScenarioAssertion($Assertion, [string]$Context) {
             if ($children.Count -eq 0) { [void]$localFailures.Add("$Context assertion $groupField must contain child assertions.") }
             for ($i = 0; $i -lt $children.Count; $i++) {
                 foreach ($failure in @(Test-VisualScenarioAssertion $children[$i] "$Context.$groupField[$i]")) { [void]$localFailures.Add($failure) }
+            }
+        }
+    }
+    return @($localFailures)
+}
+
+
+function Test-FinalExpectNoActionAdapterFacts($Assertion, [string]$Context) {
+    $localFailures = New-Object System.Collections.Generic.List[string]
+    if (-not $Assertion) { return @($localFailures) }
+    if (($Assertion.PSObject.Properties.Name -contains "exists") -and @("actionExecutionAccepted", "actionRejectedVisible") -contains [string]$Assertion.exists) {
+        [void]$localFailures.Add("$Context final expect must not use action adapter facts '$($Assertion.exists)'.")
+    }
+    if (($Assertion.PSObject.Properties.Name -contains "notExists") -and @("actionExecutionAccepted", "actionRejectedVisible") -contains [string]$Assertion.notExists) {
+        [void]$localFailures.Add("$Context final expect must not use action adapter facts '$($Assertion.notExists)'.")
+    }
+    if (($Assertion.PSObject.Properties.Name -contains "equals") -and @("actionExecutionAccepted", "actionRejectedVisible") -contains [string]$Assertion.equals.observation) {
+        [void]$localFailures.Add("$Context final expect must not use action adapter facts '$($Assertion.equals.observation)'.")
+    }
+    foreach ($groupField in @("all", "any", "anyOf")) {
+        if ($Assertion.PSObject.Properties.Name -contains $groupField) {
+            $children = @($Assertion.$groupField)
+            for ($i = 0; $i -lt $children.Count; $i++) {
+                foreach ($failure in @(Test-FinalExpectNoActionAdapterFacts $children[$i] "$Context.$groupField[$i]")) { [void]$localFailures.Add($failure) }
             }
         }
     }
@@ -347,20 +374,25 @@ foreach ($entry in $scenarios) {
         }
     }
     if (-not $entry.expect) { Add-Failure "$context missing expect assertion." }
-    else { foreach ($failure in @(Test-VisualScenarioAssertion $entry.expect "$context expect")) { Add-Failure $failure } }
+    else { foreach ($failure in @(Test-VisualScenarioAssertion $entry.expect "$context expect")) { Add-Failure $failure }; foreach ($failure in @(Test-FinalExpectNoActionAdapterFacts $entry.expect "$context expect")) { Add-Failure $failure } }
 }
-
 
 $registryText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcVisualTestRegistry.cpp") -Raw
 $visualTestHeaderText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Public/Test/AINpcVisualTest.h") -Raw
 if ($registryText -notmatch 'builtin\.npcEvent' -or $registryText -notmatch 'builtin\.smartObjectAction' -or $registryText -notmatch 'eventId' -or $registryText -notmatch 'actorRef') {
     Add-Failure "C++ visual scenario schema descriptor must validate Phase 2.8b event/action adapter payload ids and required fields."
 }
+if ($registryText -notmatch 'notExists') {
+    Add-Failure "C++ visual scenario schema descriptor must validate Phase 2.8c notExists assertions."
+}
 if ($registryText -notmatch 'fixture\.type' -or $registryText -notmatch 'fixture\.adapterId' -or $registryText -notmatch 'fixture\.kind' -or $registryText -notmatch 'builtin\.characterFixture' -or $registryText -notmatch 'characterWithSmartObject') {
     Add-Failure "C++ visual scenario schema descriptor must reject fixture.type and validate fixture.adapterId/fixture.kind."
 }
 if ($visualTestHeaderText -notmatch 'AdapterId' -or $visualTestHeaderText -notmatch 'Kind' -or $visualTestHeaderText -match 'struct\s+FAINpcVisualScenarioFixtureSpec[^}]*FString\s+Type\s*;') {
     Add-Failure "C++ visual fixture spec must expose adapterId/kind storage only, not legacy type."
+}
+if ($visualTestHeaderText -notmatch 'struct\s+FAINpcVisualObservationRecord' -or $visualTestHeaderText -notmatch 'SourceKind' -or $visualTestHeaderText -notmatch 'AdapterOrProviderId' -or $visualTestHeaderText -notmatch 'StepIndex' -or $visualTestHeaderText -notmatch 'TimestampSeconds') {
+    Add-Failure "C++ visual test contract must expose typed/sourced observation record metadata for Phase 2.8c."
 }
 $publicApiScanFiles = Get-ChildItem -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Public") -Recurse -Include "*.h", "*.cpp" -File
 foreach ($file in $publicApiScanFiles) {
@@ -392,10 +424,6 @@ foreach ($forbiddenInfra in @("remote service", "database", "web console", "dist
     if (($allPhase27Text -join "`n") -match $forbiddenInfra) { Add-Failure "Phase 2.7 introduces forbidden personal-OSS infrastructure text: $forbiddenInfra" }
 }
 
-
-# 7.4b / 1.12: keep the concrete negative checks that are not already covered by
-# the live manifest walk above. Do not mirror the whole DSL validator here; that
-# duplication is how schema drift hides in plain sight.
 function Assert-AINpcVisibleLaunchContract {
     param(
         [Parameter(Mandatory = $true)][string]$EditorPath,
@@ -431,7 +459,6 @@ else {
     $failures.RemoveRange($beforeValidateOnlyFailures, $failures.Count - $beforeValidateOnlyFailures)
 }
 
-# 7.5: C++ Automation test paths under Private/Tests use AINpc. prefix.
 $testFiles = Get-ChildItem -Path (Join-Path $repoRoot "Plugins/AINpc/Source") -Recurse -Filter "*.cpp" -File |
     Where-Object { $_.FullName -replace '\\', '/' -match '/Private/Tests/' }
 foreach ($file in $testFiles) {
@@ -444,7 +471,6 @@ foreach ($file in $testFiles) {
     }
 }
 
-# 7.6a: suites must aggregate deterministic child artifacts, not guess by latest timestamp.
 $testGameScript = Join-Path $repoRoot "scripts/dev/test-game.ps1"
 $testGameText = Get-Content -Path $testGameScript -Raw
 if ($testGameText -match "Get-AINpcLatestResultPath") {
@@ -475,7 +501,6 @@ foreach ($entryScript in @("build-editor.ps1", "test-static.ps1", "test-editor-c
     }
 }
 
-# 7.6: final visual acceptance scripts must not use forbidden headless/mock/bypass final modes.
 $visualScripts = @()
 $visualScripts += Get-ChildItem -Path (Join-Path $repoRoot "scripts/dev/game") -Filter "*.ps1" -File
 $visualScripts += Get-Item (Join-Path $repoRoot "scripts/dev/test-game.ps1")
@@ -501,7 +526,6 @@ foreach ($file in $visualScripts) {
     }
 }
 
-# 6.3: editor-context script must use visible UnrealEditor and not present itself as visual-game acceptance.
 $editorScript = Join-Path $repoRoot "scripts/dev/test-editor-context.ps1"
 $editorText = Get-Content -Path $editorScript -Raw
 if ($editorText -notmatch 'Start-Process\s+-FilePath\s+\$editor' -or $editorText -match "UnrealEditor-Cmd|(?i)-nullrhi|(?i)-unattended") {
@@ -511,8 +535,6 @@ if ($editorText -notmatch "not final player-visible NPC behavior acceptance") {
     Add-Failure "test-editor-context.ps1 must explicitly state editor automation is not final player-visible NPC behavior acceptance."
 }
 
-
-# Security: visual runtime artifacts must not persist raw command lines or provider bodies.
 $visualGameModePath = Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcTestGameMode.cpp"
 $visualGameModeText = Get-Content -Path $visualGameModePath -Raw
 foreach ($match in [regex]::Matches($visualGameModeText, 'SetStringField\s*\(\s*TEXT\("(arguments|display)"\)[\s\S]*?FCommandLine::Get\s*\(')) {
@@ -528,12 +550,14 @@ foreach ($field in @('summary', 'message')) {
         }
     }
 }
-
 if ($visualGameModeText -notmatch 'TEXT\("bearer"\)') {
     Add-Failure "RedactSensitiveText key list must include bearer."
 }
 if ($visualGameModeText -match 'SetStringField\s*\(\s*Field\.Key\s*,\s*Field\.Value\s*\)') {
     Add-Failure "BuildObservationJson writes raw observation string fields without redaction."
+}
+if ($visualGameModeText -notmatch 'records' -or $visualGameModeText -notmatch 'sourceKind' -or $visualGameModeText -notmatch 'sourceIdentity' -or $visualGameModeText -notmatch 'adapterOrProviderId') {
+    Add-Failure "Visual runtime result must serialize typed observation records with source metadata."
 }
 
 $testCharacterPath = Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcTestCharacter.cpp"
@@ -571,8 +595,6 @@ if ($diagnosticsHeaderText -match 'BuildSafeResponseSummary[\s\S]*?ResponseBody\
     Add-Failure "BuildSafeResponseSummary must not expose response body text with ResponseBody.Left(...)."
 }
 
-# 7.7: validate result schema deterministically. Do not scan historical Saved/TestLogs;
-# stale local artifacts are arbitrary trash and must not decide static contract status.
 $sampleResultPath = Join-Path $repoRoot "Saved/TestLogs/_contract-sample/result.json"
 $sampleStoryIds = [System.Collections.Generic.List[object]]::new()
 $sampleStoryIds.Add("US-contract")

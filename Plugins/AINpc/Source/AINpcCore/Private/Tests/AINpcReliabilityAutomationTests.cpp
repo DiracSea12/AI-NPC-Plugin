@@ -878,6 +878,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FAINpcConcurrencyQueueWhenSaturatedTest::RunTest(const FString& Parameters)
 {
 	UAINpcComponent::ResetConcurrencyStateForTest();
+	UAINpcComponent::SetDialogueDispatchBypassForTest(true);
 
 	const UAINpcSettings* Settings = GetDefault<UAINpcSettings>();
 	const int32 DialogueLimit = FMath::Max(1, Settings ? Settings->DialogueRequestConcurrencyLimit : 1);
@@ -952,6 +953,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FAINpcConcurrencyDuplicatePendingGuardTest::RunTest(const FString& Parameters)
 {
 	UAINpcComponent::ResetConcurrencyStateForTest();
+	UAINpcComponent::SetDialogueDispatchBypassForTest(true);
 
 	const UAINpcSettings* Settings = GetDefault<UAINpcSettings>();
 	const int32 DialogueLimit = FMath::Max(1, Settings ? Settings->DialogueRequestConcurrencyLimit : 1);

@@ -1,4 +1,5 @@
 #include "Test/AINpcDataDrivenVisualScenarioTest.h"
+#include "AINpcVisualObservationStore.h"
 
 #include "Animation/AnimMontage.h"
 #include "Components/AINpcComponent.h"
@@ -9,7 +10,6 @@
 #include "Events/NpcEventPayloadBlueprintLibrary.h"
 #include "Events/NpcEventSubsystem.h"
 #include "GameplayTagContainer.h"
-#include "LLM/LLMResponseParser.h"
 #include "SmartObjectBridge/SmartObjectBridgeContext.h"
 #include "Test/AINpcDialogueVisualTestSupport.h"
 #include "Test/AINpcSmartObjectActionTestSupport.h"
@@ -46,130 +46,7 @@ namespace
 		bool HasReachedVisualActionTarget() const { return Character.HasReachedVisualActionTarget(); }
 		double GetVisualActionTargetDistance() const { return Character.GetVisualActionTargetDistance(); }
 	};
-}
 
-struct FAINpcInternalDialogueObservationProvider
-	{
-		UAINpcComponent* NpcComponent = nullptr;
-		TFunction<void(const FString&, bool)> RecordBool;
-		TFunction<bool(const FString&)> HasBool;
-		TFunction<void(const FString&)> SetVisibleDialogueText;
-		TFunction<void()> UpdateDialogueStateEvidence;
-		TFunction<bool()> HasLatestActionIntent;
-		TFunction<void(const FString&)> Fail;
-		TFunction<void(const FString&, const FColor&, float)> ShowStatus;
-		FDelegateHandle SessionStartedHandle;
-		FDelegateHandle ResponseHandle;
-		FDelegateHandle PartialResponseHandle;
-		FDelegateHandle ErrorHandle;
-		FDelegateHandle SessionEndedHandle;
-		FDelegateHandle DegradedHandle;
-		FDelegateHandle DelayMaskingStartHandle;
-		FDelegateHandle DelayMaskingEndHandle;
-		FString LastNpcResponseText;
-		FString LastPartialResponseText;
-		FString LastDelayFillerText;
-
-		bool Start(UAINpcComponent& InNpcComponent, FString& OutFailureReason)
-		{
-			if (NpcComponent)
-			{
-				OutFailureReason = TEXT("Dialogue observation provider is already bound.");
-				return false;
-			}
-			NpcComponent = &InNpcComponent;
-			SessionStartedHandle = NpcComponent->OnDialogueSessionStartedNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnSessionStarted);
-			ResponseHandle = NpcComponent->OnDialogueResponseNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnResponse);
-			PartialResponseHandle = NpcComponent->OnDialoguePartialResponseNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnPartialResponse);
-			ErrorHandle = NpcComponent->OnDialogueErrorNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnError);
-			SessionEndedHandle = NpcComponent->OnDialogueSessionEndedNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnSessionEnded);
-			DegradedHandle = NpcComponent->OnDialogueDegradedNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnDegraded);
-			DelayMaskingStartHandle = NpcComponent->OnDelayMaskingStartNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnDelayMaskingStart);
-			DelayMaskingEndHandle = NpcComponent->OnDelayMaskingEndNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnDelayMaskingEnd);
-			return true;
-		}
-
-		void Stop()
-		{
-			if (!NpcComponent) { return; }
-			NpcComponent->OnDialogueSessionStartedNative().Remove(SessionStartedHandle);
-			NpcComponent->OnDialogueResponseNative().Remove(ResponseHandle);
-			NpcComponent->OnDialoguePartialResponseNative().Remove(PartialResponseHandle);
-			NpcComponent->OnDialogueErrorNative().Remove(ErrorHandle);
-			NpcComponent->OnDialogueSessionEndedNative().Remove(SessionEndedHandle);
-			NpcComponent->OnDialogueDegradedNative().Remove(DegradedHandle);
-			NpcComponent->OnDelayMaskingStartNative().Remove(DelayMaskingStartHandle);
-			NpcComponent->OnDelayMaskingEndNative().Remove(DelayMaskingEndHandle);
-			NpcComponent = nullptr;
-		}
-
-		void OnSessionStarted()
-		{
-			RecordBool(TEXT("sessionStarted"), true);
-			ShowStatus(TEXT("Dialogue session started through the real provider chain."), FColor::Green, 6.0f);
-		}
-
-		void OnResponse(const FString& Text)
-		{
-			LastNpcResponseText = Text;
-			LastNpcResponseText.TrimStartAndEndInline();
-			if (LastNpcResponseText.IsEmpty())
-			{
-				Fail(TEXT("Provider returned an empty dialogue response."));
-				return;
-			}
-			RecordBool(TEXT("dialogueResponseObserved"), true);
-			RecordBool(TEXT("structuredResponseObserved"), true);
-			if (HasLatestActionIntent()) { RecordBool(TEXT("actionIntentObserved"), true); }
-			SetVisibleDialogueText(LastNpcResponseText);
-			UpdateDialogueStateEvidence();
-			ShowStatus(FString::Printf(TEXT("<<< NPC response received. Length=%d"), LastNpcResponseText.Len()), FColor::Yellow, 8.0f);
-		}
-
-		void OnPartialResponse(const FString& Text)
-		{
-			if (!Text.IsEmpty())
-			{
-				LastPartialResponseText = Text;
-				RecordBool(TEXT("partialResponseObserved"), true);
-			}
-			ShowStatus(FString::Printf(TEXT("[stream] partial response. Length=%d"), Text.Len()), FColor::Orange, 3.0f);
-		}
-
-		void OnError(const FString& ErrorMessage)
-		{
-			Fail(FString::Printf(TEXT("Provider chain reported an error. Length=%d"), ErrorMessage.Len()));
-		}
-
-		void OnSessionEnded()
-		{
-			UpdateDialogueStateEvidence();
-		}
-
-		void OnDegraded(const FString& FallbackResponse, const FString& DegradedFailureReason)
-		{
-			(void)FallbackResponse;
-			Fail(FString::Printf(TEXT("Provider chain degraded. ReasonLength=%d"), DegradedFailureReason.Len()));
-		}
-
-		void OnDelayMaskingStart(UAnimMontage* Montage, const FText& FillerText)
-		{
-			(void)Montage;
-			LastDelayFillerText = FillerText.ToString();
-			RecordBool(TEXT("delayMaskingStartObserved"), true);
-			if (HasBool(TEXT("eventTriggerBroadcast"))) { RecordBool(TEXT("eventDelayMaskingStartObserved"), true); }
-			ShowStatus(FString::Printf(TEXT("Delay masking started. FillerLength=%d"), LastDelayFillerText.Len()), FColor::Purple, 5.0f);
-		}
-
-		void OnDelayMaskingEnd()
-		{
-			RecordBool(TEXT("delayMaskingEndObserved"), true);
-			ShowStatus(TEXT("Delay masking ended."), FColor::Purple, 3.0f);
-		}
-};
-
-namespace
-{
 	bool IsKnownBooleanObservation(const FString& Name)
 	{
 		static const TSet<FString> KnownBooleanObservations = {
@@ -186,7 +63,8 @@ namespace
 			TEXT("delayMaskingEndObserved"),
 			TEXT("actionExecutionAccepted"),
 			TEXT("actionRejectedVisible"),
-			TEXT("actionTargetReached")
+			TEXT("actionTargetReached"),
+			TEXT("actionTargetReachedHoldElapsed")
 		};
 		return KnownBooleanObservations.Contains(Name);
 	}
@@ -229,6 +107,74 @@ namespace
 	}
 }
 
+struct FAINpcInternalDialogueObservationProvider
+{
+	UAINpcComponent* NpcComponent = nullptr;
+	TFunction<void(const FString&, bool, const FAINpcVisualObservationSourceInfo&, bool)> RecordBool;
+	TFunction<void(const FString&, int32, const FAINpcVisualObservationSourceInfo&)> RecordInteger;
+	TFunction<void(const FString&, const FAINpcVisualObservationSourceInfo&)> MarkReady;
+	TFunction<bool(const FString&)> HasBool;
+	TFunction<void(const FString&)> SetVisibleDialogueText;
+	TFunction<void()> UpdateDialogueStateEvidence;
+	TFunction<bool()> HasLatestActionIntent;
+	TFunction<void(const FString&)> Fail;
+	TFunction<void(const FString&, const FColor&, float)> ShowStatus;
+	TFunction<FAINpcVisualObservationSourceInfo(const TCHAR*)> MakeDialogueSource;
+	FDelegateHandle SessionStartedHandle;
+	FDelegateHandle ResponseHandle;
+	FDelegateHandle PartialResponseHandle;
+	FDelegateHandle ErrorHandle;
+	FDelegateHandle SessionEndedHandle;
+	FDelegateHandle DegradedHandle;
+	FDelegateHandle DelayMaskingStartHandle;
+	FDelegateHandle DelayMaskingEndHandle;
+	FString LastNpcResponseText;
+	FString LastPartialResponseText;
+	FString LastDelayFillerText;
+
+	bool Start(UAINpcComponent& InNpcComponent, FString& OutFailureReason)
+	{
+		if (NpcComponent)
+		{
+			OutFailureReason = TEXT("Dialogue observation provider is already bound.");
+			return false;
+		}
+		NpcComponent = &InNpcComponent;
+		SessionStartedHandle = NpcComponent->OnDialogueSessionStartedNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnSessionStarted);
+		ResponseHandle = NpcComponent->OnDialogueResponseNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnResponse);
+		PartialResponseHandle = NpcComponent->OnDialoguePartialResponseNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnPartialResponse);
+		ErrorHandle = NpcComponent->OnDialogueErrorNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnError);
+		SessionEndedHandle = NpcComponent->OnDialogueSessionEndedNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnSessionEnded);
+		DegradedHandle = NpcComponent->OnDialogueDegradedNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnDegraded);
+		DelayMaskingStartHandle = NpcComponent->OnDelayMaskingStartNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnDelayMaskingStart);
+		DelayMaskingEndHandle = NpcComponent->OnDelayMaskingEndNative().AddRaw(this, &FAINpcInternalDialogueObservationProvider::OnDelayMaskingEnd);
+		return true;
+	}
+
+	void Stop()
+	{
+		if (!NpcComponent) { return; }
+		NpcComponent->OnDialogueSessionStartedNative().Remove(SessionStartedHandle);
+		NpcComponent->OnDialogueResponseNative().Remove(ResponseHandle);
+		NpcComponent->OnDialoguePartialResponseNative().Remove(PartialResponseHandle);
+		NpcComponent->OnDialogueErrorNative().Remove(ErrorHandle);
+		NpcComponent->OnDialogueSessionEndedNative().Remove(SessionEndedHandle);
+		NpcComponent->OnDialogueDegradedNative().Remove(DegradedHandle);
+		NpcComponent->OnDelayMaskingStartNative().Remove(DelayMaskingStartHandle);
+		NpcComponent->OnDelayMaskingEndNative().Remove(DelayMaskingEndHandle);
+		NpcComponent = nullptr;
+	}
+
+	void OnSessionStarted();
+	void OnResponse(const FString& Text);
+	void OnPartialResponse(const FString& Text);
+	void OnError(const FString& ErrorMessage);
+	void OnSessionEnded();
+	void OnDegraded(const FString& FallbackResponse, const FString& DegradedFailureReason);
+	void OnDelayMaskingStart(UAnimMontage* Montage, const FText& FillerText);
+	void OnDelayMaskingEnd();
+};
+
 struct FAINpcVisualScenarioRuntimeView
 {
 	UWorld* World = nullptr;
@@ -238,22 +184,9 @@ struct FAINpcVisualScenarioRuntimeView
 	TUniquePtr<FAINpcBuiltInCharacterDriver> CharacterDriver;
 	TUniquePtr<FAINpcInternalDialogueObservationProvider> DialogueObservationProvider;
 
-	UWorld* GetWorld() const
-	{
-		return CharacterDriver ? CharacterDriver->GetWorld() : World;
-	}
-
-	double GetTimeSeconds(const double FallbackSeconds) const
-	{
-		const UWorld* RunWorld = GetWorld();
-		return RunWorld ? RunWorld->GetTimeSeconds() : FallbackSeconds;
-	}
-
-	UAINpcComponent* GetNpcComponent() const
-	{
-		return CharacterDriver ? CharacterDriver->GetNpcComponent() : nullptr;
-	}
-
+	UWorld* GetWorld() const { return CharacterDriver ? CharacterDriver->GetWorld() : World; }
+	double GetTimeSeconds(const double FallbackSeconds) const { const UWorld* RunWorld = GetWorld(); return RunWorld ? RunWorld->GetTimeSeconds() : FallbackSeconds; }
+	UAINpcComponent* GetNpcComponent() const { return CharacterDriver ? CharacterDriver->GetNpcComponent() : nullptr; }
 	AActor* GetNpcActor() const { return CharacterDriver ? CharacterDriver->GetActor() : nullptr; }
 	UObject* CreatePersonaOuter() const { return CharacterDriver ? CharacterDriver->CreatePersonaOuter() : GetWorld(); }
 	bool HasSmartObjectFixture() const { return SmartObject != nullptr; }
@@ -269,11 +202,77 @@ struct FAINpcVisualScenarioRuntimeView
 	double GetVisualActionTargetDistance() const { return CharacterDriver ? CharacterDriver->GetVisualActionTargetDistance() : 0.0; }
 };
 
-
-namespace
+struct FAINpcDataDrivenVisualScenarioTest::FImplementation
 {
-	struct FAINpcBuiltInEventAdapter
-	{
+	FImplementation(const FAINpcVisualTestContext& Context, FAINpcVisualScenarioConfig InConfig);
+	~FImplementation();
+
+	bool Start(FString& OutFailureReason);
+	void Poll();
+	bool IsComplete() const;
+	bool HasFailed() const;
+	const FString& GetFailureReason() const;
+	FString BuildSummary() const;
+	FAINpcVisualTestObservations BuildObservations() const;
+	TArray<FAINpcVisualTestStepDiagnostic> BuildStepDiagnostics() const;
+
+private:
+	bool StartDialogueObservation(FString& OutFailureReason);
+	void StartNextStep();
+	void PollActiveStep();
+	bool RunStep(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason);
+	bool RunDialogueStart(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason);
+	bool RunWorldEvent(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason);
+	bool RunActionExecuteLatestIntent(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason);
+	bool RunObserveHold(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason);
+	bool EvaluateAssertion(const FAINpcVisualScenarioAssertion& Assertion, const FAINpcVisualObservationWindow& Window, FAINpcVisualAssertionFailureDetail* OutFailure) const;
+	void RecordWindowReadinessForAssertion(const FAINpcVisualScenarioAssertion& Assertion, const FAINpcVisualObservationWindow& Window);
+	bool IsWindowSampledObservation(const FString& Name) const;
+	FAINpcVisualObservationSourceInfo MakeWindowSampledSource(const FString& Name) const;
+	FAINpcVisualObservationWindow GetCurrentStepWindow() const;
+	FAINpcVisualObservationWindow GetScenarioHistoryWindow() const;
+	FString BuildPrompt(FString& OutFailureReason) const;
+	void HandleTimeout();
+	void UpdateDialogueStateEvidence();
+	bool ConfigurePersona(FString& OutFailureReason);
+	void Fail(const FString& Reason);
+	void FailWithAssertion(const FString& Prefix, const FAINpcVisualAssertionFailureDetail& Failure);
+	void ShowStatus(const FString& Message, const FColor& Color, float DurationSeconds) const;
+	void RecordBoolObservation(const FString& Name, bool bValue, const FAINpcVisualObservationSourceInfo& SourceInfo, bool bRequiresAllowedFinalSource = false);
+	void RecordIntegerObservation(const FString& Name, int32 Value, const FAINpcVisualObservationSourceInfo& SourceInfo);
+	void RecordNumberObservation(const FString& Name, double Value, const FAINpcVisualObservationSourceInfo& SourceInfo);
+	void RecordStringObservation(const FString& Name, const FString& Value, const FAINpcVisualObservationSourceInfo& SourceInfo);
+	bool RecordObservation(FAINpcVisualObservationRecord Record, bool bRequiresAllowedFinalSource);
+	void MarkObservationSourceReady(const FString& Name, const FAINpcVisualObservationSourceInfo& SourceInfo);
+	void MarkObservationSourceReadyForWindow(const FString& Name, const FAINpcVisualObservationSourceInfo& SourceInfo, const FAINpcVisualObservationWindow& Window);
+	void RefreshActionTargetObservation();
+	void CompleteCurrentStep();
+	void FinalizeActiveStepDiagnostic(const FString& Status, const FString& Reason, const FString& FailureCategory = FString(), const FString& ObservationName = FString(), const FString& SourceKind = FString(), const FString& SourceId = FString());
+	FAINpcVisualObservationSourceInfo MakeDialogueSource(const TCHAR* CallbackName) const;
+	FAINpcVisualObservationSourceInfo MakeDialogueStateSource(const TCHAR* SamplingName) const;
+	FAINpcVisualObservationSourceInfo MakeEventSource() const;
+	FAINpcVisualObservationSourceInfo MakeActionSource() const;
+	FAINpcVisualObservationSourceInfo MakeCharacterSource(const TCHAR* SamplingName) const;
+
+	TUniquePtr<FAINpcVisualScenarioRuntimeView> Runtime;
+	FAINpcVisualScenarioConfig Config;
+	TObjectPtr<UNpcPersonaDataAsset> VisualHarnessPersona;
+	FTimerHandle StepTimerHandle;
+	FTimerHandle TimeoutTimerHandle;
+	TUniquePtr<FAINpcVisualObservationStore> Observations;
+	TArray<FAINpcVisualTestStepDiagnostic> StepDiagnostics;
+	int32 ActiveStepIndex = INDEX_NONE;
+	double ActiveStepStartSeconds = 0.0;
+	double CurrentStepFirstSatisfiedSeconds = -1.0;
+	bool bComplete = false;
+	bool bFailed = false;
+	bool bStarted = false;
+	FString FailureReason;
+	FString LastActionFailureReason;
+};
+
+struct FAINpcBuiltInEventAdapter
+{
 		bool Execute(const FAINpcVisualScenarioStep& Step, const FAINpcVisualScenarioRuntimeView& Runtime, FString& OutFailureReason) const
 		{
 			if (Step.Payload.AdapterId != BuiltInNpcEventAdapterId)
@@ -316,8 +315,8 @@ namespace
 		Invalid
 	};
 
-	struct FAINpcBuiltInActionAdapter
-	{
+struct FAINpcBuiltInActionAdapter
+{
 		EAINpcActionAdapterExecuteResult Execute(const FAINpcVisualScenarioStep& Step, const FAINpcVisualScenarioRuntimeView& Runtime, FAINpcVisualSmartObjectActionExecution& OutExecution, FString& OutFailureReason) const
 		{
 			if (Step.Payload.AdapterId != BuiltInSmartObjectActionAdapterId)
@@ -346,11 +345,27 @@ namespace
 				: EAINpcActionAdapterExecuteResult::Rejected;
 		}
 	};
-}
 
 FAINpcDataDrivenVisualScenarioTest::FAINpcDataDrivenVisualScenarioTest(const FAINpcVisualTestContext& Context, FAINpcVisualScenarioConfig InConfig)
+	: Impl(MakeUnique<FImplementation>(Context, MoveTemp(InConfig)))
+{
+}
+
+FAINpcDataDrivenVisualScenarioTest::~FAINpcDataDrivenVisualScenarioTest() = default;
+
+bool FAINpcDataDrivenVisualScenarioTest::Start(FString& OutFailureReason) { return Impl->Start(OutFailureReason); }
+void FAINpcDataDrivenVisualScenarioTest::Poll() { Impl->Poll(); }
+bool FAINpcDataDrivenVisualScenarioTest::IsComplete() const { return Impl->IsComplete(); }
+bool FAINpcDataDrivenVisualScenarioTest::HasFailed() const { return Impl->HasFailed(); }
+const FString& FAINpcDataDrivenVisualScenarioTest::GetFailureReason() const { return Impl->GetFailureReason(); }
+FString FAINpcDataDrivenVisualScenarioTest::BuildSummary() const { return Impl->BuildSummary(); }
+FAINpcVisualTestObservations FAINpcDataDrivenVisualScenarioTest::BuildObservations() const { return Impl->BuildObservations(); }
+TArray<FAINpcVisualTestStepDiagnostic> FAINpcDataDrivenVisualScenarioTest::BuildStepDiagnostics() const { return Impl->BuildStepDiagnostics(); }
+
+FAINpcDataDrivenVisualScenarioTest::FImplementation::FImplementation(const FAINpcVisualTestContext& Context, FAINpcVisualScenarioConfig InConfig)
 	: Runtime(MakeUnique<FAINpcVisualScenarioRuntimeView>())
 	, Config(MoveTemp(InConfig))
+	, Observations(MakeUnique<FAINpcVisualObservationStore>())
 {
 	Runtime->World = Context.World;
 	Runtime->TestId = Context.TestId;
@@ -362,7 +377,7 @@ FAINpcDataDrivenVisualScenarioTest::FAINpcDataDrivenVisualScenarioTest(const FAI
 	}
 }
 
-FAINpcDataDrivenVisualScenarioTest::~FAINpcDataDrivenVisualScenarioTest()
+FAINpcDataDrivenVisualScenarioTest::FImplementation::~FImplementation()
 {
 	if (UWorld* World = Runtime->GetWorld())
 	{
@@ -372,7 +387,7 @@ FAINpcDataDrivenVisualScenarioTest::~FAINpcDataDrivenVisualScenarioTest()
 	if (Runtime->DialogueObservationProvider) { Runtime->DialogueObservationProvider->Stop(); }
 }
 
-bool FAINpcDataDrivenVisualScenarioTest::Start(FString& OutFailureReason)
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::Start(FString& OutFailureReason)
 {
 	if (!Runtime->GetNpcComponent())
 	{
@@ -381,22 +396,20 @@ bool FAINpcDataDrivenVisualScenarioTest::Start(FString& OutFailureReason)
 	}
 	if (!ConfigurePersona(OutFailureReason)) { return false; }
 	if (!AINpcDialogueVisualTestSupport::ValidateProviderConfiguration(Runtime->GetNpcComponent(), OutFailureReason)) { return false; }
-
 	if (!StartDialogueObservation(OutFailureReason)) { return false; }
 	bStarted = true;
 	ShowStatus(FString::Printf(TEXT("Visual scenario '%s' ready. Starting DSL steps in %.0fs."), *Config.TestId, InitialDialogueDelaySeconds), FColor::Green, 15.0f);
 	if (UWorld* World = Runtime->GetWorld())
 	{
-		World->GetTimerManager().SetTimer(TimeoutTimerHandle, FTimerDelegate::CreateRaw(this, &FAINpcDataDrivenVisualScenarioTest::HandleTimeout), static_cast<float>(Config.TimeoutSec), false);
-		World->GetTimerManager().SetTimer(StepTimerHandle, FTimerDelegate::CreateRaw(this, &FAINpcDataDrivenVisualScenarioTest::StartNextStep), InitialDialogueDelaySeconds, false);
+		World->GetTimerManager().SetTimer(TimeoutTimerHandle, FTimerDelegate::CreateRaw(this, &FAINpcDataDrivenVisualScenarioTest::FImplementation::HandleTimeout), static_cast<float>(Config.TimeoutSec), false);
+		World->GetTimerManager().SetTimer(StepTimerHandle, FTimerDelegate::CreateRaw(this, &FAINpcDataDrivenVisualScenarioTest::FImplementation::StartNextStep), InitialDialogueDelaySeconds, false);
 		return true;
 	}
-
 	OutFailureReason = FString::Printf(TEXT("Visual scenario '%s' cannot start because World is null."), *Config.TestId);
 	return false;
 }
 
-bool FAINpcDataDrivenVisualScenarioTest::StartDialogueObservation(FString& OutFailureReason)
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::StartDialogueObservation(FString& OutFailureReason)
 {
 	UAINpcComponent* NpcComponent = Runtime->GetNpcComponent();
 	if (!NpcComponent)
@@ -405,17 +418,20 @@ bool FAINpcDataDrivenVisualScenarioTest::StartDialogueObservation(FString& OutFa
 		return false;
 	}
 	Runtime->DialogueObservationProvider = MakeUnique<FAINpcInternalDialogueObservationProvider>();
-	Runtime->DialogueObservationProvider->RecordBool = [this](const FString& Name, const bool bValue) { RecordBoolObservation(Name, bValue); };
-	Runtime->DialogueObservationProvider->HasBool = [this](const FString& Name) { bool Value = false; return TryGetObservationBool(Name, Value) && Value; };
+	Runtime->DialogueObservationProvider->RecordBool = [this](const FString& Name, const bool bValue, const FAINpcVisualObservationSourceInfo& SourceInfo, const bool bRequiresAllowedFinalSource) { RecordBoolObservation(Name, bValue, SourceInfo, bRequiresAllowedFinalSource); };
+	Runtime->DialogueObservationProvider->RecordInteger = [this](const FString& Name, const int32 Value, const FAINpcVisualObservationSourceInfo& SourceInfo) { RecordIntegerObservation(Name, Value, SourceInfo); };
+	Runtime->DialogueObservationProvider->MarkReady = [this](const FString& Name, const FAINpcVisualObservationSourceInfo& SourceInfo) { MarkObservationSourceReady(Name, SourceInfo); };
+	Runtime->DialogueObservationProvider->HasBool = [this](const FString& Name) { return Observations->HasTrueBooleanSummary(Name); };
 	Runtime->DialogueObservationProvider->SetVisibleDialogueText = [this](const FString& Text) { Runtime->SetVisibleDialogueText(Text); };
 	Runtime->DialogueObservationProvider->UpdateDialogueStateEvidence = [this]() { UpdateDialogueStateEvidence(); };
 	Runtime->DialogueObservationProvider->HasLatestActionIntent = [this]() { FNpcAction LatestAction; return Runtime->TryGetLatestActionIntent(LatestAction); };
 	Runtime->DialogueObservationProvider->Fail = [this](const FString& Reason) { Fail(Reason); };
 	Runtime->DialogueObservationProvider->ShowStatus = [this](const FString& Message, const FColor& Color, const float DurationSeconds) { ShowStatus(Message, Color, DurationSeconds); };
+	Runtime->DialogueObservationProvider->MakeDialogueSource = [this](const TCHAR* CallbackName) { return MakeDialogueSource(CallbackName); };
 	return Runtime->DialogueObservationProvider->Start(*NpcComponent, OutFailureReason);
 }
 
-void FAINpcDataDrivenVisualScenarioTest::Poll()
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::Poll()
 {
 	if (!bStarted || bComplete || bFailed) { return; }
 	UpdateDialogueStateEvidence();
@@ -423,54 +439,134 @@ void FAINpcDataDrivenVisualScenarioTest::Poll()
 	PollActiveStep();
 }
 
-bool FAINpcDataDrivenVisualScenarioTest::IsComplete() const { return bComplete; }
-bool FAINpcDataDrivenVisualScenarioTest::HasFailed() const { return bFailed; }
-const FString& FAINpcDataDrivenVisualScenarioTest::GetFailureReason() const { return FailureReason; }
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::IsComplete() const { return bComplete; }
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::HasFailed() const { return bFailed; }
+const FString& FAINpcDataDrivenVisualScenarioTest::FImplementation::GetFailureReason() const { return FailureReason; }
 
-FString FAINpcDataDrivenVisualScenarioTest::BuildSummary() const
+FString FAINpcDataDrivenVisualScenarioTest::FImplementation::BuildSummary() const
 {
-	return FString::Printf(TEXT("TestId=%s Step=%d/%d Expect=%s"), *Config.TestId, ActiveStepIndex + 1, Config.Steps.Num(), IsAssertionSatisfied(Config.Expect.Assertion) ? TEXT("true") : TEXT("false"));
+	FAINpcVisualAssertionFailureDetail Failure;
+	const bool bExpectSatisfied = EvaluateAssertion(Config.Expect.Assertion, GetScenarioHistoryWindow(), &Failure);
+	return FString::Printf(TEXT("TestId=%s Step=%d/%d Expect=%s"), *Config.TestId, ActiveStepIndex + 1, Config.Steps.Num(), bExpectSatisfied ? TEXT("true") : TEXT("false"));
 }
 
-FAINpcVisualTestObservations FAINpcDataDrivenVisualScenarioTest::BuildObservations() const
+FAINpcVisualTestObservations FAINpcDataDrivenVisualScenarioTest::FImplementation::BuildObservations() const
 {
-	FAINpcVisualTestObservations Observations;
-	Observations.BooleanFields = BoolObservations;
-	Observations.IntegerFields = IntegerObservations;
-	Observations.IntegerFields.Add(TEXT("responseLength"), Runtime->DialogueObservationProvider ? Runtime->DialogueObservationProvider->LastNpcResponseText.Len() : 0);
-	Observations.IntegerFields.Add(TEXT("partialResponseLength"), Runtime->DialogueObservationProvider ? Runtime->DialogueObservationProvider->LastPartialResponseText.Len() : 0);
-	Observations.IntegerFields.Add(TEXT("delayFillerLength"), Runtime->DialogueObservationProvider ? Runtime->DialogueObservationProvider->LastDelayFillerText.Len() : 0);
-	Observations.NumberFields = NumberObservations;
-	Observations.NumberFields.Add(TEXT("distanceToActionTarget"), Runtime->GetVisualActionTargetDistance());
-	Observations.StringFields = StringObservations;
-	Observations.StringFields.Add(TEXT("lastActionFailure"), LastActionFailureReason);
-	return Observations;
+	return Observations->BuildObservations();
 }
 
-TArray<FAINpcVisualTestStepDiagnostic> FAINpcDataDrivenVisualScenarioTest::BuildStepDiagnostics() const
+TArray<FAINpcVisualTestStepDiagnostic> FAINpcDataDrivenVisualScenarioTest::FImplementation::BuildStepDiagnostics() const
 {
 	return StepDiagnostics;
 }
 
-void FAINpcDataDrivenVisualScenarioTest::StartNextStep()
+void FAINpcInternalDialogueObservationProvider::OnSessionStarted()
+{
+	const auto Source = MakeDialogueSource(TEXT("OnDialogueSessionStartedNative"));
+	MarkReady(TEXT("sessionStarted"), Source);
+	RecordBool(TEXT("sessionStarted"), true, Source, false);
+	ShowStatus(TEXT("Dialogue session started through the real provider chain."), FColor::Green, 6.0f);
+}
+
+void FAINpcInternalDialogueObservationProvider::OnResponse(const FString& Text)
+{
+	LastNpcResponseText = Text;
+	LastNpcResponseText.TrimStartAndEndInline();
+	if (LastNpcResponseText.IsEmpty())
+	{
+		Fail(TEXT("Provider returned an empty dialogue response."));
+		return;
+	}
+	const auto Source = MakeDialogueSource(TEXT("OnDialogueResponseNative"));
+	MarkReady(TEXT("dialogueResponseObserved"), Source);
+	MarkReady(TEXT("structuredResponseObserved"), Source);
+	RecordBool(TEXT("dialogueResponseObserved"), true, Source, true);
+	RecordBool(TEXT("structuredResponseObserved"), true, Source, true);
+	RecordInteger(TEXT("responseLength"), LastNpcResponseText.Len(), Source);
+	if (HasLatestActionIntent())
+	{
+		MarkReady(TEXT("actionIntentObserved"), Source);
+		RecordBool(TEXT("actionIntentObserved"), true, Source, false);
+	}
+	SetVisibleDialogueText(LastNpcResponseText);
+	UpdateDialogueStateEvidence();
+	ShowStatus(FString::Printf(TEXT("<<< NPC response received. Length=%d"), LastNpcResponseText.Len()), FColor::Yellow, 8.0f);
+}
+
+void FAINpcInternalDialogueObservationProvider::OnPartialResponse(const FString& Text)
+{
+	const auto Source = MakeDialogueSource(TEXT("OnDialoguePartialResponseNative"));
+	MarkReady(TEXT("partialResponseObserved"), Source);
+	if (!Text.IsEmpty())
+	{
+		LastPartialResponseText = Text;
+		RecordBool(TEXT("partialResponseObserved"), true, Source, true);
+		RecordInteger(TEXT("partialResponseLength"), Text.Len(), Source);
+	}
+	ShowStatus(FString::Printf(TEXT("[stream] partial response. Length=%d"), Text.Len()), FColor::Orange, 3.0f);
+}
+
+void FAINpcInternalDialogueObservationProvider::OnError(const FString& ErrorMessage)
+{
+	Fail(FString::Printf(TEXT("Provider chain reported an error. Length=%d"), ErrorMessage.Len()));
+}
+
+void FAINpcInternalDialogueObservationProvider::OnSessionEnded()
+{
+	UpdateDialogueStateEvidence();
+}
+
+void FAINpcInternalDialogueObservationProvider::OnDegraded(const FString& FallbackResponse, const FString& DegradedFailureReason)
+{
+	(void)FallbackResponse;
+	Fail(FString::Printf(TEXT("Provider chain degraded. ReasonLength=%d"), DegradedFailureReason.Len()));
+}
+
+void FAINpcInternalDialogueObservationProvider::OnDelayMaskingStart(UAnimMontage* Montage, const FText& FillerText)
+{
+	(void)Montage;
+	LastDelayFillerText = FillerText.ToString();
+	const auto Source = MakeDialogueSource(TEXT("OnDelayMaskingStartNative"));
+	MarkReady(TEXT("delayMaskingStartObserved"), Source);
+	RecordBool(TEXT("delayMaskingStartObserved"), true, Source, false);
+	RecordInteger(TEXT("delayFillerLength"), LastDelayFillerText.Len(), Source);
+	if (HasBool(TEXT("eventTriggerBroadcast")))
+	{
+		MarkReady(TEXT("eventDelayMaskingStartObserved"), Source);
+		RecordBool(TEXT("eventDelayMaskingStartObserved"), true, Source, false);
+	}
+	ShowStatus(FString::Printf(TEXT("Delay masking started. FillerLength=%d"), LastDelayFillerText.Len()), FColor::Purple, 5.0f);
+}
+
+void FAINpcInternalDialogueObservationProvider::OnDelayMaskingEnd()
+{
+	const auto Source = MakeDialogueSource(TEXT("OnDelayMaskingEndNative"));
+	MarkReady(TEXT("delayMaskingEndObserved"), Source);
+	RecordBool(TEXT("delayMaskingEndObserved"), true, Source, true);
+	ShowStatus(TEXT("Delay masking ended."), FColor::Purple, 3.0f);
+}
+
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::StartNextStep()
 {
 	if (bComplete || bFailed) { return; }
+	CurrentStepFirstSatisfiedSeconds = -1.0;
 	++ActiveStepIndex;
 	if (!Config.Steps.IsValidIndex(ActiveStepIndex))
 	{
-		if (IsAssertionSatisfied(Config.Expect.Assertion))
+		FAINpcVisualAssertionFailureDetail Failure;
+		if (EvaluateAssertion(Config.Expect.Assertion, GetScenarioHistoryWindow(), &Failure))
 		{
 			bComplete = true;
 		}
 		else
 		{
-			Fail(FString::Printf(TEXT("Scenario '%s' completed steps but final expect assertion was not satisfied."), *Config.TestId));
+			FailWithAssertion(FString::Printf(TEXT("Scenario '%s' completed steps but final expect assertion failed."), *Config.TestId), Failure);
 		}
 		return;
 	}
-
 	ActiveStepStartSeconds = Runtime->GetTimeSeconds(0.0);
 	FAINpcVisualTestStepDiagnostic Diagnostic;
+	Diagnostic.TestId = Config.TestId;
 	Diagnostic.StepIndex = ActiveStepIndex;
 	Diagnostic.StepType = Config.Steps[ActiveStepIndex].Type;
 	Diagnostic.Status = TEXT("running");
@@ -482,13 +578,16 @@ void FAINpcDataDrivenVisualScenarioTest::StartNextStep()
 	}
 }
 
-void FAINpcDataDrivenVisualScenarioTest::PollActiveStep()
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::PollActiveStep()
 {
 	if (!Config.Steps.IsValidIndex(ActiveStepIndex)) { return; }
 	const FAINpcVisualScenarioStep& Step = Config.Steps[ActiveStepIndex];
+	const FAINpcVisualObservationWindow Window = GetCurrentStepWindow();
 	if (Step.Type == TEXT("wait.until"))
 	{
-		if (IsAssertionSatisfied(Step.Condition))
+		RecordWindowReadinessForAssertion(Step.Condition, Window);
+		FAINpcVisualAssertionFailureDetail Failure;
+		if (EvaluateAssertion(Step.Condition, Window, &Failure))
 		{
 			CompleteCurrentStep();
 			return;
@@ -496,27 +595,39 @@ void FAINpcDataDrivenVisualScenarioTest::PollActiveStep()
 		const double Now = Runtime->GetTimeSeconds(ActiveStepStartSeconds);
 		if (Now - ActiveStepStartSeconds > Step.Payload.TimeoutSec)
 		{
-			Fail(FString::Printf(TEXT("Scenario '%s' step[%d] wait.until timed out after %.1fs."), *Config.TestId, ActiveStepIndex, Step.Payload.TimeoutSec));
+			FailWithAssertion(FString::Printf(TEXT("Scenario '%s' step[%d] wait.until timed out after %.1fs."), *Config.TestId, ActiveStepIndex, Step.Payload.TimeoutSec), Failure);
 		}
 	}
 	else if (Step.Type == TEXT("observe.hold"))
 	{
+		FAINpcVisualScenarioAssertion HoldAssertion;
+		HoldAssertion.Operator = TEXT("equals");
+		HoldAssertion.Observation = Step.Payload.Observation;
+		HoldAssertion.bHasEqualsBool = true;
+		HoldAssertion.EqualsBool = true;
+		RecordWindowReadinessForAssertion(HoldAssertion, Window);
+		FAINpcVisualAssertionFailureDetail Failure;
 		const double Now = Runtime->GetTimeSeconds(ActiveStepStartSeconds);
-		bool bObserved = false;
-		if (!TryGetObservationBool(Step.Payload.Observation, bObserved) || !bObserved)
+		if (!EvaluateAssertion(HoldAssertion, Window, &Failure))
 		{
-			ActiveStepStartSeconds = Now;
+			CurrentStepFirstSatisfiedSeconds = -1.0;
 			return;
 		}
-		if (Now - ActiveStepStartSeconds >= Step.Payload.DurationSec)
+		if (CurrentStepFirstSatisfiedSeconds < 0.0)
 		{
-			RecordBoolObservation(Step.Payload.Observation + TEXT("HoldElapsed"), true);
+			CurrentStepFirstSatisfiedSeconds = Now;
+			return;
+		}
+		if (Now - CurrentStepFirstSatisfiedSeconds >= Step.Payload.DurationSec)
+		{
+			MarkObservationSourceReady(TEXT("actionTargetReachedHoldElapsed"), MakeCharacterSource(TEXT("holdWindow")));
+			RecordBoolObservation(TEXT("actionTargetReachedHoldElapsed"), true, MakeCharacterSource(TEXT("holdWindow")), false);
 			CompleteCurrentStep();
 		}
 	}
 }
 
-bool FAINpcDataDrivenVisualScenarioTest::RunStep(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason)
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::RunStep(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason)
 {
 	if (Step.Type == TEXT("dialogue.start")) { return RunDialogueStart(Step, OutFailureReason); }
 	if (Step.Type == TEXT("world.event")) { return RunWorldEvent(Step, OutFailureReason); }
@@ -527,7 +638,7 @@ bool FAINpcDataDrivenVisualScenarioTest::RunStep(const FAINpcVisualScenarioStep&
 	return false;
 }
 
-bool FAINpcDataDrivenVisualScenarioTest::RunDialogueStart(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason)
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::RunDialogueStart(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason)
 {
 	(void)Step;
 	FString Prompt = BuildPrompt(OutFailureReason);
@@ -543,17 +654,19 @@ bool FAINpcDataDrivenVisualScenarioTest::RunDialogueStart(const FAINpcVisualScen
 	return true;
 }
 
-bool FAINpcDataDrivenVisualScenarioTest::RunWorldEvent(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason)
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::RunWorldEvent(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason)
 {
 	FAINpcBuiltInEventAdapter Adapter;
 	if (!Adapter.Execute(Step, *Runtime, OutFailureReason)) { return false; }
-	RecordBoolObservation(TEXT("eventTriggerBroadcast"), true);
+	const FAINpcVisualObservationSourceInfo EventSource = MakeEventSource();
+	MarkObservationSourceReady(TEXT("eventTriggerBroadcast"), EventSource);
+	RecordBoolObservation(TEXT("eventTriggerBroadcast"), true, EventSource, false);
 	ShowStatus(TEXT("Gameplay event trigger broadcast while provider request is in flight."), FColor::Orange, 7.0f);
 	CompleteCurrentStep();
 	return true;
 }
 
-bool FAINpcDataDrivenVisualScenarioTest::RunActionExecuteLatestIntent(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason)
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::RunActionExecuteLatestIntent(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason)
 {
 	FAINpcBuiltInActionAdapter Adapter;
 	FAINpcVisualSmartObjectActionExecution Execution;
@@ -561,29 +674,30 @@ bool FAINpcDataDrivenVisualScenarioTest::RunActionExecuteLatestIntent(const FAIN
 	const EAINpcActionAdapterExecuteResult ExecuteResult = Adapter.Execute(Step, *Runtime, Execution, ActionFailureReason);
 	if (ExecuteResult == EAINpcActionAdapterExecuteResult::Accepted)
 	{
-		RecordBoolObservation(TEXT("actionExecutionAccepted"), true);
+		MarkObservationSourceReady(TEXT("actionExecutionAccepted"), MakeActionSource());
+		RecordBoolObservation(TEXT("actionExecutionAccepted"), true, MakeActionSource(), false);
 		Runtime->SetSmartObjectInteractionState(true);
 		Runtime->BeginVisualActionMove(Execution.ClaimedSlotTransform, Execution.RequestedTarget);
 		ShowStatus(FString::Printf(TEXT("SmartObject action accepted: %s -> %s."), *Execution.ActionType, *Execution.RequestedTarget), FColor::Green, 8.0f);
 		CompleteCurrentStep();
 		return true;
 	}
-
 	LastActionFailureReason = ActionFailureReason;
+	RecordStringObservation(TEXT("lastActionFailure"), LastActionFailureReason, MakeActionSource());
 	if (ExecuteResult == EAINpcActionAdapterExecuteResult::Rejected && Step.Payload.bAllowActionRejection)
 	{
-		RecordBoolObservation(TEXT("actionRejectedVisible"), true);
+		MarkObservationSourceReady(TEXT("actionRejectedVisible"), MakeActionSource());
+		RecordBoolObservation(TEXT("actionRejectedVisible"), true, MakeActionSource(), false);
 		Runtime->SetSmartObjectInteractionState(false);
 		ShowStatus(FString::Printf(TEXT("SmartObject action rejected (allowed): %s"), *ActionFailureReason), FColor::Orange, 8.0f);
 		CompleteCurrentStep();
 		return true;
 	}
-
 	OutFailureReason = FString::Printf(TEXT("Scenario '%s' step[%d] required SmartObject action failed: %s"), *Config.TestId, ActiveStepIndex, *ActionFailureReason);
 	return false;
 }
 
-bool FAINpcDataDrivenVisualScenarioTest::RunObserveHold(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason)
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::RunObserveHold(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason)
 {
 	if (!IsKnownBooleanObservation(Step.Payload.Observation))
 	{
@@ -593,58 +707,59 @@ bool FAINpcDataDrivenVisualScenarioTest::RunObserveHold(const FAINpcVisualScenar
 	return true;
 }
 
-bool FAINpcDataDrivenVisualScenarioTest::IsAssertionSatisfied(const FAINpcVisualScenarioAssertion& Assertion) const
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::RecordWindowReadinessForAssertion(const FAINpcVisualScenarioAssertion& Assertion, const FAINpcVisualObservationWindow& Window)
 {
-	if (Assertion.Operator == TEXT("all"))
+	if (Assertion.Operator == TEXT("all") || Assertion.Operator == TEXT("any") || Assertion.Operator == TEXT("anyOf"))
 	{
-		for (const FAINpcVisualScenarioAssertion& Child : Assertion.Children) { if (!IsAssertionSatisfied(Child)) { return false; } }
-		return true;
-	}
-	if (Assertion.Operator == TEXT("any") || Assertion.Operator == TEXT("anyOf"))
-	{
-		for (const FAINpcVisualScenarioAssertion& Child : Assertion.Children) { if (IsAssertionSatisfied(Child)) { return true; } }
-		return false;
-	}
-	if (Assertion.Operator == TEXT("exists"))
-	{
-		return HasObservation(Assertion.Observation);
-	}
-	if (Assertion.Operator == TEXT("equals"))
-	{
-		if (Assertion.bHasEqualsBool)
+		for (const FAINpcVisualScenarioAssertion& Child : Assertion.Children)
 		{
-			bool Value = false;
-			return TryGetObservationBool(Assertion.Observation, Value) && Value == Assertion.EqualsBool;
+			RecordWindowReadinessForAssertion(Child, FAINpcVisualObservationStore::ApplyAssertionScope(Child, Window));
 		}
-		FString Value;
-		return TryGetObservationString(Assertion.Observation, Value) && Value == Assertion.EqualsString;
+		return;
 	}
-	bool Value = false;
-	return TryGetObservationBool(Assertion.Observation, Value) && Value;
+	if (!IsWindowSampledObservation(Assertion.Observation)) { return; }
+	MarkObservationSourceReadyForWindow(Assertion.Observation, MakeWindowSampledSource(Assertion.Observation), Window);
 }
 
-bool FAINpcDataDrivenVisualScenarioTest::TryGetObservationBool(const FString& Name, bool& OutValue) const
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::IsWindowSampledObservation(const FString& Name) const
 {
-	if (const bool* Value = BoolObservations.Find(Name)) { OutValue = *Value; return true; }
-	return false;
+	return Name == TEXT("waitingStateObserved") || Name == TEXT("speakingStateObserved") || Name == TEXT("actionTargetReached");
 }
 
-bool FAINpcDataDrivenVisualScenarioTest::TryGetObservationString(const FString& Name, FString& OutValue) const
+FAINpcVisualObservationSourceInfo FAINpcDataDrivenVisualScenarioTest::FImplementation::MakeWindowSampledSource(const FString& Name) const
 {
-	if (const FString* Value = StringObservations.Find(Name)) { OutValue = *Value; return true; }
-	return false;
+	if (Name == TEXT("waitingStateObserved") || Name == TEXT("speakingStateObserved"))
+	{
+		return MakeDialogueStateSource(TEXT("GetDialogueState"));
+	}
+	return MakeCharacterSource(TEXT("poll"));
 }
 
-bool FAINpcDataDrivenVisualScenarioTest::HasObservation(const FString& Name) const
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::EvaluateAssertion(const FAINpcVisualScenarioAssertion& Assertion, const FAINpcVisualObservationWindow& Window, FAINpcVisualAssertionFailureDetail* OutFailure) const
 {
-	const FAINpcVisualTestObservations Observations = BuildObservations();
-	return Observations.BooleanFields.Contains(Name)
-		|| Observations.IntegerFields.Contains(Name)
-		|| Observations.NumberFields.Contains(Name)
-		|| Observations.StringFields.Contains(Name);
+	return Observations->EvaluateAssertion(Assertion, Window, OutFailure);
 }
 
-FString FAINpcDataDrivenVisualScenarioTest::BuildPrompt(FString& OutFailureReason) const
+FAINpcVisualObservationWindow FAINpcDataDrivenVisualScenarioTest::FImplementation::GetCurrentStepWindow() const
+{
+	FAINpcVisualObservationWindow Window;
+	Window.StepIndex = ActiveStepIndex;
+	Window.StartSeconds = ActiveStepStartSeconds;
+	Window.EndSeconds = Runtime->GetTimeSeconds(ActiveStepStartSeconds);
+	return Window;
+}
+
+FAINpcVisualObservationWindow FAINpcDataDrivenVisualScenarioTest::FImplementation::GetScenarioHistoryWindow() const
+{
+	FAINpcVisualObservationWindow Window;
+	Window.StepIndex = INDEX_NONE;
+	Window.StartSeconds = 0.0;
+	Window.EndSeconds = Runtime->GetTimeSeconds(0.0);
+	Window.bScenarioHistory = true;
+	return Window;
+}
+
+FString FAINpcDataDrivenVisualScenarioTest::FImplementation::BuildPrompt(FString& OutFailureReason) const
 {
 	FString Prompt;
 	if (!AINpcDialogueVisualTestSupport::LoadRequiredConfigText(*Config.Prompt.File, TEXT("prompt template"), Prompt, OutFailureReason)) { return FString(); }
@@ -672,7 +787,7 @@ FString FAINpcDataDrivenVisualScenarioTest::BuildPrompt(FString& OutFailureReaso
 	return Prompt;
 }
 
-void FAINpcDataDrivenVisualScenarioTest::HandleTimeout()
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::HandleTimeout()
 {
 	if (!bComplete && !bFailed)
 	{
@@ -680,22 +795,31 @@ void FAINpcDataDrivenVisualScenarioTest::HandleTimeout()
 	}
 }
 
-void FAINpcDataDrivenVisualScenarioTest::UpdateDialogueStateEvidence()
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::UpdateDialogueStateEvidence()
 {
 	if (!Runtime->GetNpcComponent()) { return; }
 	const ENpcDialogueState State = Runtime->GetNpcComponent()->GetDialogueState();
 	Runtime->SetVisibleStateText(AINpcDialogueVisualTestSupport::GetDialogueStateText(Runtime->GetNpcComponent()));
-	if (State == ENpcDialogueState::WaitingForLLM) { RecordBoolObservation(TEXT("waitingStateObserved"), true); }
-	else if (State == ENpcDialogueState::Speaking) { RecordBoolObservation(TEXT("speakingStateObserved"), true); }
+	if (State == ENpcDialogueState::WaitingForLLM)
+	{
+		const FAINpcVisualObservationSourceInfo StateSource = MakeDialogueStateSource(TEXT("GetDialogueState"));
+		MarkObservationSourceReady(TEXT("waitingStateObserved"), StateSource);
+		RecordBoolObservation(TEXT("waitingStateObserved"), true, StateSource, false);
+	}
+	else if (State == ENpcDialogueState::Speaking)
+	{
+		const FAINpcVisualObservationSourceInfo StateSource = MakeDialogueStateSource(TEXT("GetDialogueState"));
+		MarkObservationSourceReady(TEXT("speakingStateObserved"), StateSource);
+		RecordBoolObservation(TEXT("speakingStateObserved"), true, StateSource, false);
+	}
 }
 
-bool FAINpcDataDrivenVisualScenarioTest::ConfigurePersona(FString& OutFailureReason)
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::ConfigurePersona(FString& OutFailureReason)
 {
 	FString DelayFillerText;
 	if (!AINpcDialogueVisualTestSupport::LoadRequiredConfigText(*Config.Persona.DelayFillerFile, TEXT("delay filler"), DelayFillerText, OutFailureReason)) { return false; }
 	AINpcDialogueVisualTestSupport::FVisualHarnessPersonaText PersonaText;
 	if (!AINpcDialogueVisualTestSupport::LoadPersonaText(*Config.Persona.File, PersonaText, OutFailureReason)) { return false; }
-
 	VisualHarnessPersona = NewObject<UNpcPersonaDataAsset>(Runtime->CreatePersonaOuter(), *FString::Printf(TEXT("%sPersona"), *Config.TestId.Replace(TEXT("."), TEXT("_"))));
 	if (!VisualHarnessPersona)
 	{
@@ -707,16 +831,16 @@ bool FAINpcDataDrivenVisualScenarioTest::ConfigurePersona(FString& OutFailureRea
 	VisualHarnessPersona->SpeakingStyle = PersonaText.SpeakingStyle;
 	VisualHarnessPersona->DelayFillerThreshold = Config.Persona.DelayFillerThreshold;
 	VisualHarnessPersona->DelayFillerTexts.Add(FText::FromString(DelayFillerText));
-
 	for (const FAINpcVisualScenarioStep& Step : Config.Steps)
 	{
 		if (Step.Type == TEXT("world.event"))
 		{
 			if (Config.Persona.DelayFillerThreshold > 0.0f) { VisualHarnessPersona->InspectDelayMaskingMontages.Add(NewObject<UAnimMontage>(VisualHarnessPersona)); }
-			const FGameplayTag RouteTag = FGameplayTag::RequestGameplayTag(FName(*Step.Payload.EventTag), false);
+			const FString EventRoute = Step.Payload.EventTag.IsEmpty() ? Step.Payload.EventId : Step.Payload.EventTag;
+				const FGameplayTag RouteTag = FGameplayTag::RequestGameplayTag(FName(*EventRoute), false);
 			if (!RouteTag.IsValid())
 			{
-				OutFailureReason = FString::Printf(TEXT("Scenario '%s' requires gameplay tag '%s'."), *Config.TestId, *Step.Payload.EventTag);
+				OutFailureReason = FString::Printf(TEXT("Scenario '%s' requires gameplay tag '%s'."), *Config.TestId, *EventRoute);
 				return false;
 			}
 			Runtime->AddEventSubscriptionTag(RouteTag);
@@ -726,7 +850,7 @@ bool FAINpcDataDrivenVisualScenarioTest::ConfigurePersona(FString& OutFailureRea
 	return true;
 }
 
-void FAINpcDataDrivenVisualScenarioTest::Fail(const FString& Reason)
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::Fail(const FString& Reason)
 {
 	if (bComplete || bFailed) { return; }
 	bFailed = true;
@@ -739,30 +863,151 @@ void FAINpcDataDrivenVisualScenarioTest::Fail(const FString& Reason)
 	}
 }
 
-void FAINpcDataDrivenVisualScenarioTest::ShowStatus(const FString& Message, const FColor& Color, const float DurationSeconds) const
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::FailWithAssertion(const FString& Prefix, const FAINpcVisualAssertionFailureDetail& Failure)
+{
+	const FString Reason = FString::Printf(TEXT("%s FailureCategory=%s TestId=%s StepIndex=%d Observation=%s SourceKind=%s SourceId=%s Detail=%s"), *Prefix, *Failure.Category, *Config.TestId, ActiveStepIndex, *Failure.ObservationName, *Failure.SourceKind, *Failure.SourceId, *Failure.Message);
+	if (bComplete || bFailed) { return; }
+	bFailed = true;
+	FailureReason = Reason;
+	FinalizeActiveStepDiagnostic(TEXT("FAIL"), Reason, Failure.Category, Failure.ObservationName, Failure.SourceKind, Failure.SourceId);
+	if (UWorld* World = Runtime->GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(StepTimerHandle);
+		World->GetTimerManager().ClearTimer(TimeoutTimerHandle);
+	}
+}
+
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::ShowStatus(const FString& Message, const FColor& Color, const float DurationSeconds) const
 {
 	UE_LOG(LogTemp, Warning, TEXT("%s"), *Message);
 	if (GEngine) { GEngine->AddOnScreenDebugMessage(-1, DurationSeconds, Color, Message); }
 }
 
-void FAINpcDataDrivenVisualScenarioTest::RecordBoolObservation(const FString& Name, const bool bValue)
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::RecordBoolObservation(const FString& Name, const bool bValue, const FAINpcVisualObservationSourceInfo& SourceInfo, const bool bRequiresAllowedFinalSource)
 {
-	BoolObservations.Add(Name, bValue);
+	FAINpcVisualObservationRecord Record;
+	Record.Name = Name;
+	Record.ValueType = EAINpcVisualObservationValueType::Boolean;
+	Record.BoolValue = bValue;
+	Record.SourceKind = SourceInfo.SourceKind;
+	Record.SourceIdentity = SourceInfo.SourceIdentity;
+	Record.SourceObjectPath = SourceInfo.SourceObjectPath;
+	Record.SourceClass = SourceInfo.SourceClass;
+	Record.SamplingMethod = SourceInfo.SamplingMethod;
+	Record.AdapterOrProviderId = SourceInfo.AdapterOrProviderId;
+	Record.StepIndex = ActiveStepIndex;
+	Record.TimestampSeconds = Runtime->GetTimeSeconds(0.0);
+	Record.ElapsedSeconds = Record.TimestampSeconds - ActiveStepStartSeconds;
+	if (RecordObservation(MoveTemp(Record), bRequiresAllowedFinalSource || FAINpcVisualObservationStore::IsFinalSuccessObservationName(Name)))
+	{
+		Observations->RecordBoolSummary(Name, bValue);
+	}
 }
 
-void FAINpcDataDrivenVisualScenarioTest::RefreshActionTargetObservation()
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::RecordIntegerObservation(const FString& Name, const int32 Value, const FAINpcVisualObservationSourceInfo& SourceInfo)
 {
-	const bool bReached = Runtime->HasReachedVisualActionTarget();
-	if (bReached) { RecordBoolObservation(TEXT("actionTargetReached"), true); }
+	FAINpcVisualObservationRecord Record;
+	Record.Name = Name;
+	Record.ValueType = EAINpcVisualObservationValueType::Integer;
+	Record.IntegerValue = Value;
+	Record.SourceKind = SourceInfo.SourceKind;
+	Record.SourceIdentity = SourceInfo.SourceIdentity;
+	Record.SourceObjectPath = SourceInfo.SourceObjectPath;
+	Record.SourceClass = SourceInfo.SourceClass;
+	Record.SamplingMethod = SourceInfo.SamplingMethod;
+	Record.AdapterOrProviderId = SourceInfo.AdapterOrProviderId;
+	Record.StepIndex = ActiveStepIndex;
+	Record.TimestampSeconds = Runtime->GetTimeSeconds(0.0);
+	Record.ElapsedSeconds = Record.TimestampSeconds - ActiveStepStartSeconds;
+	if (RecordObservation(MoveTemp(Record), false))
+	{
+		Observations->RecordIntegerSummary(Name, Value);
+	}
 }
 
-void FAINpcDataDrivenVisualScenarioTest::CompleteCurrentStep()
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::RecordNumberObservation(const FString& Name, const double Value, const FAINpcVisualObservationSourceInfo& SourceInfo)
+{
+	FAINpcVisualObservationRecord Record;
+	Record.Name = Name;
+	Record.ValueType = EAINpcVisualObservationValueType::Number;
+	Record.NumberValue = Value;
+	Record.SourceKind = SourceInfo.SourceKind;
+	Record.SourceIdentity = SourceInfo.SourceIdentity;
+	Record.SourceObjectPath = SourceInfo.SourceObjectPath;
+	Record.SourceClass = SourceInfo.SourceClass;
+	Record.SamplingMethod = SourceInfo.SamplingMethod;
+	Record.AdapterOrProviderId = SourceInfo.AdapterOrProviderId;
+	Record.StepIndex = ActiveStepIndex;
+	Record.TimestampSeconds = Runtime->GetTimeSeconds(0.0);
+	Record.ElapsedSeconds = Record.TimestampSeconds - ActiveStepStartSeconds;
+	if (RecordObservation(MoveTemp(Record), false))
+	{
+		Observations->RecordNumberSummary(Name, Value);
+	}
+}
+
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::RecordStringObservation(const FString& Name, const FString& Value, const FAINpcVisualObservationSourceInfo& SourceInfo)
+{
+	FAINpcVisualObservationRecord Record;
+	Record.Name = Name;
+	Record.ValueType = EAINpcVisualObservationValueType::String;
+	Record.StringValue = Value;
+	Record.SourceKind = SourceInfo.SourceKind;
+	Record.SourceIdentity = SourceInfo.SourceIdentity;
+	Record.SourceObjectPath = SourceInfo.SourceObjectPath;
+	Record.SourceClass = SourceInfo.SourceClass;
+	Record.SamplingMethod = SourceInfo.SamplingMethod;
+	Record.AdapterOrProviderId = SourceInfo.AdapterOrProviderId;
+	Record.StepIndex = ActiveStepIndex;
+	Record.TimestampSeconds = Runtime->GetTimeSeconds(0.0);
+	Record.ElapsedSeconds = Record.TimestampSeconds - ActiveStepStartSeconds;
+	if (RecordObservation(MoveTemp(Record), false))
+	{
+		Observations->RecordStringSummary(Name, Value);
+	}
+}
+
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::RecordObservation(FAINpcVisualObservationRecord Record, const bool bRequiresAllowedFinalSource)
+{
+	FString StoreFailureReason;
+	if (!Observations->RecordObservation(MoveTemp(Record), bRequiresAllowedFinalSource, StoreFailureReason))
+	{
+		Fail(StoreFailureReason);
+		return false;
+	}
+	return true;
+}
+
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::MarkObservationSourceReady(const FString& Name, const FAINpcVisualObservationSourceInfo& SourceInfo)
+{
+	const double Now = Runtime->GetTimeSeconds(0.0);
+	Observations->MarkSourceReady(Name, SourceInfo, ActiveStepIndex, Now);
+}
+
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::MarkObservationSourceReadyForWindow(const FString& Name, const FAINpcVisualObservationSourceInfo& SourceInfo, const FAINpcVisualObservationWindow& Window)
+{
+	if (Window.bScenarioHistory) { return; }
+	Observations->MarkSourceReadyForWindow(Name, SourceInfo, Window);
+}
+
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::RefreshActionTargetObservation()
+{
+	const auto CharacterSource = MakeCharacterSource(TEXT("poll"));
+	RecordNumberObservation(TEXT("distanceToActionTarget"), Runtime->GetVisualActionTargetDistance(), CharacterSource);
+	if (Runtime->HasReachedVisualActionTarget())
+	{
+		MarkObservationSourceReady(TEXT("actionTargetReached"), CharacterSource);
+		RecordBoolObservation(TEXT("actionTargetReached"), true, CharacterSource, true);
+	}
+}
+
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::CompleteCurrentStep()
 {
 	FinalizeActiveStepDiagnostic(TEXT("PASS"), FString());
 	StartNextStep();
 }
 
-void FAINpcDataDrivenVisualScenarioTest::FinalizeActiveStepDiagnostic(const FString& Status, const FString& Reason)
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::FinalizeActiveStepDiagnostic(const FString& Status, const FString& Reason, const FString& FailureCategory, const FString& ObservationName, const FString& SourceKind, const FString& SourceId)
 {
 	if (!StepDiagnostics.IsValidIndex(StepDiagnostics.Num() - 1)) { return; }
 	FAINpcVisualTestStepDiagnostic& Diagnostic = StepDiagnostics.Last();
@@ -770,5 +1015,69 @@ void FAINpcDataDrivenVisualScenarioTest::FinalizeActiveStepDiagnostic(const FStr
 	const double Now = Runtime->GetTimeSeconds(ActiveStepStartSeconds);
 	Diagnostic.Status = Status;
 	Diagnostic.FailureReason = Reason;
+	Diagnostic.FailureCategory = FailureCategory;
+	Diagnostic.ObservationName = ObservationName;
+	Diagnostic.SourceKind = SourceKind;
+	Diagnostic.SourceId = SourceId;
 	Diagnostic.DurationMs = FMath::Max(0.0, Now - ActiveStepStartSeconds) * 1000.0;
+}
+
+FAINpcVisualObservationSourceInfo FAINpcDataDrivenVisualScenarioTest::FImplementation::MakeDialogueSource(const TCHAR* CallbackName) const
+{
+	FAINpcVisualObservationSourceInfo Source;
+	Source.SourceKind = TEXT("callback");
+	Source.SourceIdentity = CallbackName;
+	Source.SourceObjectPath = Runtime->GetNpcComponent() ? Runtime->GetNpcComponent()->GetPathName() : FString();
+	Source.SourceClass = Runtime->GetNpcComponent() ? Runtime->GetNpcComponent()->GetClass()->GetName() : FString();
+	Source.SamplingMethod = TEXT("delegate");
+	Source.AdapterOrProviderId = TEXT("provider.primary.dialogue");
+	return Source;
+}
+
+FAINpcVisualObservationSourceInfo FAINpcDataDrivenVisualScenarioTest::FImplementation::MakeDialogueStateSource(const TCHAR* SamplingName) const
+{
+	FAINpcVisualObservationSourceInfo Source;
+	Source.SourceKind = TEXT("component");
+	Source.SourceIdentity = SamplingName;
+	Source.SourceObjectPath = Runtime->GetNpcComponent() ? Runtime->GetNpcComponent()->GetPathName() : FString();
+	Source.SourceClass = Runtime->GetNpcComponent() ? Runtime->GetNpcComponent()->GetClass()->GetName() : FString();
+	Source.SamplingMethod = TEXT("state-read");
+	Source.AdapterOrProviderId = TEXT("builtin.dialogueObservation");
+	return Source;
+}
+
+FAINpcVisualObservationSourceInfo FAINpcDataDrivenVisualScenarioTest::FImplementation::MakeEventSource() const
+{
+	FAINpcVisualObservationSourceInfo Source;
+	Source.SourceKind = TEXT("subsystem");
+	Source.SourceIdentity = TEXT("UNpcEventSubsystem");
+	Source.SourceObjectPath = Runtime->GetWorld() && Runtime->GetWorld()->GetGameInstance() && Runtime->GetWorld()->GetGameInstance()->GetSubsystem<UNpcEventSubsystem>() ? Runtime->GetWorld()->GetGameInstance()->GetSubsystem<UNpcEventSubsystem>()->GetPathName() : FString();
+	Source.SourceClass = TEXT("UNpcEventSubsystem");
+	Source.SamplingMethod = TEXT("broadcast");
+	Source.AdapterOrProviderId = BuiltInNpcEventAdapterId;
+	return Source;
+}
+
+FAINpcVisualObservationSourceInfo FAINpcDataDrivenVisualScenarioTest::FImplementation::MakeActionSource() const
+{
+	FAINpcVisualObservationSourceInfo Source;
+	Source.SourceKind = TEXT("observation-provider");
+	Source.SourceIdentity = TEXT("builtin.smartObjectAction");
+	Source.SourceObjectPath = Runtime->GetNpcActor() ? Runtime->GetNpcActor()->GetPathName() : FString();
+	Source.SourceClass = Runtime->GetNpcActor() ? Runtime->GetNpcActor()->GetClass()->GetName() : FString();
+	Source.SamplingMethod = TEXT("action-execution");
+	Source.AdapterOrProviderId = BuiltInSmartObjectActionAdapterId;
+	return Source;
+}
+
+FAINpcVisualObservationSourceInfo FAINpcDataDrivenVisualScenarioTest::FImplementation::MakeCharacterSource(const TCHAR* SamplingName) const
+{
+	FAINpcVisualObservationSourceInfo Source;
+	Source.SourceKind = TEXT("actor");
+	Source.SourceIdentity = SamplingName;
+	Source.SourceObjectPath = Runtime->GetNpcActor() ? Runtime->GetNpcActor()->GetPathName() : FString();
+	Source.SourceClass = Runtime->GetNpcActor() ? Runtime->GetNpcActor()->GetClass()->GetName() : FString();
+	Source.SamplingMethod = TEXT("driver-poll");
+	Source.AdapterOrProviderId = TEXT("builtin.characterDriver");
+	return Source;
 }

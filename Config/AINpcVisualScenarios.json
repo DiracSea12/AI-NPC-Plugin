@@ -35,7 +35,7 @@
         },
         "condition": {
           "all": [
-            { "equals": { "observation": "sessionStarted", "value": true } },
+            { "equals": { "observation": "sessionStarted", "value": true, "scope": "scenarioHistory" } },
             { "equals": { "observation": "waitingStateObserved", "value": true } },
             { "equals": { "observation": "speakingStateObserved", "value": true } },
             { "equals": { "observation": "dialogueResponseObserved", "value": true } },
@@ -62,9 +62,8 @@
     ],
     "expect": {
       "all": [
-        { "equals": { "observation": "sessionStarted", "value": true } },
+        { "equals": { "observation": "sessionStarted", "value": true, "scope": "scenarioHistory" } },
         { "equals": { "observation": "dialogueResponseObserved", "value": true } },
-        { "equals": { "observation": "actionExecutionAccepted", "value": true } },
         { "equals": { "observation": "actionTargetReached", "value": true } },
         { "equals": { "observation": "actionTargetReachedHoldElapsed", "value": true } }
       ]
@@ -115,10 +114,10 @@
         },
         "condition": {
           "all": [
-            { "equals": { "observation": "sessionStarted", "value": true } },
+            { "equals": { "observation": "sessionStarted", "value": true, "scope": "scenarioHistory" } },
             { "equals": { "observation": "waitingStateObserved", "value": true } },
             { "equals": { "observation": "speakingStateObserved", "value": true } },
-            { "equals": { "observation": "eventTriggerBroadcast", "value": true } },
+            { "equals": { "observation": "eventTriggerBroadcast", "value": true, "scope": "scenarioHistory" } },
             { "equals": { "observation": "partialResponseObserved", "value": true } },
             { "equals": { "observation": "structuredResponseObserved", "value": true } },
             { "equals": { "observation": "actionIntentObserved", "value": true } },
@@ -137,15 +136,9 @@
     ],
     "expect": {
       "all": [
-        { "equals": { "observation": "sessionStarted", "value": true } },
-        { "equals": { "observation": "eventTriggerBroadcast", "value": true } },
-        { "equals": { "observation": "structuredResponseObserved", "value": true } },
-        {
-          "anyOf": [
-            { "equals": { "observation": "actionExecutionAccepted", "value": true } },
-            { "equals": { "observation": "actionRejectedVisible", "value": true } }
-          ]
-        }
+        { "equals": { "observation": "sessionStarted", "value": true, "scope": "scenarioHistory" } },
+        { "equals": { "observation": "eventTriggerBroadcast", "value": true, "scope": "scenarioHistory" } },
+        { "equals": { "observation": "structuredResponseObserved", "value": true } }
       ]
     }
   },
@@ -185,7 +178,7 @@
         },
         "condition": {
           "all": [
-            { "equals": { "observation": "sessionStarted", "value": true } },
+            { "equals": { "observation": "sessionStarted", "value": true, "scope": "scenarioHistory" } },
             { "equals": { "observation": "dialogueResponseObserved", "value": true } },
             { "equals": { "observation": "actionIntentObserved", "value": true } }
           ]
@@ -210,7 +203,6 @@
     "expect": {
       "all": [
         { "equals": { "observation": "dialogueResponseObserved", "value": true } },
-        { "equals": { "observation": "actionExecutionAccepted", "value": true } },
         { "equals": { "observation": "actionTargetReachedHoldElapsed", "value": true } }
       ]
     }

@@ -36,11 +36,16 @@ bool FAINpcDialogueLifecycleHandler::StartDialogue(UAINpcComponent& Component, c
 
 	Component.EnsureNpcControllerAndStateTreeBinding();
 
-	Component.EnsureProvider();
-	if (!Component.Provider.IsValid())
+#if !UE_BUILD_SHIPPING
+	if (!GBypassDialogueRequestDispatchForTests)
+#endif
 	{
-		BroadcastError(Component, TEXT("Dialogue provider is unavailable."));
-		return false;
+		Component.EnsureProvider();
+		if (!Component.Provider.IsValid())
+		{
+			BroadcastError(Component, TEXT("Dialogue provider is unavailable."));
+			return false;
+		}
 	}
 
 	const bool bStartNewSession = !Component.bIsDialogueSessionActive;

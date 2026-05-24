@@ -1,4 +1,5 @@
 #include "Test/AINpcTestGameMode.h"
+#include "AINpcVisualObservationStore.h"
 
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -196,42 +197,100 @@ namespace
 		return JsonValues;
 	}
 
-	TArray<TSharedPtr<FJsonValue>> BuildStepDiagnosticsJson(const TArray<FAINpcVisualTestStepDiagnostic>& Diagnostics)
+	FString LexVisualObservationValueType(const EAINpcVisualObservationValueType ValueType)
 	{
-		TArray<TSharedPtr<FJsonValue>> Values;
-		for (const FAINpcVisualTestStepDiagnostic& Diagnostic : Diagnostics)
+		switch (ValueType)
 		{
-			TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
-			Json->SetNumberField(TEXT("stepIndex"), Diagnostic.StepIndex);
-			Json->SetStringField(TEXT("stepType"), Diagnostic.StepType);
-			Json->SetStringField(TEXT("status"), Diagnostic.Status);
-			Json->SetNumberField(TEXT("durationMs"), Diagnostic.DurationMs);
-			Json->SetStringField(TEXT("failureReason"), RedactSensitiveText(Diagnostic.FailureReason));
-			Values.Add(MakeShared<FJsonValueObject>(Json));
+		case EAINpcVisualObservationValueType::Boolean:
+			return TEXT("Boolean");
+		case EAINpcVisualObservationValueType::Integer:
+			return TEXT("Integer");
+		case EAINpcVisualObservationValueType::Number:
+			return TEXT("Number");
+		case EAINpcVisualObservationValueType::String:
+			return TEXT("String");
+		default:
+			return TEXT("Unknown");
 		}
-		return Values;
 	}
 
-	TSharedPtr<FJsonObject> BuildObservationJson(const FAINpcVisualTestObservations& Observations)
+	TArray<TSharedPtr<FJsonValue>> BuildStepDiagnosticsJson(const TArray<FAINpcVisualTestStepDiagnostic>& Diagnostics)
+		{
+			TArray<TSharedPtr<FJsonValue>> Values;
+			for (const FAINpcVisualTestStepDiagnostic& Diagnostic : Diagnostics)
+			{
+				TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
+				Json->SetStringField(TEXT("testId"), Diagnostic.TestId);
+				Json->SetNumberField(TEXT("stepIndex"), Diagnostic.StepIndex);
+				Json->SetStringField(TEXT("stepType"), Diagnostic.StepType);
+				Json->SetStringField(TEXT("status"), Diagnostic.Status);
+				Json->SetNumberField(TEXT("durationMs"), Diagnostic.DurationMs);
+				Json->SetStringField(TEXT("failureReason"), RedactSensitiveText(Diagnostic.FailureReason));
+				Json->SetStringField(TEXT("failureCategory"), Diagnostic.FailureCategory);
+				Json->SetStringField(TEXT("observationName"), Diagnostic.ObservationName);
+				Json->SetStringField(TEXT("sourceKind"), Diagnostic.SourceKind);
+				Json->SetStringField(TEXT("sourceId"), Diagnostic.SourceId);
+				Values.Add(MakeShared<FJsonValueObject>(Json));
+			}
+			return Values;
+		}
+
+		TSharedPtr<FJsonObject> BuildObservationJson(const FAINpcVisualTestObservations& Observations)
+		{
+			TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
+			for (const TPair<FString, bool>& Field : Observations.BooleanFields)
+			{
+				Json->SetBoolField(Field.Key, Field.Value);
+			}
+			for (const TPair<FString, int32>& Field : Observations.IntegerFields)
+			{
+				Json->SetNumberField(Field.Key, Field.Value);
+			}
+			for (const TPair<FString, double>& Field : Observations.NumberFields)
+			{
+				Json->SetNumberField(Field.Key, Field.Value);
+			}
+			for (const TPair<FString, FString>& Field : Observations.StringFields)
+			{
+				Json->SetStringField(Field.Key, RedactSensitiveText(Field.Value));
+			}
+			TArray<TSharedPtr<FJsonValue>> Records;
+			for (const FAINpcVisualObservationRecord& Record : Observations.Records)
+			{
+				TSharedPtr<FJsonObject> RecordJson = MakeShared<FJsonObject>();
+				RecordJson->SetStringField(TEXT("name"), Record.Name);
+				RecordJson->SetStringField(TEXT("valueType"), LexVisualObservationValueType(Record.ValueType));
+				if (Record.ValueType == EAINpcVisualObservationValueType::Boolean) { RecordJson->SetBoolField(TEXT("valueBool"), Record.BoolValue); }
+				else if (Record.ValueType == EAINpcVisualObservationValueType::Integer) { RecordJson->SetNumberField(TEXT("valueInteger"), Record.IntegerValue); }
+				else if (Record.ValueType == EAINpcVisualObservationValueType::Number) { RecordJson->SetNumberField(TEXT("valueNumber"), Record.NumberValue); }
+				else if (Record.ValueType == EAINpcVisualObservationValueType::String) { RecordJson->SetStringField(TEXT("valueString"), RedactSensitiveText(Record.StringValue)); }
+				RecordJson->SetStringField(TEXT("sourceKind"), Record.SourceKind);
+				RecordJson->SetStringField(TEXT("sourceIdentity"), Record.SourceIdentity);
+				RecordJson->SetStringField(TEXT("sourceObjectPath"), Record.SourceObjectPath);
+				RecordJson->SetStringField(TEXT("sourceClass"), Record.SourceClass);
+				RecordJson->SetStringField(TEXT("samplingMethod"), Record.SamplingMethod);
+				RecordJson->SetStringField(TEXT("adapterOrProviderId"), Record.AdapterOrProviderId);
+				RecordJson->SetNumberField(TEXT("stepIndex"), Record.StepIndex);
+				RecordJson->SetNumberField(TEXT("timestampSeconds"), Record.TimestampSeconds);
+				RecordJson->SetNumberField(TEXT("elapsedSeconds"), Record.ElapsedSeconds);
+				Records.Add(MakeShared<FJsonValueObject>(RecordJson));
+			}
+			Json->SetArrayField(TEXT("records"), Records);
+			return Json;
+		}
+
+	bool IsVisibleActionOutcomeObservation(const FAINpcVisualObservationRecord& Record)
 	{
-		TSharedPtr<FJsonObject> Json = MakeShared<FJsonObject>();
-		for (const TPair<FString, bool>& Field : Observations.BooleanFields)
+		return FAINpcVisualObservationStore::IsVisibleActionOutcomeSourceAllowed(Record);
+	}
+
+	bool DoesVisibleActionOutcomeEvidencePass(const FAINpcVisualTestObservations& Observations)
+	{
+		for (const FAINpcVisualObservationRecord& Record : Observations.Records)
 		{
-			Json->SetBoolField(Field.Key, Field.Value);
+			if (IsVisibleActionOutcomeObservation(Record)) { return true; }
 		}
-		for (const TPair<FString, int32>& Field : Observations.IntegerFields)
-		{
-			Json->SetNumberField(Field.Key, Field.Value);
-		}
-		for (const TPair<FString, double>& Field : Observations.NumberFields)
-		{
-			Json->SetNumberField(Field.Key, Field.Value);
-		}
-		for (const TPair<FString, FString>& Field : Observations.StringFields)
-		{
-			Json->SetStringField(Field.Key, RedactSensitiveText(Field.Value));
-		}
-		return Json;
+		return false;
 	}
 
 	float GetVisibleHoldSeconds(const float DefaultDelaySeconds)
@@ -762,11 +821,9 @@ void AAINpcTestGameMode::WriteVisualResult(const FString& Status, const FString&
 	TSharedPtr<FJsonObject> RuntimeObservationSummary = MakeShared<FJsonObject>();
 	const bool bSessionStartedObserved = Observations.BooleanFields.Contains(TEXT("sessionStarted")) && Observations.BooleanFields[TEXT("sessionStarted")];
 	const bool bResponseObserved = Observations.BooleanFields.Contains(TEXT("dialogueResponseObserved")) && Observations.BooleanFields[TEXT("dialogueResponseObserved")];
-	const bool bActionAccepted = Observations.BooleanFields.Contains(TEXT("actionExecutionAccepted")) && Observations.BooleanFields[TEXT("actionExecutionAccepted")];
-	const bool bActionRejectedVisible = Observations.BooleanFields.Contains(TEXT("actionRejectedVisible")) && Observations.BooleanFields[TEXT("actionRejectedVisible")];
 	RuntimeObservationSummary->SetBoolField(TEXT("sessionStartedObserved"), bSessionStartedObserved);
 	RuntimeObservationSummary->SetBoolField(TEXT("responseObserved"), bResponseObserved);
-	RuntimeObservationSummary->SetBoolField(TEXT("actionOutcomeObserved"), bActionAccepted || bActionRejectedVisible);
+	RuntimeObservationSummary->SetBoolField(TEXT("actionOutcomeObserved"), DoesVisibleActionOutcomeEvidencePass(Observations));
 	RuntimeObservationSummary->SetNumberField(TEXT("booleanObservationCount"), Observations.BooleanFields.Num());
 	RuntimeObservationSummary->SetNumberField(TEXT("numericObservationCount"), Observations.IntegerFields.Num() + Observations.NumberFields.Num());
 	RuntimeObservationSummary->SetStringField(TEXT("statusSummary"), Status);
@@ -806,7 +863,7 @@ void AAINpcTestGameMode::WriteVisualResult(const FString& Status, const FString&
 	VisibleBehaviorEvidence->SetStringField(TEXT("npcLocation"), SpawnedNpc ? SpawnedNpc->GetActorLocation().ToString() : FString());
 	VisibleBehaviorEvidence->SetStringField(TEXT("smartObjectLocation"), SpawnedSmartObject ? SpawnedSmartObject->GetActorLocation().ToString() : FString());
 	VisibleBehaviorEvidence->SetBoolField(TEXT("dialogueVisible"), bResponseObserved);
-	VisibleBehaviorEvidence->SetBoolField(TEXT("actionOutcomeVisible"), bActionAccepted || bActionRejectedVisible);
+	VisibleBehaviorEvidence->SetBoolField(TEXT("actionOutcomeVisible"), DoesVisibleActionOutcomeEvidencePass(Observations));
 	Root->SetObjectField(TEXT("visibleBehaviorEvidence"), VisibleBehaviorEvidence);
 
 	TArray<TSharedPtr<FJsonValue>> Failures;

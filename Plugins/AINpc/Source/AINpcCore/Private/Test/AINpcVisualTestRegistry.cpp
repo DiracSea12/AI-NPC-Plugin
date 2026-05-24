@@ -1,6 +1,9 @@
 #include "Test/AINpcVisualTestRegistry.h"
 
 #include "Dom/JsonObject.h"
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+#endif
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
@@ -37,6 +40,16 @@ namespace
 			TEXT("distanceToActionTarget"), TEXT("lastActionFailure")
 		};
 		return KnownNames.Contains(Name);
+	}
+
+	bool SupportsNotExistsWindowAbsenceProof(const FString& Name)
+	{
+		static const TSet<FString> WindowSampledNames = {
+			TEXT("waitingStateObserved"),
+			TEXT("speakingStateObserved"),
+			TEXT("actionTargetReached")
+		};
+		return WindowSampledNames.Contains(Name);
 	}
 
 	TArray<FString> FindRegistryPromptPlaceholders(const FString& Text)
@@ -119,6 +132,27 @@ namespace
 		return true;
 	}
 
+	bool ParseAssertionScope(const FJsonObject& JsonObject, const FString& TestId, const FString& Context, FAINpcVisualScenarioAssertion& OutAssertion, FString& OutError)
+	{
+		FString Scope;
+		if (!JsonObject.TryGetStringField(TEXT("scope"), Scope))
+		{
+			return true;
+		}
+		if (Scope == TEXT("currentStep"))
+		{
+			OutAssertion.Scope = EAINpcVisualObservationScope::CurrentStep;
+			return true;
+		}
+		if (Scope == TEXT("scenarioHistory"))
+		{
+			OutAssertion.Scope = EAINpcVisualObservationScope::ScenarioHistory;
+			return true;
+		}
+		OutError = FString::Printf(TEXT("scenario '%s' %s scope must be currentStep or scenarioHistory"), *ScenarioName(TestId), *Context);
+		return false;
+	}
+
 	bool ParseAssertion(const TSharedPtr<FJsonObject>& Object, const FString& TestId, const FString& Context, FAINpcVisualScenarioAssertion& OutAssertion, FString& OutError)
 	{
 		if (!Object.IsValid())
@@ -127,7 +161,7 @@ namespace
 			return false;
 		}
 
-		static const TSet<FString> AssertionFields = { TEXT("all"), TEXT("any"), TEXT("anyOf"), TEXT("exists"), TEXT("equals") };
+		static const TSet<FString> AssertionFields = { TEXT("all"), TEXT("any"), TEXT("anyOf"), TEXT("exists"), TEXT("equals"), TEXT("notExists") };
 		if (!RejectUnknownFields(*Object, TestId, AssertionFields, Context, OutError)) { return false; }
 		int32 OperatorCount = 0;
 		for (const FString& AssertionField : AssertionFields)
@@ -182,12 +216,37 @@ namespace
 			return true;
 		}
 
+
+		FString NotExistsObservation;
+		if (Object->TryGetStringField(TEXT("notExists"), NotExistsObservation))
+		{
+			if (NotExistsObservation.IsEmpty())
+			{
+				OutError = FString::Printf(TEXT("scenario '%s' %s notExists assertion has empty observation"), *ScenarioName(TestId), *Context);
+				return false;
+			}
+			if (!IsKnownVisualObservationName(NotExistsObservation))
+			{
+				OutError = FString::Printf(TEXT("scenario '%s' %s notExists assertion references unknown observation '%s'"), *ScenarioName(TestId), *Context, *NotExistsObservation);
+				return false;
+			}
+			if (!SupportsNotExistsWindowAbsenceProof(NotExistsObservation))
+			{
+				OutError = FString::Printf(TEXT("scenario '%s' %s notExists assertion cannot prove full-window absence for observation '%s'"), *ScenarioName(TestId), *Context, *NotExistsObservation);
+				return false;
+			}
+			OutAssertion.Operator = TEXT("notExists");
+			OutAssertion.Observation = MoveTemp(NotExistsObservation);
+			return true;
+		}
+
 		const TSharedPtr<FJsonObject>* EqualsObject = nullptr;
 		if (Object->TryGetObjectField(TEXT("equals"), EqualsObject) && EqualsObject && EqualsObject->IsValid())
 		{
-			static const TSet<FString> EqualsFields = { TEXT("observation"), TEXT("value") };
+			static const TSet<FString> EqualsFields = { TEXT("observation"), TEXT("value"), TEXT("scope") };
 			if (!RejectUnknownFields(**EqualsObject, TestId, EqualsFields, Context + TEXT(".equals"), OutError)) { return false; }
 			if (!RequireStringField(**EqualsObject, TestId, TEXT("observation"), OutAssertion.Observation, OutError)) { return false; }
+				if (!ParseAssertionScope(**EqualsObject, TestId, Context + TEXT(".equals"), OutAssertion, OutError)) { return false; }
 			if (!IsKnownVisualObservationName(OutAssertion.Observation))
 			{
 				OutError = FString::Printf(TEXT("scenario '%s' %s equals assertion references unknown observation '%s'"), *ScenarioName(TestId), *Context, *OutAssertion.Observation);
@@ -205,7 +264,11 @@ namespace
 				OutAssertion.bHasEqualsBool = true;
 				OutAssertion.EqualsBool = Value->AsBool();
 			}
-			else if (!Value->TryGetString(OutAssertion.EqualsString))
+			else if (Value->Type == EJson::String)
+			{
+				OutAssertion.EqualsString = Value->AsString();
+			}
+			else
 			{
 				OutError = FString::Printf(TEXT("scenario '%s' %s equals value must be boolean or string"), *ScenarioName(TestId), *Context);
 				return false;
@@ -213,8 +276,31 @@ namespace
 			return true;
 		}
 
-		OutError = FString::Printf(TEXT("scenario '%s' %s assertion must use all, any, anyOf, exists, or equals"), *ScenarioName(TestId), *Context);
+		OutError = FString::Printf(TEXT("scenario '%s' %s assertion must use all, any, anyOf, exists, notExists, or equals"), *ScenarioName(TestId), *Context);
 		return false;
+	}
+
+
+	bool IsActionAdapterAttemptFact(const FString& ObservationName)
+	{
+		return ObservationName == TEXT("actionExecutionAccepted") || ObservationName == TEXT("actionRejectedVisible");
+	}
+
+	bool ValidateFinalExpectDoesNotUseActionAdapterFacts(const FAINpcVisualScenarioAssertion& Assertion, const FString& TestId, FString& OutError)
+	{
+		if (IsActionAdapterAttemptFact(Assertion.Observation))
+		{
+			OutError = FString::Printf(TEXT("scenario '%s' final expect must not use action adapter facts '%s'; actionExecutionAccepted/actionRejectedVisible are step diagnostics, not final player-visible observations"), *ScenarioName(TestId), *Assertion.Observation);
+			return false;
+		}
+		for (int32 ChildIndex = 0; ChildIndex < Assertion.Children.Num(); ++ChildIndex)
+		{
+			if (!ValidateFinalExpectDoesNotUseActionAdapterFacts(Assertion.Children[ChildIndex], TestId, OutError))
+			{
+				return false;
+			}
+		}
+		return true;
 	}
 
 	bool ValidatePromptVariables(const FAINpcVisualScenarioConfig& Config, FString& OutError)
@@ -385,6 +471,7 @@ namespace
 		const TSharedPtr<FJsonObject>* ExpectObject = nullptr;
 		if (!JsonObject.TryGetObjectField(TEXT("expect"), ExpectObject) || !ExpectObject || !ExpectObject->IsValid()) { OutError = FString::Printf(TEXT("scenario '%s' field 'expect' must be an object"), *OutConfig.TestId); return false; }
 		if (!ParseAssertion(*ExpectObject, OutConfig.TestId, TEXT("expect"), OutConfig.Expect.Assertion, OutError)) { return false; }
+		if (!ValidateFinalExpectDoesNotUseActionAdapterFacts(OutConfig.Expect.Assertion, OutConfig.TestId, OutError)) { return false; }
 		return true;
 	}
 
@@ -454,3 +541,91 @@ FString FAINpcVisualTestRegistry::GetRegisteredTestIds()
 	for (const FAINpcVisualTestDescriptor& Descriptor : GetDescriptors()) { TestIds.Add(Descriptor.TestId); }
 	return FString::Join(TestIds, TEXT(", "));
 }
+
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAINpcVisualScenarioParserBoundaryTest,
+	"AINpc.Visual.Observation.ScenarioParserBoundary",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcVisualScenarioParserBoundaryTest::RunTest(const FString& Parameters)
+{
+	const FString BaseScenario = TEXT(R"JSON({
+		"schemaVersion": 2,
+		"testId": "phase28c.parser-boundary",
+		"map": "/Game/Maps/AINpcTestMap",
+		"timeoutSec": 1,
+		"storyIds": ["TEST"],
+		"phaseIds": ["phase2.8c"],
+		"fixture": { "adapterId": "builtin.characterFixture", "kind": "character" },
+		"persona": { "file": "AINpcVisualHarnessPhase27Persona.txt", "delayFillerFile": "AINpcVisualHarnessDelayFiller.txt", "delayFillerThreshold": 0.0 },
+		"prompt": { "file": "AINpcVisualHarnessPhase27Prompt.txt", "variables": { "SmartObjectTargetId": "runtime.smartObjectTargetId" } },
+		"steps": [
+			{ "type": "wait.until", "payload": { "timeoutSec": 1 }, "condition": { "equals": { "observation": "waitingStateObserved", "value": false } } }
+		],
+		"expect": { "equals": { "observation": "waitingStateObserved", "value": false } }
+	})JSON");
+
+	TSharedPtr<FJsonObject> JsonObject;
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(BaseScenario);
+	TestTrue(TEXT("Boundary scenario JSON parses as an object."), FJsonSerializer::Deserialize(Reader, JsonObject) && JsonObject.IsValid());
+	FAINpcVisualScenarioConfig ParsedConfig;
+	FString ParseError;
+	TestTrue(TEXT("Parser accepts JSON boolean false."), JsonObject.IsValid() && ParseScenarioConfig(*JsonObject, ParsedConfig, ParseError));
+	TestEqual(TEXT("Parser stores final expect as equals."), ParsedConfig.Expect.Assertion.Operator, FString(TEXT("equals")));
+	TestTrue(TEXT("Parser marks final expect value as boolean."), ParsedConfig.Expect.Assertion.bHasEqualsBool);
+	TestFalse(TEXT("Parser preserves JSON boolean false."), ParsedConfig.Expect.Assertion.EqualsBool);
+
+		const FString ScopedScenario = BaseScenario.Replace(
+			TEXT("\"observation\": \"waitingStateObserved\", \"value\": false"),
+			TEXT("\"observation\": \"waitingStateObserved\", \"value\": false, \"scope\": \"scenarioHistory\""));
+		TSharedPtr<FJsonObject> ScopedJsonObject;
+		const TSharedRef<TJsonReader<>> ScopedReader = TJsonReaderFactory<>::Create(ScopedScenario);
+		TestTrue(TEXT("Scoped boundary scenario JSON parses as an object."), FJsonSerializer::Deserialize(ScopedReader, ScopedJsonObject) && ScopedJsonObject.IsValid());
+		FAINpcVisualScenarioConfig ScopedConfig;
+		ParseError.Reset();
+		TestTrue(TEXT("Parser accepts explicit scenarioHistory equals scope."), ScopedJsonObject.IsValid() && ParseScenarioConfig(*ScopedJsonObject, ScopedConfig, ParseError));
+		TestEqual(TEXT("Parser stores explicit scenarioHistory scope."), static_cast<int32>(ScopedConfig.Expect.Assertion.Scope), static_cast<int32>(EAINpcVisualObservationScope::ScenarioHistory));
+
+	const FString InvalidNotExistsScenario = BaseScenario.Replace(
+		TEXT("{ \"equals\": { \"observation\": \"waitingStateObserved\", \"value\": false } }"),
+		TEXT("{ \"notExists\": \"dialogueResponseObserved\" }"));
+	TSharedPtr<FJsonObject> InvalidJsonObject;
+	const TSharedRef<TJsonReader<>> InvalidReader = TJsonReaderFactory<>::Create(InvalidNotExistsScenario);
+	TestTrue(TEXT("Invalid notExists boundary scenario JSON parses as an object."), FJsonSerializer::Deserialize(InvalidReader, InvalidJsonObject) && InvalidJsonObject.IsValid());
+	FAINpcVisualScenarioConfig InvalidConfig;
+	ParseError.Reset();
+	TestFalse(TEXT("Parser rejects notExists for callback observations without full-window absence coverage."), InvalidJsonObject.IsValid() && ParseScenarioConfig(*InvalidJsonObject, InvalidConfig, ParseError));
+	TestTrue(TEXT("Unsupported notExists failure names full-window absence proof."), ParseError.Contains(TEXT("full-window absence")));
+
+	const auto ExpectParseFailure = [this, &BaseScenario](const FString& Replacement, const TCHAR* CaseName, const TCHAR* ExpectedErrorFragment)
+	{
+		const FString ScenarioText = BaseScenario.Replace(
+			TEXT("{ \"equals\": { \"observation\": \"waitingStateObserved\", \"value\": false } }"),
+			*Replacement);
+		TSharedPtr<FJsonObject> CaseJsonObject;
+		const TSharedRef<TJsonReader<>> CaseReader = TJsonReaderFactory<>::Create(ScenarioText);
+		FString CaseContext(CaseName);
+		TestTrue(CaseContext + TEXT(" JSON parses as an object."), FJsonSerializer::Deserialize(CaseReader, CaseJsonObject) && CaseJsonObject.IsValid());
+		FAINpcVisualScenarioConfig CaseConfig;
+		FString CaseError;
+		TestFalse(CaseContext + TEXT(" is rejected."), CaseJsonObject.IsValid() && ParseScenarioConfig(*CaseJsonObject, CaseConfig, CaseError));
+		TestTrue(CaseContext + TEXT(" reports expected diagnostic fragment."), CaseError.Contains(ExpectedErrorFragment));
+	};
+
+	ExpectParseFailure(TEXT("{ \"notEquals\": { \"observation\": \"waitingStateObserved\", \"value\": false } }"), TEXT("notEquals operator"), TEXT("unknown field 'notEquals'"));
+	ExpectParseFailure(TEXT("{ \"greaterThan\": { \"observation\": \"responseLength\", \"value\": 1 } }"), TEXT("greaterThan operator"), TEXT("unknown field 'greaterThan'"));
+	ExpectParseFailure(TEXT("{ \"lessThan\": { \"observation\": \"responseLength\", \"value\": 1 } }"), TEXT("lessThan operator"), TEXT("unknown field 'lessThan'"));
+	ExpectParseFailure(TEXT("{ \"equals\": { \"observation\": \"responseLength\", \"value\": 1 } }"), TEXT("numeric equals value"), TEXT("equals value must be boolean or string"));
+	ExpectParseFailure(TEXT("{ \"equals\": { \"value\": false } }"), TEXT("equals missing observation"), TEXT("field 'observation' is missing or empty"));
+	ExpectParseFailure(TEXT("{ \"equals\": { \"observation\": \"waitingStateObserved\" } }"), TEXT("equals missing value"), TEXT("equals assertion missing value"));
+	ExpectParseFailure(TEXT("{ \"equals\": { \"observation\": \"unknownObservation\", \"value\": false } }"), TEXT("equals unknown observation"), TEXT("references unknown observation"));
+	ExpectParseFailure(TEXT("{ \"all\": [] }"), TEXT("empty all group"), TEXT("must contain child assertions"));
+	ExpectParseFailure(TEXT("{ \"any\": [] }"), TEXT("empty any group"), TEXT("must contain child assertions"));
+	ExpectParseFailure(TEXT("{ \"anyOf\": [] }"), TEXT("empty anyOf group"), TEXT("must contain child assertions"));
+	ExpectParseFailure(TEXT("{ \"all\": [{ \"exists\": \"unknownObservation\" }] }"), TEXT("nested unknown observation"), TEXT("references unknown observation"));
+	return true;
+}
+
+#endif
