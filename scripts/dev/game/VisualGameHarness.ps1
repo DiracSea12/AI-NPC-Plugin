@@ -112,12 +112,20 @@ function Assert-AINpcVisibleLaunchContract {
 }
 
 function Assert-AINpcSingleVisibleInstance {
-    param([switch]$AllowExistingUEProcess)
+    param(
+        [switch]$AllowExistingUEProcess,
+        [Parameter(Mandatory = $true)][string]$EditorPath,
+        [Parameter(Mandatory = $true)][string]$ProjectPath
+    )
 
-    $existingUE = @(Get-Process -Name "UnrealEditor" -ErrorAction SilentlyContinue)
+    $expectedProjectPath = [System.IO.Path]::GetFullPath($ProjectPath)
+    $existingUE = @(Get-CimInstance Win32_Process -Filter "Name = 'UnrealEditor.exe'" | Where-Object {
+        $commandLine = [string]$_.CommandLine
+        $commandLine.IndexOf($expectedProjectPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+    })
     if ($existingUE.Count -gt 0 -and -not $AllowExistingUEProcess) {
-        $processSummary = ($existingUE | ForEach-Object { "PID=$($_.Id) Path=$($_.Path)" }) -join "; "
-        throw "Pre-run UE process check failed. Existing UnrealEditor process(es) detected: $processSummary. Close them or pass -AllowExistingUEProcess deliberately."
+        $processSummary = ($existingUE | ForEach-Object { "PID=$($_.ProcessId) Path=$($_.ExecutablePath)" }) -join "; "
+        throw "Pre-run UE process check failed. Existing AINpc UnrealEditor process(es) detected: $processSummary. Close them or pass -AllowExistingUEProcess deliberately."
     }
 }
 
@@ -251,7 +259,7 @@ function Invoke-AINpcVisualGameSuite {
             return 0
         }
         if (-not (Test-Path $editor)) { throw "UnrealEditor.exe not found at $editor" }
-        Assert-AINpcSingleVisibleInstance -AllowExistingUEProcess:$AllowExistingUEProcess
+        Assert-AINpcSingleVisibleInstance -AllowExistingUEProcess:$AllowExistingUEProcess -EditorPath $editor -ProjectPath $uproject
 
         $buildProcess = Start-Process -FilePath "pwsh" -ArgumentList @("-NoProfile", "-File", (Join-Path (Split-Path -Parent $PSScriptRoot) "build-editor.ps1")) -Wait -PassThru
         if ($buildProcess.ExitCode -ne 0) { throw "build-editor.ps1 failed with exit code $($buildProcess.ExitCode)" }
@@ -335,7 +343,7 @@ function Invoke-AINpcVisualGameTest {
         else {
             if (-not (Test-Path $editor)) { throw "UnrealEditor.exe not found at $editor" }
 
-            Assert-AINpcSingleVisibleInstance -AllowExistingUEProcess:$AllowExistingUEProcess
+            Assert-AINpcSingleVisibleInstance -AllowExistingUEProcess:$AllowExistingUEProcess -EditorPath $editor -ProjectPath $uproject
 
             $buildProcess = Start-Process -FilePath "pwsh" -ArgumentList @("-NoProfile", "-File", (Join-Path (Split-Path -Parent $PSScriptRoot) "build-editor.ps1")) -Wait -PassThru
             if ($buildProcess.ExitCode -ne 0) { throw "build-editor.ps1 failed with exit code $($buildProcess.ExitCode)" }

@@ -49,8 +49,8 @@
 
 ### 2.8d - Phase 2.8 集成验收
 
-- [ ] 2.18 增加 Phase 2.8 internal adapter lifecycle 负向验证：bad adapter id、duplicate internal adapter id、unsupported capability、malformed adapter payload、旧 fixture/event/action serialized fields、stale fixture/context/observation、连续运行两个 scenarios 串味、world teardown 后 per-run refs 失效都必须失败或被隔离；旧字段失败不得通过双读、fallback 或静默迁移绕过。
-- [ ] 2.19 通过重跑 Phase 2.7 scenario suite、2.8a/2.8b/2.8c static/automation 负向验证、VerifierHostEditor UBT build，以及 visible `UnrealEditor.exe -game` + `Config/AINpcLocalProvider.json` 真实 provider + runtime observations 验证 Phase 2.8；没有真实 provider/runtime observation 时只能报告 blocked/failed，不能报告 final behavior acceptance。
+- [x] 2.18 增加 Phase 2.8 internal adapter lifecycle 负向验证：bad adapter id、duplicate internal adapter id、unsupported capability、malformed adapter payload、旧 fixture/event/action serialized fields、stale fixture/context/observation、连续运行两个 scenarios 串味、world teardown 后 per-run refs 失效都必须失败或被隔离；旧字段失败不得通过双读、fallback 或静默迁移绕过。
+- [x] 2.19 通过重跑 Phase 2.7 scenario suite、2.8a/2.8b/2.8c static/automation 负向验证、VerifierHostEditor UBT build，以及 visible `UnrealEditor.exe -game` + `Config/AINpcLocalProvider.json` 真实 provider + runtime observations 验证 Phase 2.8；没有真实 provider/runtime observation 时只能报告 blocked/failed，不能报告 final behavior acceptance。
 
 ## 2.9 - 项目即插即用扩展接口
 

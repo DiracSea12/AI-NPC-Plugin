@@ -394,6 +394,27 @@ if ($visualTestHeaderText -notmatch 'AdapterId' -or $visualTestHeaderText -notma
 if ($visualTestHeaderText -notmatch 'struct\s+FAINpcVisualObservationRecord' -or $visualTestHeaderText -notmatch 'SourceKind' -or $visualTestHeaderText -notmatch 'AdapterOrProviderId' -or $visualTestHeaderText -notmatch 'StepIndex' -or $visualTestHeaderText -notmatch 'TimestampSeconds') {
     Add-Failure "C++ visual test contract must expose typed/sourced observation record metadata for Phase 2.8c."
 }
+$observationContractTestText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Tests/AINpcVisualObservationContractTests.cpp") -Raw
+foreach ($requiredPhase28dEvidence in @(
+    "AINpc.Visual.Observation.Phase28dInternalAdapterLifecycle",
+    "AINpc.Visual.Observation.Phase28dConsecutiveScenarioIsolation",
+    "duplicate internal adapter id",
+    "unsupported capability",
+    "Consecutive scenario observation isolation"
+)) {
+    if ($observationContractTestText -notmatch [regex]::Escape($requiredPhase28dEvidence)) { Add-Failure "Phase 2.8d lifecycle negative evidence missing '$requiredPhase28dEvidence'." }
+}
+foreach ($requiredPhase28dParserEvidence in @(
+    "bad fixture adapter id",
+    "bad event adapter id",
+    "bad action adapter id",
+    "malformed event adapter payload",
+    "legacy fixture type",
+    "legacy top-level event field",
+    "legacy top-level action field"
+)) {
+    if ($registryText -notmatch [regex]::Escape($requiredPhase28dParserEvidence)) { Add-Failure "Phase 2.8d parser negative evidence missing '$requiredPhase28dParserEvidence'." }
+}
 $publicApiScanFiles = Get-ChildItem -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Public") -Recurse -Include "*.h", "*.cpp" -File
 foreach ($file in $publicApiScanFiles) {
     $text = Get-Content -Path $file.FullName -Raw
@@ -478,6 +499,10 @@ if ($testGameText -match "Get-AINpcLatestResultPath") {
 }
 if ($testGameText -notmatch "Invoke-AINpcVisualGameSuite") {
     Add-Failure "test-game.ps1 must launch the visual-game manifest through one suite harness invocation."
+}
+$visualHarnessText = Get-Content -Path (Join-Path $repoRoot "scripts/dev/game/VisualGameHarness.ps1") -Raw
+if ($visualHarnessText -notmatch 'Get-CimInstance Win32_Process' -or $visualHarnessText -notmatch 'ProjectPath' -or $visualHarnessText -match 'ExecutablePath\) \{' -or $visualHarnessText -match 'Get-Process\s+-Name\s+"UnrealEditor"') {
+    Add-Failure "Visual game pre-run process check must only block matching project instances, not unrelated UnrealEditor processes."
 }
 if ($testGameText -match 'Start-Process\s+-FilePath\s+"pwsh"[\s\S]*VisualGameHarness\.ps1') {
     Add-Failure "test-game.ps1 must not launch VisualGameHarness.ps1 once per scenario."
