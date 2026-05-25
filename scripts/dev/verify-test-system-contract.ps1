@@ -379,6 +379,8 @@ foreach ($entry in $scenarios) {
 
 $registryText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcVisualTestRegistry.cpp") -Raw
 $visualTestHeaderText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Public/Test/AINpcVisualTest.h") -Raw
+$runnerText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcDataDrivenVisualScenarioTest.cpp") -Raw
+$observationContractText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Tests/AINpcVisualObservationContractTests.cpp") -Raw
 if ($registryText -notmatch 'builtin\.npcEvent' -or $registryText -notmatch 'builtin\.smartObjectAction' -or $registryText -notmatch 'eventId' -or $registryText -notmatch 'actorRef') {
     Add-Failure "C++ visual scenario schema descriptor must validate Phase 2.8b event/action adapter payload ids and required fields."
 }
@@ -393,6 +395,19 @@ if ($visualTestHeaderText -notmatch 'AdapterId' -or $visualTestHeaderText -notma
 }
 if ($visualTestHeaderText -notmatch 'struct\s+FAINpcVisualObservationRecord' -or $visualTestHeaderText -notmatch 'SourceKind' -or $visualTestHeaderText -notmatch 'AdapterOrProviderId' -or $visualTestHeaderText -notmatch 'StepIndex' -or $visualTestHeaderText -notmatch 'TimestampSeconds') {
     Add-Failure "C++ visual test contract must expose typed/sourced observation record metadata for Phase 2.8c."
+}
+if ($registryText -notmatch 'AINpc\.Visual\.Phase28d\.InternalAdapterLifecycleBoundary' -or $registryText -notmatch 'builtin\.characterFixture' -or $registryText -notmatch 'builtin\.npcEvent' -or $registryText -notmatch 'builtin\.smartObjectAction' -or $registryText -notmatch 'eventTriggerId' -or $registryText -notmatch 'legacy fixture kind' -or $registryText -notmatch 'legacy top-level action field' -or $registryText -notmatch 'payload\.payload must be an empty object' -or $registryText -notmatch 'allowActionRejection must be boolean') {
+    Add-Failure "Phase 2.8d must have automation coverage for internal adapter ids, malformed adapter payloads, and rejected legacy fixture/event/action fields."
+}
+$gameModeText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcTestGameMode.cpp") -Raw
+if ($gameModeText -notmatch 'CleanupActiveScenario' -or $gameModeText -notmatch 'ActiveTest\.Reset\(\)' -or $gameModeText -notmatch 'SpawnedSmartObject->Destroy\(\)' -or $gameModeText -notmatch 'SpawnedNpc->Destroy\(\)' -or $gameModeText -notmatch 'BridgeContext->ReleaseSlotForUser' -or $gameModeText -notmatch 'VisualRunId\s*=\s*FString::Printf\(TEXT\("%s-%s"\)') {
+    Add-Failure "Phase 2.8d visual suite lifecycle must isolate consecutive scenarios and release per-run fixture/action refs."
+}
+if ($runnerText -notmatch 'FAINpcVisualScenarioRuntimeView' -or $runnerText -notmatch 'TUniquePtr<FAINpcVisualObservationStore>\s+Observations' -or $runnerText -notmatch 'DialogueObservationProvider->Stop\(\)' -or $runnerText -notmatch 'ClearTimer\(StepTimerHandle\)' -or $runnerText -notmatch 'ClearTimer\(TimeoutTimerHandle\)') {
+    Add-Failure "Phase 2.8d runner lifecycle must keep per-run runtime/observation state and stop/clear refs on scenario end or world teardown."
+}
+if ($observationContractText -notmatch 'AINpc\.Visual\.Observation\.IsolationAndTypeFailure' -or $observationContractText -notmatch 'fresh per-run observation store starts without previous scenario records' -or $observationContractText -notmatch 'previous run store still proves the isolation test would catch shared state') {
+    Add-Failure "Phase 2.8d observation contract tests must prove per-run observation stores do not reuse stale scenario records."
 }
 $publicApiScanFiles = Get-ChildItem -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Public") -Recurse -Include "*.h", "*.cpp" -File
 foreach ($file in $publicApiScanFiles) {
@@ -412,7 +427,6 @@ foreach ($file in $buildFiles) {
     $text = Get-Content -Path $file.FullName -Raw
     if ($text -match 'PublicDependencyModuleNames[\s\S]*Project[A-Za-z0-9_]*Adapter') { Add-Failure "Phase 2.8a must not add runtime module public dependency for project adapter API in $(Get-RelativePath $file.FullName)." }
 }
-$runnerText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcDataDrivenVisualScenarioTest.cpp") -Raw
 foreach ($id in @("us1.dialogue-action", "us2.perception-behavior", "phase27.prompt-only-dialogue-action")) {
     if ($runnerText -match [regex]::Escape($id)) { Add-Failure "Scenario runner contains test-id-specific branch/text '$id'." }
 }

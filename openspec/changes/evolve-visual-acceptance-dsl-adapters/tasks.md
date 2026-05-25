@@ -32,12 +32,12 @@
 
 ### 2.8b - Internal dialogue/event/action adapters
 
-- [ ] 2.7 将 dialogue delegate binding 和 dialogue observation collection 抽成 internal dialogue observation provider，产出当前 scenarios 实际使用的 typed/sourced `dialogue.*` observations；不要预先实现未被 scenario 或负向验证使用的 observation namespace。
-- [ ] 2.8 将 NPC event subsystem emission 抽成 internal event adapter，使 `world.event` 通过 built-in event adapter id、event tag/id 和声明过的 payload fields 执行；runner 不再硬编码 gift-event 或 scenario-specific event construction。
-- [ ] 2.9 将 SmartObject action intent execution 抽成 internal action adapter，使 `action.executeLatestIntent` 通过 built-in action adapter id、actor ref 和当前支持的 rejection policy 执行；runner 不再拥有 SmartObject execution details。
-- [ ] 2.10 更新 C++ schema descriptor、scenario config 和 static contract，使 `world.event` / `action.executeLatestIntent` 明确声明 adapter id 与当前支持 capability；`world.event` 只允许 `adapterId: "builtin.npcEvent"`、`eventTag` 或 `eventId` 二选一、可选 `targetRef`、可选 `payload`；`action.executeLatestIntent` 只允许 `adapterId: "builtin.smartObjectAction"`、`actorRef`、`allowActionRejection`；迁移后旧 event/action serialized fields 必须 validation fail，不允许双读、fallback 或静默迁移；bad adapter id、unsupported capability 和 malformed adapter payload 必须在 runtime execution 前 fail。
-- [ ] 2.11 删除针对具体 test id（例如 `us2.perception-behavior`）的脚本侧和 runtime 侧特殊分支；这些差异必须通过 DSL steps、adapter id、payload 和 expectations 表达。
-- [ ] 2.12 验证 2.8b：重跑现有 Phase 2.7 scenarios 和新增 internal adapter routing tests，证明 runner 没有新增 test-id-specific branch，PowerShell 没有 NPC 业务判断。
+- [x] 2.7 将 dialogue delegate binding 和 dialogue observation collection 抽成 internal dialogue observation provider，产出当前 scenarios 实际使用的 typed/sourced `dialogue.*` observations；不要预先实现未被 scenario 或负向验证使用的 observation namespace。
+- [x] 2.8 将 NPC event subsystem emission 抽成 internal event adapter，使 `world.event` 通过 built-in event adapter id、event tag/id 和声明过的 payload fields 执行；runner 不再硬编码 gift-event 或 scenario-specific event construction。
+- [x] 2.9 将 SmartObject action intent execution 抽成 internal action adapter，使 `action.executeLatestIntent` 通过 built-in action adapter id、actor ref 和当前支持的 rejection policy 执行；runner 不再拥有 SmartObject execution details。
+- [x] 2.10 更新 C++ schema descriptor、scenario config 和 static contract，使 `world.event` / `action.executeLatestIntent` 明确声明 adapter id 与当前支持 capability；`world.event` 只允许 `adapterId: "builtin.npcEvent"`、`eventTag` 或 `eventId` 二选一、可选 `targetRef`、可选 `payload`；`action.executeLatestIntent` 只允许 `adapterId: "builtin.smartObjectAction"`、`actorRef`、`allowActionRejection`；迁移后旧 event/action serialized fields 必须 validation fail，不允许双读、fallback 或静默迁移；bad adapter id、unsupported capability 和 malformed adapter payload 必须在 runtime execution 前 fail。
+- [x] 2.11 删除针对具体 test id（例如 `us2.perception-behavior`）的脚本侧和 runtime 侧特殊分支；这些差异必须通过 DSL steps、adapter id、payload 和 expectations 表达。
+- [x] 2.12 验证 2.8b：重跑现有 Phase 2.7 scenarios 和新增 internal adapter routing tests，证明 runner 没有新增 test-id-specific branch，PowerShell 没有 NPC 业务判断。
 
 ### 2.8c - Typed observations 和有限 assertion 语义
 
@@ -49,21 +49,50 @@
 
 ### 2.8d - Phase 2.8 集成验收
 
-- [ ] 2.18 增加 Phase 2.8 internal adapter lifecycle 负向验证：bad adapter id、duplicate internal adapter id、unsupported capability、malformed adapter payload、旧 fixture/event/action serialized fields、stale fixture/context/observation、连续运行两个 scenarios 串味、world teardown 后 per-run refs 失效都必须失败或被隔离；旧字段失败不得通过双读、fallback 或静默迁移绕过。
-- [ ] 2.19 通过重跑 Phase 2.7 scenario suite、2.8a/2.8b/2.8c static/automation 负向验证、VerifierHostEditor UBT build，以及 visible `UnrealEditor.exe -game` + `Config/AINpcLocalProvider.json` 真实 provider + runtime observations 验证 Phase 2.8；没有真实 provider/runtime observation 时只能报告 blocked/failed，不能报告 final behavior acceptance。
+- [x] 2.18 增加 Phase 2.8 internal adapter lifecycle 负向验证：bad adapter id、duplicate internal adapter id、unsupported capability、malformed adapter payload、旧 fixture/event/action serialized fields、stale fixture/context/observation、连续运行两个 scenarios 串味、world teardown 后 per-run refs 失效都必须失败或被隔离；旧字段失败不得通过双读、fallback 或静默迁移绕过。
+- [x] 2.19 通过重跑 Phase 2.7 scenario suite、2.8a/2.8b/2.8c static/automation 负向验证、VerifierHostEditor UBT build，以及 visible `UnrealEditor.exe -game` + `Config/AINpcLocalProvider.json` 真实 provider + runtime observations 验证 Phase 2.8；没有真实 provider/runtime observation 时只能报告 blocked/failed，不能报告 final behavior acceptance。
 
-## 2.9 - 项目即插即用扩展接口
+## 2.9 - 最小 project visual adapter extension API
 
-- [ ] 3.1 在插件 test/visual API surface 下新增最小 public extension interfaces；优先公开当期 scenario 实际使用并验证的 fixture resolver、observation provider 和必要 event/action seam，不得一次性公开没有示例和验证的 adapter category。
-- [ ] 3.2 增加 visual extension registry，记录 adapter category、unique adapter id、owner module、registration phase、supported capabilities 和最小 observation declarations；没有当期 example scenario 使用和验证的 category 不得公开。
-- [ ] 3.3 定义 adapter registration/unregistration lifecycle，覆盖 module startup/shutdown、game world lifetime、duplicate ids、missing ids 和 stale adapter cleanup。
-- [ ] 3.4 增加 Phase 2.9 最小 validation，确保 scenario adapter ids 存在、adapter capabilities 匹配请求的 step/action/event/fixture/observation 用法、adapter ids 不重复、observation declarations 足以校验公开 API 使用；缺少 project adapter 时 validate-only 或 startup 必须带 adapter category 和 test id 失败。
-- [ ] 3.5 增加 existing-actor fixture support，支持 project maps 通过 actor tag、class plus tag 或 object reference 使用真实 actor，且不要求项目 NPC class 继承 built-in test character。
-- [ ] 3.6 只有当 Phase 2.9 non-core example scenario 实际需要项目 `ACharacter` subclass 时，才公开 character driver path；否则 character driver 保持 internal/experimental，不进入 public API。
-- [ ] 3.7 增加一个最小 project-style example adapter scenario，例如 door、inventory、quest、combat 或 custom interaction 行为；最终成功必须从真实 runtime state 观察，不能来自 adapter return value。
-- [ ] 3.8 为 public extension interfaces 增加最小中文使用说明，解释外部项目如何注册 adapter、声明 observations、运行 scenario，以及哪些行为仍必须由项目自己提供 observation provider。
-- [ ] 3.9 增加 Phase 2.9 负向验证：missing project adapter、duplicate public adapter id、stale adapter after module/world teardown、unsupported adapter capability、project adapter fake success 都必须失败。
-- [ ] 3.10 通过 static contract checks、UBT build，以及一个使用 registered non-core adapter 且不修改 scenario runner 的 visible `UnrealEditor.exe -game` + `Config/AINpcLocalProvider.json` 真实 provider scenario，验证 Phase 2.9。
+- [ ] 3.0 前置门禁：只有 2.18 和 2.19 完成并留下 static/automation、VerifierHostEditor UBT build、visible `UnrealEditor.exe -game` + `Config/AINpcLocalProvider.json` 真实 provider/runtime observation 验证证据后，才允许开始 2.9 实现；如果 2.8d 只是代码已做但未勾选，必须先补齐任务状态和具体 artifact/log/result 路径。
+  - 已核验证据集（2026-05-24；artifact 目录名沿用 `phase-2-8c-20260524`）：
+    - Static/contract transcript：`.artifacts/gates/phase-2-8c-20260524/test-static.log`；static result：`Saved/TestLogs/static/static-20260524-042437-b191d32b/result.json`。
+    - Editor automation transcript：`.artifacts/gates/phase-2-8c-20260524/test-editor-context.log`；editor result：`Saved/TestLogs/editor-automation/editor-automation-20260524-042438-6734076f/result.json`。
+    - UBT build transcript：`.artifacts/gates/phase-2-8c-20260524/ubt-build.log`。
+    - Visible game transcript：`.artifacts/gates/phase-2-8c-20260524/test-game.log`；visible suite result：`Saved/TestLogs/visual-game/visual-game-20260524-042521-660c67f8/result.json`；visible suite log：`Saved/TestLogs/visual-game/visual-game-20260524-042521-660c67f8-harness/visual-game-suite.log`。
+    - Provider/runtime observation evidence：`Saved/TestLogs/visual-game/visual-game-20260524-042521-660c67f8-us1.dialogue-action/runtime-result.json`、`Saved/TestLogs/visual-game/visual-game-20260524-042521-660c67f8-us2.perception-behavior/runtime-result.json`、`Saved/TestLogs/visual-game/visual-game-20260524-042521-660c67f8-phase27.prompt-only-dialogue-action/runtime-result.json`，均包含 provider identity、provider runtime evidence、runtime observation summary 和 visible behavior evidence。
+  - 2.9 派工单必须再次列出并核对上述 2.8d 证据路径；任一缺失或不可读取则本阶段 BLOCKED，不得派 2.9A1 开发。
+- [ ] 3.0a 派工规则：Phase 2.9 不作为单一子代理任务一次性交付；必须按 2.9A1、2.9A2、2.9B、2.9C、2.9D 串行派工，每个子单派工前都要带独立 Complexity Contract、明确 stop triggers，并先核对上一子单的验证证据路径。
+
+### 2.9A1 - Public API 和 descriptor registry skeleton
+
+- [ ] 3.1 在 `Plugins/AINpc/Source/AINpcCore/Public/Test/AINpcVisualTestExtension.h` 新增最小 public extension API；该 header 只允许依赖 Core/CoreUObject 可前置声明类型、`FName`、`FString`、`TArray`、`TSharedRef/TSharedPtr`、`TWeakObjectPtr` 和现有 public visual test value structs，不得 include test actor、GameMode、SmartObject、private support header 或 project-domain header；派工前必须列出复用的现有 public value structs，发现它们泄漏 private/test-only 假设时改为本 header 内最小 public value type，不反向 include private support。
+- [ ] 3.2 定义 public API 精确形状：`EAINpcVisualAdapterCategory` 仅包含 `FixtureResolver`、`ObservationProvider`、`ActionAdapter`；`FAINpcVisualAdapterDescriptor` 至少包含 `Category`、`AdapterId`、`OwnerModuleName`、`Capabilities`、`ObservationDeclarations` 和 category-specific factory delegate；registration API 固定为显式 `RegisterVisualTestAdapter(Descriptor)` / `UnregisterVisualTestAdapter(Category, AdapterId, OwnerModuleName)`，并返回可检查 success/diagnostic，不允许另起等价 API 名称或隐式注册入口，不使用 Blueprint、不暴露 UObject-owning interface、不新增 public character driver。
+- [ ] 3.3 定义 factory/context/result contract：factory 只在 game thread、scenario start 后调用；输入为只读 `FAINpcVisualAdapterCreateContext`，包含 `UWorld*`、test id、run id、只读 scenario metadata 和 append-only failure recorder/diagnostic sink；diagnostic sink 只能记录诊断，不得 finalize result、写 observation、拥有 fixture refs 或暴露 mutable observation store/result writer；factory 返回 per-run adapter instance 或 diagnostic failure。per-run instance 只能持有当前 world/run 的 weak refs，不能持有 module-level mutable state；如果实现需要继续扩大 create context 字段，必须停止并重新审 2.9A1 派工合同。
+- [ ] 3.4 定义 exact adapter category、id 和 capability contract：adapter id 为稳定 `FName`/string，必须非空、全 registry 唯一；same-category 和 different-category same id 都禁止，避免 diagnostics 歧义；Phase 2.9 最小 capability 集合固定为 `existingActor.classTag`、`projectAction.doorInteract`、`observation.project.door.isOpen`，这些 capability 只作为 door example descriptor data / validation fixture input，不得硬编码成 core built-in domain 常量；不得引入 inventory/quest/combat/perception、通用 capability expression 或 capability matcher。
+- [ ] 3.5 增加 visual extension descriptor registry，registry owner 位于 AINpcCore test/visual boundary，module-level registry 只保存 descriptor/factory 和 owner module metadata，不得保存 runtime adapter instance、actor refs、observation store 或 per-run mutable state；现有 scenario descriptor registry 继续只负责 scenario config/descriptor discovery，extension registry 只负责 adapter descriptors，runner 只能通过 per-run registry view 使用 extension adapters，不能让 scenario registry 和 extension registry 都解析同一事实。
+
+### 2.9A2 - Adapter lifecycle 和 stale owner hardening
+
+- [ ] 3.6 定义 adapter registration/unregistration lifecycle：project module startup 注册 descriptor/factory，module shutdown unregister；scenario start 在 world 可用后从 module-level descriptors 创建 per-run registry view 和 adapter instances；scenario end/world teardown 释放该 view、instances、fixture refs 和 observations。active scenario 期间 unregister 后，后续 lookup/action/observation 必须检查 owner availability，并失败且报告诊断，不得继续使用 stale factory/instance；owner availability 只能作为 internal registry bookkeeping，不得新增 public token 类型、订阅机制或插件级热卸载 state machine；诊断必须带 owner module、category、adapter id、test id 和 stage。
+
+### 2.9B - 最小 fixture/action/observation schema delta
+
+- [ ] 3.7 定义 Phase 2.9 fixture schema delta：fixture 支持 `adapterId: "project.door.fixture"`、`kind: "existingActor"`、`actorClass` 和 `actorTag`；`actorClass` 只接受 native class path 格式 `/Script/<Module>.<ClassName>`，不接受 Blueprint generated class path、short name、soft object path 或 object reference；class lookup 使用 exact class match，不允许 subclass match；`actorTag` 使用 `AActor::ActorHasTag`，必须非空；runtime startup 必须要求 exactly one loaded non-pending-kill actor match。exact native class + actor tag 是 Phase 2.9 刻意的最小 resolver 范围，不得泛化成通用 actor resolver；actor tag only、component tag、GameplayTag、object reference、soft object path、跨 map reference 和多策略 resolver 不进入 2.9。
+- [ ] 3.8 定义 Phase 2.9 action schema delta：新增固定 step type `project.action.execute`，不扩展现有 `action.executeLatestIntent`；本阶段 payload 固定为 `adapterId: "project.door.action"`、`actionName: "Interact"`、`targetRef` 指向 class+tag fixture resolved actor，不使用 latest LLM intent、SmartObject rejection policy 或其它 action schema。action adapter 的 success/accepted 结果只能记录 attempt diagnostic，不能写 final success observation。
+- [ ] 3.9 定义 Phase 2.9 最小 observation declaration contract：project observation provider descriptor 必须声明 `project.door.isOpen`，字段包括 observation name、boolean value type、source kind `observation-provider`、sampling method `state-read`、provider id/capability 和 source object/class metadata requirement；validation 不得 hardcode `project.door.isOpen` 到 built-in known-observation set，也不得关闭 unknown observation validation。static parse 只验证引用形状，declaration-aware validation 在 extension descriptors loaded 后执行，未声明 observation 必须在 runtime startup 前失败；`observation.project.door.isOpen` capability 不能替代 `project.door.isOpen` runtime observation name。
+- [ ] 3.10 增加 Phase 2.9 最小 validation，并明确 stage：`SchemaParse` 只验本阶段新增 fixture/action/observation payload 的字段形状和列出的 forbidden fields；`ExtensionDeclaration` 在 project modules/descriptors loaded 后验 adapter id、category、capability 和本阶段最小 observation declarations；`RuntimeStartup` 在 world 可用后验 class+tag actor exactly-one、factory 创建和 owner availability；`StepExecution` 验 action adapter 调用和 diagnostics；`FinalAssertion` 只接受 observation provider 从真实 actor/world state 读取的 `project.door.isOpen == true`。所有失败必须带 category、adapter id、test id、actor class/tag、observation name 和 stage 中可用字段；完整 nested unknown-field、namespace/operator hardening 和完整 declaration validation 留到 2.95。
+
+### 2.9C - Door 示例闭环
+
+- [ ] 3.11 Phase 2.9 不公开 character driver path；如果 door example 需要 character driver，必须停止并重新审 2.9 计划，不允许在本阶段通过条件分支顺手把 character driver 从 internal/experimental 升为 public API。
+- [ ] 3.12 增加一个固定的最小 project-style door adapter scenario：scenario 使用 class+tag fixture 解析一个真实 door actor，通过 registered `project.door.action` non-core action adapter 执行 `Interact`，通过 registered observation provider 从该 actor/world state 读取 `project.door.isOpen == true` 作为最终成功；door 示例 actor、adapter 和 scenario 只能放在 visual test/example/harness boundary，不得进入 runtime product surface，`project.door.*` 只代表示例 adapter id/capability/observation，不得成为 core built-in domain；scenario runner 不得出现 test-id、door 或 project-domain branch，PowerShell 不得判断门是否打开。
+- [ ] 3.13 为 public extension interfaces 增加最小中文使用说明，解释本阶段三个公开 category、registration API、descriptor/factory lifetime、class+tag fixture schema、`project.action.execute`/chosen action schema、`project.door.isOpen` observation declaration、运行 door/custom interaction scenario 的方式，以及哪些行为仍必须由项目自己提供 observation provider；说明不得承诺 inventory、quest、combat、object reference fixture、完整 observation declaration validation 或 public character driver 已受支持。
+
+### 2.9D - 负向矩阵和证据收口
+
+- [ ] 3.14 增加 Phase 2.9 负向验证：missing project adapter、duplicate same-category public adapter id、different-category duplicate id、unsupported adapter capability、malformed public adapter payload、actor class/tag 无匹配或多匹配、invalid/unloaded class、stale adapter/fixture/observation after module shutdown、scenario end 或 world teardown、project action adapter return success 但 `project.door.isOpen` 真实 runtime observation 缺失、undeclared project observation、以及未公开 category 被 scenario 引用，都必须失败并报告 category、adapter id、test id、actor class/tag、observation name 和 validation/runtime stage。
+- [ ] 3.15 拆分 Phase 2.9 验证证据：static contract checks 证明 public extension header include/dependency guard、allowed category/capability set、class+tag fixture lookup、minimal observation declaration、no public character driver/Blueprint adapter/default extra dependency；UBT build 通过；core runner/runtime source scan 证明核心执行路径没有 door/custom interaction test-id 或 domain-specific branch，但 scenario/example/test harness 内允许出现 door/custom interaction 标识；negative validation matrix 覆盖 3.14；visible `UnrealEditor.exe -game` + `Config/AINpcLocalProvider.json` 真实 provider scenario 证明 registered non-core adapter 可在不修改 runner 的情况下产出真实 `project.door.isOpen` runtime observation 并满足 final acceptance；每类证据都必须记录具体 artifact/log/result 路径。
 
 ## 2.95 - DSL 收口、诊断和未来覆盖护栏
 

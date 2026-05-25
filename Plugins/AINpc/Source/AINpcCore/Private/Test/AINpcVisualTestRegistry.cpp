@@ -628,4 +628,80 @@ bool FAINpcVisualScenarioParserBoundaryTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAINpcVisualPhase28dInternalAdapterLifecycleBoundaryTest,
+	"AINpc.Visual.Phase28d.InternalAdapterLifecycleBoundary",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcVisualPhase28dInternalAdapterLifecycleBoundaryTest::RunTest(const FString& Parameters)
+{
+	const TArray<FString> InternalAdapterIds = {
+		TEXT("builtin.characterFixture"),
+		TEXT("builtin.npcEvent"),
+		TEXT("builtin.smartObjectAction")
+	};
+	TSet<FString> UniqueAdapterIds;
+	for (const FString& AdapterId : InternalAdapterIds)
+	{
+		TestFalse(FString::Printf(TEXT("Internal adapter id '%s' must be unique."), *AdapterId), UniqueAdapterIds.Contains(AdapterId));
+		UniqueAdapterIds.Add(AdapterId);
+	}
+	TestEqual(TEXT("Internal adapter id set has no duplicate ids."), UniqueAdapterIds.Num(), InternalAdapterIds.Num());
+
+	const FString BaseScenario = TEXT(R"JSON({
+		"schemaVersion": 2,
+		"testId": "phase28d.lifecycle-boundary",
+		"map": "/Game/Maps/AINpcTestMap",
+		"timeoutSec": 1,
+		"storyIds": ["TEST"],
+		"phaseIds": ["phase2.8d"],
+		"fixture": { "adapterId": "builtin.characterFixture", "kind": "characterWithSmartObject" },
+		"persona": { "file": "AINpcVisualHarnessPhase27Persona.txt", "delayFillerFile": "AINpcVisualHarnessDelayFiller.txt", "delayFillerThreshold": 0.0 },
+		"prompt": { "file": "AINpcVisualHarnessPhase27Prompt.txt", "variables": { "SmartObjectTargetId": "runtime.smartObjectTargetId" } },
+		"steps": [
+			{ "type": "world.event", "payload": { "adapterId": "builtin.npcEvent", "eventTag": "AINpc.Test.Gift", "targetRef": "fixture.npc", "payload": {} } },
+			{ "type": "action.executeLatestIntent", "payload": { "adapterId": "builtin.smartObjectAction", "actorRef": "fixture.npc", "allowActionRejection": true } }
+		],
+		"expect": { "exists": "dialogueResponseObserved" }
+	})JSON");
+
+	const auto ParseScenarioText = [](const FString& ScenarioText, FAINpcVisualScenarioConfig& OutConfig, FString& OutError)
+	{
+		TSharedPtr<FJsonObject> JsonObject;
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ScenarioText);
+		if (!FJsonSerializer::Deserialize(Reader, JsonObject) || !JsonObject.IsValid())
+		{
+			OutError = TEXT("scenario text did not parse as a JSON object");
+			return false;
+		}
+		return ParseScenarioConfig(*JsonObject, OutConfig, OutError);
+	};
+
+	FAINpcVisualScenarioConfig ValidConfig;
+	FString ParseError;
+	TestTrue(TEXT("Lifecycle boundary base scenario parses before negative mutations."), ParseScenarioText(BaseScenario, ValidConfig, ParseError));
+
+	const auto ExpectScenarioFailure = [this, &BaseScenario, &ParseScenarioText](const FString& Search, const FString& Replacement, const TCHAR* CaseName, const TCHAR* ExpectedErrorFragment)
+	{
+		const FString ScenarioText = BaseScenario.Replace(*Search, *Replacement);
+		FAINpcVisualScenarioConfig CaseConfig;
+		FString CaseError;
+		TestFalse(FString(CaseName) + TEXT(" is rejected."), ParseScenarioText(ScenarioText, CaseConfig, CaseError));
+		TestTrue(FString(CaseName) + TEXT(" reports expected diagnostic fragment."), CaseError.Contains(ExpectedErrorFragment));
+	};
+
+	ExpectScenarioFailure(TEXT("\"fixture\": { \"adapterId\": \"builtin.characterFixture\", \"kind\": \"characterWithSmartObject\" }"), TEXT("\"fixture\": { \"adapterId\": \"builtin.unknownFixture\", \"kind\": \"characterWithSmartObject\" }"), TEXT("bad fixture adapter id"), TEXT("fixture.adapterId"));
+	ExpectScenarioFailure(TEXT("\"fixture\": { \"adapterId\": \"builtin.characterFixture\", \"kind\": \"characterWithSmartObject\" }"), TEXT("\"fixture\": { \"adapterId\": \"builtin.characterFixture\", \"kind\": \"npcWithSmartObject\" }"), TEXT("legacy fixture kind"), TEXT("fixture.kind"));
+	ExpectScenarioFailure(TEXT("\"fixture\": { \"adapterId\": \"builtin.characterFixture\", \"kind\": \"characterWithSmartObject\" }"), TEXT("\"fixture\": { \"type\": \"npcWithSmartObject\", \"adapterId\": \"builtin.characterFixture\", \"kind\": \"characterWithSmartObject\" }"), TEXT("legacy fixture type"), TEXT("fixture.type"));
+	ExpectScenarioFailure(TEXT("\"expect\": { \"exists\": \"dialogueResponseObserved\" }"), TEXT("\"allowActionRejection\": true, \"expect\": { \"exists\": \"dialogueResponseObserved\" }"), TEXT("legacy top-level action field"), TEXT("allowActionRejection"));
+	ExpectScenarioFailure(TEXT("\"adapterId\": \"builtin.npcEvent\", \"eventTag\": \"AINpc.Test.Gift\", \"targetRef\": \"fixture.npc\", \"payload\": {}"), TEXT("\"adapterId\": \"builtin.smartObjectAction\", \"eventTag\": \"AINpc.Test.Gift\", \"targetRef\": \"fixture.npc\", \"payload\": {}"), TEXT("world.event using action adapter id"), TEXT("unsupported value"));
+	ExpectScenarioFailure(TEXT("\"adapterId\": \"builtin.npcEvent\", \"eventTag\": \"AINpc.Test.Gift\", \"targetRef\": \"fixture.npc\", \"payload\": {}"), TEXT("\"adapterId\": \"builtin.npcEvent\", \"eventTriggerId\": \"legacy\", \"targetRef\": \"fixture.npc\", \"payload\": {}"), TEXT("legacy event trigger field"), TEXT("unknown field 'eventTriggerId'"));
+	ExpectScenarioFailure(TEXT("\"adapterId\": \"builtin.npcEvent\", \"eventTag\": \"AINpc.Test.Gift\", \"targetRef\": \"fixture.npc\", \"payload\": {}"), TEXT("\"adapterId\": \"builtin.npcEvent\", \"eventTag\": \"AINpc.Test.Gift\", \"eventId\": \"AINpc.Test.Gift\", \"targetRef\": \"fixture.npc\", \"payload\": {}"), TEXT("world.event duplicate event selectors"), TEXT("exactly one of eventTag or eventId"));
+	ExpectScenarioFailure(TEXT("\"adapterId\": \"builtin.npcEvent\", \"eventTag\": \"AINpc.Test.Gift\", \"targetRef\": \"fixture.npc\", \"payload\": {}"), TEXT("\"adapterId\": \"builtin.npcEvent\", \"eventTag\": \"AINpc.Test.Gift\", \"targetRef\": \"fixture.npc\", \"payload\": { \"legacy\": true }"), TEXT("world.event malformed adapter payload"), TEXT("payload.payload must be an empty object"));
+	ExpectScenarioFailure(TEXT("\"adapterId\": \"builtin.smartObjectAction\", \"actorRef\": \"fixture.npc\", \"allowActionRejection\": true"), TEXT("\"adapterId\": \"builtin.npcEvent\", \"actorRef\": \"fixture.npc\", \"allowActionRejection\": true"), TEXT("action step using event adapter id"), TEXT("unsupported value"));
+	ExpectScenarioFailure(TEXT("\"adapterId\": \"builtin.smartObjectAction\", \"actorRef\": \"fixture.npc\", \"allowActionRejection\": true"), TEXT("\"adapterId\": \"builtin.smartObjectAction\", \"actorRef\": \"fixture.smartObject\", \"allowActionRejection\": true"), TEXT("action step unsupported actor ref"), TEXT("actorRef has unsupported value"));
+	ExpectScenarioFailure(TEXT("\"adapterId\": \"builtin.smartObjectAction\", \"actorRef\": \"fixture.npc\", \"allowActionRejection\": true"), TEXT("\"adapterId\": \"builtin.smartObjectAction\", \"actorRef\": \"fixture.npc\", \"allowActionRejection\": {}"), TEXT("action step malformed rejection policy"), TEXT("allowActionRejection must be boolean"));
+	return true;
+}
+
 #endif

@@ -83,7 +83,7 @@ PowerShell 继续负责启动可见 `UnrealEditor.exe -game`、传递确定性 r
 
 ### Decision: 先做 adapter registry，再公开项目扩展 API
 
-Phase 2.8 先把内置 dialogue、event、SmartObject、fixture、character driver、observation 逻辑拆成 internal adapters，并保持 API 私有。Phase 2.9 再暴露经过验证的最小 public interfaces 给项目模块；public API 只发布当期 example scenario 实际使用并验证的 adapter category，未被当期示例使用的 character driver 或其它 future category 只能保留 internal/experimental，不得进入 public API。
+Phase 2.8 先把内置 dialogue、event、SmartObject、fixture、character driver、observation 逻辑拆成 internal adapters，并保持 API 私有。Phase 2.9 再暴露经过验证的最小 public interfaces 给项目模块；public API 只发布当期 door example 实际使用并验证的 fixture resolver、observation provider 和 action adapter category，event seam、character driver 和其它 future category 只能保留 internal/experimental，不得进入 Phase 2.9 public API。
 
 registry 的推荐落点是 scenario/runtime context 持有的 registry view：模块级 registry 只保存 adapter factory 或 descriptor，实际 adapter instance 和 observation store 必须绑定当前 world/scenario/run。生命周期顺序必须明确：module startup 只注册 descriptor/factory；scenario start 在选定 world 后创建 per-run registry view、adapter instances 和 observation store；terminal result 写出前冻结 observation snapshot；scenario end 释放 per-run view、adapter instances、fixture refs 和 observation store；world teardown 必须使残留 per-run refs 失效；module shutdown 注销 descriptor/factory。禁止用跨 run 的 static mutable adapter instance 或 static observation store。执行前校验 adapter id，同 category duplicate id 直接拒绝，并定义 module startup/shutdown、world teardown 和 scenario end 下的注册/注销或失效时机。不能让另一个 world、PIE instance 或上一次 run 的 stale adapter 影响当前 scenario。
 
@@ -116,7 +116,7 @@ assertion grammar 只支持声明过的 operator。Phase 2.8 只实现现有 sce
 
 ### Decision: 项目特定行为通过 adapter 接入
 
-Core 只提供 sample harness 和 generic ACharacter/dialogue/SmartObject 行为的 built-in adapters。项目模块注册自己的 custom character class、action system、world event、perception stimulus、inventory、quest、combat、door、多模态视觉或听觉 adapter。Phase 2.9 发布的 public API 必须保持最小：优先公开最必要的 fixture resolver、observation provider 和一个 action/event extension seam；character driver 只有在当期 non-core example scenario 实际需要并通过验证时才公开，否则保持 internal/experimental。
+Core 只提供 sample harness 和 generic ACharacter/dialogue/SmartObject 行为的 built-in adapters。项目模块通过 Phase 2.9 的最小 public seam 接入 door 示例所需的 fixture resolver、action adapter 和 observation provider；custom interaction framework、custom character class、world event、perception stimulus、inventory、quest、combat、多模态视觉或听觉 adapter 留给后续阶段。Phase 2.9 不公开 character driver，也不公开未被 door example 实际使用并验证的 category。
 
 **Rationale:** 插件不可能知道每个项目的 NPC 行为。Core runner 必须保持通用，项目必须拥有自己的世界执行和 observation。
 

@@ -315,14 +315,23 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAINpcVisualObservationIsolationAndTypeFailureT
 
 bool FAINpcVisualObservationIsolationAndTypeFailureTest::RunTest(const FString& Parameters)
 {
-	TArray<FAINpcRecordedVisualObservation> PreviousRunRecords;
-	PreviousRunRecords.Add(MakeBoolObservationValue(TEXT("dialogueResponseObserved"), true, 0, 1.0, TEXT("callback"), TEXT("run.previous")));
+	TArray<FAINpcRecordedVisualObservation> PreviousRunLookupRecords;
+	PreviousRunLookupRecords.Add(MakeBoolObservationValue(TEXT("dialogueResponseObserved"), true, 0, 1.0, TEXT("callback"), TEXT("run.previous")));
 
 	FAINpcRecordedVisualObservation Found;
 	FAINpcVisualAssertionFailureDetail Failure;
 	TestFalse(TEXT("A previous run/step observation cannot satisfy the current run window."),
-		MakeStore(PreviousRunRecords).TryGetLatestObservationInWindow(TEXT("dialogueResponseObserved"), MakeStepWindow(0, 10.0, 12.0), Found, &Failure));
+		MakeStore(PreviousRunLookupRecords).TryGetLatestObservationInWindow(TEXT("dialogueResponseObserved"), MakeStepWindow(0, 10.0, 12.0), Found, &Failure));
 	TestEqual(TEXT("Cross-run stale observation is diagnosed as stale."), Failure.Category, FString(TEXT("stale")));
+
+	TArray<FAINpcRecordedVisualObservation> PreviousRunIsolationRecords;
+	PreviousRunIsolationRecords.Add(MakeBoolObservationValue(TEXT("dialogueResponseObserved"), true, 0, 1.0, TEXT("callback"), TEXT("run.previous")));
+	FAINpcVisualObservationStore PreviousRunStore = MakeStore(PreviousRunIsolationRecords);
+	FAINpcVisualObservationStore CurrentRunStore;
+	TestFalse(TEXT("A fresh per-run observation store starts without previous scenario records."),
+		CurrentRunStore.HasObservationInWindow(TEXT("dialogueResponseObserved"), MakeHistoryWindow(0.0, 12.0)));
+	TestTrue(TEXT("The previous run store still proves the isolation test would catch shared state."),
+		PreviousRunStore.HasObservationInWindow(TEXT("dialogueResponseObserved"), MakeHistoryWindow(0.0, 12.0)));
 
 	FAINpcVisualScenarioAssertion BooleanAssertion;
 	BooleanAssertion.Operator = TEXT("equals");
