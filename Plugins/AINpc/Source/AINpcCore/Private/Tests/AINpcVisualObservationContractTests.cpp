@@ -1,4 +1,5 @@
 #include "Test/AINpcDataDrivenVisualScenarioTest.h"
+#include "Test/AINpcVisualInternalAdapters.h"
 #include "Test/AINpcVisualObservationStore.h"
 
 #include "Misc/AutomationTest.h"
@@ -389,5 +390,56 @@ bool FAINpcVisualNotExistsUnsupportedReadinessSourceTest::RunTest(const FString&
 		UnsupportedSourceStore.EvaluateNotExistsAssertion(Assertion, MakeStepWindow(2, 20.0, 22.0), &Failure));
 	TestEqual(TEXT("Unsupported readiness source is diagnosed distinctly."), Failure.Category, FString(TEXT("readiness-source")));
 	TestEqual(TEXT("Unsupported source diagnostic preserves source kind."), Failure.SourceKind, FString(TEXT("observation-provider")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAINpcVisualPhase28dInternalAdapterLifecycleTest,
+	"AINpc.Visual.Observation.Phase28dInternalAdapterLifecycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcVisualPhase28dInternalAdapterLifecycleTest::RunTest(const FString& Parameters)
+{
+	FString Failure;
+	TestTrue(TEXT("Built-in internal adapter catalog has unique ids."), AINpcVisualInternalAdapters::ValidateBuiltInCatalog(Failure));
+
+	TArray<AINpcVisualInternalAdapters::FDescriptor> DuplicateCatalog = AINpcVisualInternalAdapters::GetBuiltInCatalog();
+	DuplicateCatalog.Add(AINpcVisualInternalAdapters::MakeDescriptor(AINpcVisualInternalAdapters::NpcEventAdapterId(), TEXT("world.event.replay")));
+	TestFalse(TEXT("Duplicate internal adapter id is rejected by production catalog validation."), AINpcVisualInternalAdapters::ValidateUniqueAdapterIds(DuplicateCatalog, Failure));
+	TestTrue(TEXT("Duplicate adapter diagnostic names duplicate id."), Failure.Contains(TEXT("duplicate internal adapter id")));
+
+	TestTrue(TEXT("Event adapter exposes only the current world event capability."), AINpcVisualInternalAdapters::RequireCapability(AINpcVisualInternalAdapters::NpcEventAdapterId(), AINpcVisualInternalAdapters::WorldEventEmitCapability(), Failure));
+	TestFalse(TEXT("Unsupported event capability fails before execution."), AINpcVisualInternalAdapters::RequireCapability(AINpcVisualInternalAdapters::NpcEventAdapterId(), TEXT("world.event.replay"), Failure));
+	TestTrue(TEXT("Unsupported capability diagnostic names capability."), Failure.Contains(TEXT("unsupported capability")));
+	TestTrue(TEXT("Action adapter exposes only the current SmartObject action capability."), AINpcVisualInternalAdapters::RequireCapability(AINpcVisualInternalAdapters::SmartObjectActionAdapterId(), AINpcVisualInternalAdapters::ExecuteLatestIntentCapability(), Failure));
+	TestFalse(TEXT("Action adapter rejects unrelated project capability."), AINpcVisualInternalAdapters::RequireCapability(AINpcVisualInternalAdapters::SmartObjectActionAdapterId(), TEXT("project.customAction"), Failure));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAINpcVisualPhase28dConsecutiveScenarioIsolationTest,
+	"AINpc.Visual.Observation.Phase28dConsecutiveScenarioIsolation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcVisualPhase28dConsecutiveScenarioIsolationTest::RunTest(const FString& Parameters)
+{
+	TArray<FAINpcRecordedVisualObservation> FirstRunRecords;
+	FirstRunRecords.Add(MakeBoolObservationValue(TEXT("dialogueResponseObserved"), true, 0, 1.0, TEXT("callback"), TEXT("run.first")));
+	FAINpcVisualObservationStore FirstRunStore = MakeStore(FirstRunRecords);
+	MarkReadyForWindow(FirstRunStore, TEXT("dialogueResponseObserved"), TEXT("callback"), TEXT("run.first"), 0, 0.0, 2.0);
+
+	FAINpcRecordedVisualObservation Found;
+	FAINpcVisualAssertionFailureDetail Failure;
+	TestFalse(TEXT("Second scenario cannot read first scenario observation by current-step window."),
+		FirstRunStore.TryGetLatestObservationInWindow(TEXT("dialogueResponseObserved"), MakeStepWindow(0, 10.0, 12.0), Found, &Failure));
+	TestEqual(TEXT("Consecutive scenario observation isolation is diagnosed as stale."), Failure.Category, FString(TEXT("stale")));
+	TestFalse(TEXT("Second scenario cannot reuse first scenario readiness coverage."),
+		FirstRunStore.HasReadinessCoverageInWindow(TEXT("dialogueResponseObserved"), MakeStepWindow(0, 10.0, 12.0), &Failure));
+	TestEqual(TEXT("Consecutive scenario readiness isolation requires fresh coverage."), Failure.Category, FString(TEXT("readiness-window-coverage")));
+
+	TArray<FAINpcRecordedVisualObservation> SecondRunRecords;
+	SecondRunRecords.Add(MakeBoolObservationValue(TEXT("dialogueResponseObserved"), true, 0, 10.5, TEXT("callback"), TEXT("run.second")));
+	FAINpcVisualObservationStore SecondRunStore = MakeStore(SecondRunRecords);
+	TestTrue(TEXT("Second scenario accepts its own current-window observation."),
+		SecondRunStore.TryGetLatestObservationInWindow(TEXT("dialogueResponseObserved"), MakeStepWindow(0, 10.0, 12.0), Found, &Failure));
+	TestEqual(TEXT("Second scenario observation source is preserved."), Found.Record.AdapterOrProviderId, FString(TEXT("run.second")));
 	return true;
 }

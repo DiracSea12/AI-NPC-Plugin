@@ -9,6 +9,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Test/AINpcDataDrivenVisualScenarioTest.h"
+#include "AINpcVisualInternalAdapters.h"
 #include "Test/AINpcTestCharacter.h"
 #include "Test/AINpcTestSmartObjectActor.h"
 
@@ -369,7 +370,7 @@ namespace
 			if (!RejectUnknownFields(**FixtureObject, OutConfig.TestId, { TEXT("adapterId"), TEXT("kind") }, TEXT("fixture"), OutError)) { return false; }
 			if (!RequireStringField(**FixtureObject, OutConfig.TestId, TEXT("adapterId"), OutConfig.Fixture.AdapterId, OutError)) { return false; }
 			if (!RequireStringField(**FixtureObject, OutConfig.TestId, TEXT("kind"), OutConfig.Fixture.Kind, OutError)) { return false; }
-			if (OutConfig.Fixture.AdapterId != TEXT("builtin.characterFixture")) { OutError = FString::Printf(TEXT("scenario '%s' field 'fixture.adapterId' has unsupported value '%s'"), *OutConfig.TestId, *OutConfig.Fixture.AdapterId); return false; }
+			if (OutConfig.Fixture.AdapterId != AINpcVisualInternalAdapters::CharacterFixtureAdapterId()) { OutError = FString::Printf(TEXT("scenario '%s' field 'fixture.adapterId' has unsupported value '%s'"), *OutConfig.TestId, *OutConfig.Fixture.AdapterId); return false; }
 			if (OutConfig.Fixture.Kind != TEXT("character") && OutConfig.Fixture.Kind != TEXT("characterWithSmartObject")) { OutError = FString::Printf(TEXT("scenario '%s' field 'fixture.kind' has unsupported value '%s'"), *OutConfig.TestId, *OutConfig.Fixture.Kind); return false; }
 
 		const TSharedPtr<FJsonObject>* PersonaObject = nullptr;
@@ -424,7 +425,7 @@ namespace
 				{
 					if (!RejectUnknownFields(**PayloadObject, OutConfig.TestId, { TEXT("adapterId"), TEXT("eventTag"), TEXT("eventId"), TEXT("targetRef"), TEXT("payload") }, FString::Printf(TEXT("step[%d].payload"), StepIndex), OutError)) { return false; }
 					if (!RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("adapterId"), Step.Payload.AdapterId, OutError)) { return false; }
-					if (Step.Payload.AdapterId != TEXT("builtin.npcEvent")) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.adapterId has unsupported value '%s'"), *OutConfig.TestId, StepIndex, *Step.Payload.AdapterId); return false; }
+					if (Step.Payload.AdapterId != AINpcVisualInternalAdapters::NpcEventAdapterId()) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.adapterId has unsupported value '%s'"), *OutConfig.TestId, StepIndex, *Step.Payload.AdapterId); return false; }
 					const bool bHasEventTag = (*PayloadObject)->HasField(TEXT("eventTag"));
 					const bool bHasEventId = (*PayloadObject)->HasField(TEXT("eventId"));
 					if (bHasEventTag == bHasEventId) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload must declare exactly one of eventTag or eventId"), *OutConfig.TestId, StepIndex); return false; }
@@ -450,7 +451,7 @@ namespace
 				{
 					if (!RejectUnknownFields(**PayloadObject, OutConfig.TestId, { TEXT("adapterId"), TEXT("actorRef"), TEXT("allowActionRejection") }, FString::Printf(TEXT("step[%d].payload"), StepIndex), OutError)) { return false; }
 					if (!RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("adapterId"), Step.Payload.AdapterId, OutError)) { return false; }
-					if (Step.Payload.AdapterId != TEXT("builtin.smartObjectAction")) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.adapterId has unsupported value '%s'"), *OutConfig.TestId, StepIndex, *Step.Payload.AdapterId); return false; }
+					if (Step.Payload.AdapterId != AINpcVisualInternalAdapters::SmartObjectActionAdapterId()) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.adapterId has unsupported value '%s'"), *OutConfig.TestId, StepIndex, *Step.Payload.AdapterId); return false; }
 					if (!RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("actorRef"), Step.Payload.ActorRef, OutError)) { return false; }
 					if (Step.Payload.ActorRef != TEXT("fixture.npc")) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.actorRef has unsupported value '%s'"), *OutConfig.TestId, StepIndex, *Step.Payload.ActorRef); return false; }
 					if (!(*PayloadObject)->TryGetBoolField(TEXT("allowActionRejection"), Step.Payload.bAllowActionRejection)) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.allowActionRejection must be boolean"), *OutConfig.TestId, StepIndex); return false; }
@@ -599,11 +600,8 @@ bool FAINpcVisualScenarioParserBoundaryTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Parser rejects notExists for callback observations without full-window absence coverage."), InvalidJsonObject.IsValid() && ParseScenarioConfig(*InvalidJsonObject, InvalidConfig, ParseError));
 	TestTrue(TEXT("Unsupported notExists failure names full-window absence proof."), ParseError.Contains(TEXT("full-window absence")));
 
-	const auto ExpectParseFailure = [this, &BaseScenario](const FString& Replacement, const TCHAR* CaseName, const TCHAR* ExpectedErrorFragment)
+	const auto ExpectScenarioFailure = [this](const FString& ScenarioText, const TCHAR* CaseName, const TCHAR* ExpectedErrorFragment)
 	{
-		const FString ScenarioText = BaseScenario.Replace(
-			TEXT("{ \"equals\": { \"observation\": \"waitingStateObserved\", \"value\": false } }"),
-			*Replacement);
 		TSharedPtr<FJsonObject> CaseJsonObject;
 		const TSharedRef<TJsonReader<>> CaseReader = TJsonReaderFactory<>::Create(ScenarioText);
 		FString CaseContext(CaseName);
@@ -612,6 +610,14 @@ bool FAINpcVisualScenarioParserBoundaryTest::RunTest(const FString& Parameters)
 		FString CaseError;
 		TestFalse(CaseContext + TEXT(" is rejected."), CaseJsonObject.IsValid() && ParseScenarioConfig(*CaseJsonObject, CaseConfig, CaseError));
 		TestTrue(CaseContext + TEXT(" reports expected diagnostic fragment."), CaseError.Contains(ExpectedErrorFragment));
+	};
+
+	const auto ExpectParseFailure = [&BaseScenario, &ExpectScenarioFailure](const FString& Replacement, const TCHAR* CaseName, const TCHAR* ExpectedErrorFragment)
+	{
+		const FString ScenarioText = BaseScenario.Replace(
+			TEXT("{ \"equals\": { \"observation\": \"waitingStateObserved\", \"value\": false } }"),
+			*Replacement);
+		ExpectScenarioFailure(ScenarioText, CaseName, ExpectedErrorFragment);
 	};
 
 	ExpectParseFailure(TEXT("{ \"notEquals\": { \"observation\": \"waitingStateObserved\", \"value\": false } }"), TEXT("notEquals operator"), TEXT("unknown field 'notEquals'"));
@@ -625,6 +631,33 @@ bool FAINpcVisualScenarioParserBoundaryTest::RunTest(const FString& Parameters)
 	ExpectParseFailure(TEXT("{ \"any\": [] }"), TEXT("empty any group"), TEXT("must contain child assertions"));
 	ExpectParseFailure(TEXT("{ \"anyOf\": [] }"), TEXT("empty anyOf group"), TEXT("must contain child assertions"));
 	ExpectParseFailure(TEXT("{ \"all\": [{ \"exists\": \"unknownObservation\" }] }"), TEXT("nested unknown observation"), TEXT("references unknown observation"));
+
+	ExpectScenarioFailure(BaseScenario.Replace(TEXT("\"adapterId\": \"builtin.characterFixture\""), TEXT("\"adapterId\": \"bad.fixtureAdapter\"")),
+		TEXT("bad fixture adapter id"), TEXT("fixture.adapterId"));
+	ExpectScenarioFailure(BaseScenario.Replace(TEXT("\"adapterId\": \"builtin.characterFixture\", \"kind\": \"character\""), TEXT("\"adapterId\": \"builtin.characterFixture\", \"kind\": \"character\", \"type\": \"npcWithSmartObject\"")),
+		TEXT("legacy fixture type"), TEXT("fixture.type"));
+
+	const FString EventScenario = BaseScenario.Replace(
+		TEXT("{ \"type\": \"wait.until\", \"payload\": { \"timeoutSec\": 1 }, \"condition\": { \"equals\": { \"observation\": \"waitingStateObserved\", \"value\": false } } }"),
+		TEXT("{ \"type\": \"world.event\", \"payload\": { \"adapterId\": \"builtin.npcEvent\", \"eventTag\": \"AINpc.Test.Event\", \"payload\": {} } }"));
+	ExpectScenarioFailure(EventScenario.Replace(TEXT("\"adapterId\": \"builtin.npcEvent\""), TEXT("\"adapterId\": \"bad.eventAdapter\"")),
+		TEXT("bad event adapter id"), TEXT("adapterId"));
+	ExpectScenarioFailure(EventScenario.Replace(TEXT("\"payload\": {}"), TEXT("\"payload\": { \"legacy\": true }")),
+		TEXT("malformed event adapter payload"), TEXT("payload.payload"));
+	ExpectScenarioFailure(EventScenario.Replace(TEXT("\"eventTag\": \"AINpc.Test.Event\""), TEXT("\"eventTriggerId\": \"legacy-event\"")),
+		TEXT("legacy event payload field"), TEXT("unknown field 'eventTriggerId'"));
+
+	const FString ActionScenario = BaseScenario.Replace(
+		TEXT("{ \"type\": \"wait.until\", \"payload\": { \"timeoutSec\": 1 }, \"condition\": { \"equals\": { \"observation\": \"waitingStateObserved\", \"value\": false } } }"),
+		TEXT("{ \"type\": \"action.executeLatestIntent\", \"payload\": { \"adapterId\": \"builtin.smartObjectAction\", \"actorRef\": \"fixture.npc\", \"allowActionRejection\": true } }"));
+	ExpectScenarioFailure(ActionScenario.Replace(TEXT("\"adapterId\": \"builtin.smartObjectAction\""), TEXT("\"adapterId\": \"bad.actionAdapter\"")),
+		TEXT("bad action adapter id"), TEXT("adapterId"));
+	ExpectScenarioFailure(ActionScenario.Replace(TEXT("\"allowActionRejection\": true"), TEXT("\"legacyActionField\": true")),
+		TEXT("malformed action adapter payload"), TEXT("unknown field 'legacyActionField'"));
+	ExpectScenarioFailure(BaseScenario.Replace(TEXT("\"testId\": \"phase28c.parser-boundary\""), TEXT("\"testId\": \"phase28c.parser-boundary\", \"eventTriggerId\": \"legacy\"")),
+		TEXT("legacy top-level event field"), TEXT("legacy field 'eventTriggerId'"));
+	ExpectScenarioFailure(BaseScenario.Replace(TEXT("\"testId\": \"phase28c.parser-boundary\""), TEXT("\"testId\": \"phase28c.parser-boundary\", \"allowActionRejection\": true")),
+		TEXT("legacy top-level action field"), TEXT("legacy field 'allowActionRejection'"));
 	return true;
 }
 

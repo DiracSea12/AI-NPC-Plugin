@@ -399,6 +399,17 @@ if ($visualTestHeaderText -notmatch 'struct\s+FAINpcVisualObservationRecord' -or
 if ($registryText -notmatch 'AINpc\.Visual\.Phase28d\.InternalAdapterLifecycleBoundary' -or $registryText -notmatch 'builtin\.characterFixture' -or $registryText -notmatch 'builtin\.npcEvent' -or $registryText -notmatch 'builtin\.smartObjectAction' -or $registryText -notmatch 'eventTriggerId' -or $registryText -notmatch 'legacy fixture kind' -or $registryText -notmatch 'legacy top-level action field' -or $registryText -notmatch 'payload\.payload must be an empty object' -or $registryText -notmatch 'allowActionRejection must be boolean') {
     Add-Failure "Phase 2.8d must have automation coverage for internal adapter ids, malformed adapter payloads, and rejected legacy fixture/event/action fields."
 }
+foreach ($requiredPhase28dParserEvidence in @(
+    "bad fixture adapter id",
+    "bad event adapter id",
+    "bad action adapter id",
+    "malformed event adapter payload",
+    "legacy fixture type",
+    "legacy top-level event field",
+    "legacy top-level action field"
+)) {
+    if ($registryText -notmatch [regex]::Escape($requiredPhase28dParserEvidence)) { Add-Failure "Phase 2.8d parser negative evidence missing '$requiredPhase28dParserEvidence'." }
+}
 $gameModeText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcTestGameMode.cpp") -Raw
 if ($gameModeText -notmatch 'CleanupActiveScenario' -or $gameModeText -notmatch 'ActiveTest\.Reset\(\)' -or $gameModeText -notmatch 'SpawnedSmartObject->Destroy\(\)' -or $gameModeText -notmatch 'SpawnedNpc->Destroy\(\)' -or $gameModeText -notmatch 'BridgeContext->ReleaseSlotForUser' -or $gameModeText -notmatch 'VisualRunId\s*=\s*FString::Printf\(TEXT\("%s-%s"\)') {
     Add-Failure "Phase 2.8d visual suite lifecycle must isolate consecutive scenarios and release per-run fixture/action refs."
@@ -406,7 +417,17 @@ if ($gameModeText -notmatch 'CleanupActiveScenario' -or $gameModeText -notmatch 
 if ($runnerText -notmatch 'FAINpcVisualScenarioRuntimeView' -or $runnerText -notmatch 'TUniquePtr<FAINpcVisualObservationStore>\s+Observations' -or $runnerText -notmatch 'DialogueObservationProvider->Stop\(\)' -or $runnerText -notmatch 'ClearTimer\(StepTimerHandle\)' -or $runnerText -notmatch 'ClearTimer\(TimeoutTimerHandle\)') {
     Add-Failure "Phase 2.8d runner lifecycle must keep per-run runtime/observation state and stop/clear refs on scenario end or world teardown."
 }
-if ($observationContractText -notmatch 'AINpc\.Visual\.Observation\.IsolationAndTypeFailure' -or $observationContractText -notmatch 'fresh per-run observation store starts without previous scenario records' -or $observationContractText -notmatch 'previous run store still proves the isolation test would catch shared state') {
+$observationContractTestText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Tests/AINpcVisualObservationContractTests.cpp") -Raw
+foreach ($requiredPhase28dEvidence in @(
+    "AINpc.Visual.Observation.Phase28dInternalAdapterLifecycle",
+    "AINpc.Visual.Observation.Phase28dConsecutiveScenarioIsolation",
+    "duplicate internal adapter id",
+    "unsupported capability",
+    "Consecutive scenario observation isolation"
+)) {
+    if ($observationContractTestText -notmatch [regex]::Escape($requiredPhase28dEvidence)) { Add-Failure "Phase 2.8d lifecycle negative evidence missing '$requiredPhase28dEvidence'." }
+}
+if ($observationContractTestText -notmatch 'AINpc\.Visual\.Observation\.IsolationAndTypeFailure' -or $observationContractTestText -notmatch 'fresh per-run observation store starts without previous scenario records' -or $observationContractTestText -notmatch 'previous run store still proves the isolation test would catch shared state') {
     Add-Failure "Phase 2.8d observation contract tests must prove per-run observation stores do not reuse stale scenario records."
 }
 $publicApiScanFiles = Get-ChildItem -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Public") -Recurse -Include "*.h", "*.cpp" -File
@@ -492,6 +513,10 @@ if ($testGameText -match "Get-AINpcLatestResultPath") {
 }
 if ($testGameText -notmatch "Invoke-AINpcVisualGameSuite") {
     Add-Failure "test-game.ps1 must launch the visual-game manifest through one suite harness invocation."
+}
+$visualHarnessText = Get-Content -Path (Join-Path $repoRoot "scripts/dev/game/VisualGameHarness.ps1") -Raw
+if ($visualHarnessText -notmatch 'Get-CimInstance Win32_Process' -or $visualHarnessText -notmatch 'ProjectPath' -or $visualHarnessText -match 'ExecutablePath\) \{' -or $visualHarnessText -match 'Get-Process\s+-Name\s+"UnrealEditor"') {
+    Add-Failure "Visual game pre-run process check must only block matching project instances, not unrelated UnrealEditor processes."
 }
 if ($testGameText -match 'Start-Process\s+-FilePath\s+"pwsh"[\s\S]*VisualGameHarness\.ps1') {
     Add-Failure "test-game.ps1 must not launch VisualGameHarness.ps1 once per scenario."

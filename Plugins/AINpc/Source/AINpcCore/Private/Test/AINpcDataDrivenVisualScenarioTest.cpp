@@ -1,4 +1,5 @@
 #include "Test/AINpcDataDrivenVisualScenarioTest.h"
+#include "AINpcVisualInternalAdapters.h"
 #include "AINpcVisualObservationStore.h"
 
 #include "Animation/AnimMontage.h"
@@ -21,8 +22,6 @@ namespace
 {
 	const float InitialDialogueDelaySeconds = 3.0f;
 	const TCHAR* SmartObjectTargetIdVariable = TEXT("SmartObjectTargetId");
-	const TCHAR* BuiltInNpcEventAdapterId = TEXT("builtin.npcEvent");
-	const TCHAR* BuiltInSmartObjectActionAdapterId = TEXT("builtin.smartObjectAction");
 	const TCHAR* FixtureNpcRef = TEXT("fixture.npc");
 	const float SmartObjectSearchRadius = 1200.0f;
 	const int32 SmartObjectClaimPriority = 2;
@@ -275,9 +274,8 @@ struct FAINpcBuiltInEventAdapter
 {
 		bool Execute(const FAINpcVisualScenarioStep& Step, const FAINpcVisualScenarioRuntimeView& Runtime, FString& OutFailureReason) const
 		{
-			if (Step.Payload.AdapterId != BuiltInNpcEventAdapterId)
+			if (!AINpcVisualInternalAdapters::RequireCapability(Step.Payload.AdapterId, AINpcVisualInternalAdapters::WorldEventEmitCapability(), OutFailureReason))
 			{
-				OutFailureReason = FString::Printf(TEXT("world.event adapter '%s' is unsupported."), *Step.Payload.AdapterId);
 				return false;
 			}
 			if (!Step.Payload.TargetRef.IsEmpty() && Step.Payload.TargetRef != FixtureNpcRef)
@@ -319,9 +317,8 @@ struct FAINpcBuiltInActionAdapter
 {
 		EAINpcActionAdapterExecuteResult Execute(const FAINpcVisualScenarioStep& Step, const FAINpcVisualScenarioRuntimeView& Runtime, FAINpcVisualSmartObjectActionExecution& OutExecution, FString& OutFailureReason) const
 		{
-			if (Step.Payload.AdapterId != BuiltInSmartObjectActionAdapterId)
+			if (!AINpcVisualInternalAdapters::RequireCapability(Step.Payload.AdapterId, AINpcVisualInternalAdapters::ExecuteLatestIntentCapability(), OutFailureReason))
 			{
-				OutFailureReason = FString::Printf(TEXT("action.executeLatestIntent adapter '%s' is unsupported."), *Step.Payload.AdapterId);
 				return EAINpcActionAdapterExecuteResult::Invalid;
 			}
 			if (Step.Payload.ActorRef != FixtureNpcRef)
@@ -392,6 +389,10 @@ bool FAINpcDataDrivenVisualScenarioTest::FImplementation::Start(FString& OutFail
 	if (!Runtime->GetNpcComponent())
 	{
 		OutFailureReason = FString::Printf(TEXT("Visual scenario '%s' cannot start because NPC component is null."), *Config.TestId);
+		return false;
+	}
+	if (!AINpcVisualInternalAdapters::ValidateBuiltInCatalog(OutFailureReason))
+	{
 		return false;
 	}
 	if (!ConfigurePersona(OutFailureReason)) { return false; }
@@ -1054,7 +1055,7 @@ FAINpcVisualObservationSourceInfo FAINpcDataDrivenVisualScenarioTest::FImplement
 	Source.SourceObjectPath = Runtime->GetWorld() && Runtime->GetWorld()->GetGameInstance() && Runtime->GetWorld()->GetGameInstance()->GetSubsystem<UNpcEventSubsystem>() ? Runtime->GetWorld()->GetGameInstance()->GetSubsystem<UNpcEventSubsystem>()->GetPathName() : FString();
 	Source.SourceClass = TEXT("UNpcEventSubsystem");
 	Source.SamplingMethod = TEXT("broadcast");
-	Source.AdapterOrProviderId = BuiltInNpcEventAdapterId;
+	Source.AdapterOrProviderId = AINpcVisualInternalAdapters::NpcEventAdapterId();
 	return Source;
 }
 
@@ -1066,7 +1067,7 @@ FAINpcVisualObservationSourceInfo FAINpcDataDrivenVisualScenarioTest::FImplement
 	Source.SourceObjectPath = Runtime->GetNpcActor() ? Runtime->GetNpcActor()->GetPathName() : FString();
 	Source.SourceClass = Runtime->GetNpcActor() ? Runtime->GetNpcActor()->GetClass()->GetName() : FString();
 	Source.SamplingMethod = TEXT("action-execution");
-	Source.AdapterOrProviderId = BuiltInSmartObjectActionAdapterId;
+	Source.AdapterOrProviderId = AINpcVisualInternalAdapters::SmartObjectActionAdapterId();
 	return Source;
 }
 
