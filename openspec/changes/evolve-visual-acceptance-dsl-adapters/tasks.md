@@ -74,7 +74,7 @@
 
 ### 2.9A2 - Adapter lifecycle 和 stale owner hardening
 
-- [ ] 3.6 定义 adapter registration/unregistration lifecycle：project module startup 注册 descriptor/factory，module shutdown unregister；scenario start 在 world 可用后从 module-level descriptors 创建 per-run registry view 和 adapter instances；scenario end/world teardown 释放该 view、instances、fixture refs 和 observations。active scenario 期间 unregister 后，后续 lookup/action/observation 必须检查 owner availability，并失败且报告诊断，不得继续使用 stale factory/instance；owner availability 只能作为 internal registry bookkeeping，不得新增 public token 类型、订阅机制或插件级热卸载 state machine；诊断必须带 owner module、category、adapter id、test id 和 stage。
+- [x] 3.6 定义 adapter registration/unregistration lifecycle：project module startup 注册 descriptor/factory，module shutdown unregister；scenario start 在 world 可用后从 module-level descriptors 创建 per-run registry view 和 adapter instances；scenario end/world teardown 释放该 view、instances、fixture refs 和 observations。active scenario 期间 unregister 后，后续 lookup/action/observation 必须检查 owner availability，并失败且报告诊断，不得继续使用 stale factory/instance；owner availability 只能作为 internal registry bookkeeping，不得新增 public token 类型、订阅机制或插件级热卸载 state machine；诊断必须带 owner module、category、adapter id、test id 和 stage。
 
 ### 2.9B - 最小 fixture/action/observation schema delta
 
