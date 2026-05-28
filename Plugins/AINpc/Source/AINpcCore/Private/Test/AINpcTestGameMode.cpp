@@ -227,6 +227,16 @@ namespace
 				Json->SetNumberField(TEXT("durationMs"), Diagnostic.DurationMs);
 				Json->SetStringField(TEXT("failureReason"), RedactSensitiveText(Diagnostic.FailureReason));
 				Json->SetStringField(TEXT("failureCategory"), Diagnostic.FailureCategory);
+				Json->SetStringField(TEXT("stage"), Diagnostic.Stage);
+				Json->SetStringField(TEXT("adapterCategory"), Diagnostic.AdapterCategory);
+				Json->SetStringField(TEXT("adapterId"), Diagnostic.AdapterId);
+				Json->SetStringField(TEXT("ownerModuleName"), Diagnostic.OwnerModuleName);
+				Json->SetStringField(TEXT("actorClass"), Diagnostic.ActorClass);
+				Json->SetStringField(TEXT("actorTag"), Diagnostic.ActorTag);
+				Json->SetStringField(TEXT("targetRef"), Diagnostic.TargetRef);
+				Json->SetStringField(TEXT("actionName"), Diagnostic.ActionName);
+				Json->SetStringField(TEXT("fieldName"), Diagnostic.FieldName);
+				Json->SetStringField(TEXT("capability"), Diagnostic.Capability);
 				Json->SetStringField(TEXT("observationName"), Diagnostic.ObservationName);
 				Json->SetStringField(TEXT("sourceKind"), Diagnostic.SourceKind);
 				Json->SetStringField(TEXT("sourceId"), Diagnostic.SourceId);

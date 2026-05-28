@@ -10,6 +10,8 @@ struct FAINpcVisualScenarioFixtureSpec
 {
 	FString AdapterId;
 	FString Kind;
+	FString ActorClass;
+	FString ActorTag;
 };
 
 struct FAINpcVisualScenarioPersonaSpec
@@ -29,6 +31,7 @@ struct FAINpcVisualScenarioStepPayload
 {
 	FString PromptRef;
 	FString AdapterId;
+	FString ActionName;
 	FString EventTag;
 	FString EventId;
 	FString TargetRef;
@@ -127,6 +130,16 @@ struct FAINpcVisualTestStepDiagnostic
 	FString Status;
 	FString FailureReason;
 	FString FailureCategory;
+	FString Stage;
+	FString AdapterCategory;
+	FString AdapterId;
+	FString OwnerModuleName;
+	FString ActorClass;
+	FString ActorTag;
+	FString TargetRef;
+	FString ActionName;
+	FString FieldName;
+	FString Capability;
 	FString ObservationName;
 	FString SourceKind;
 	FString SourceId;

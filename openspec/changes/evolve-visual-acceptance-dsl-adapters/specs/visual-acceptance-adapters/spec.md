@@ -36,7 +36,11 @@ Visual acceptance system MUST 支持 fixture adapters，用来创建或解析 sc
 
 #### Scenario: Phase 2.9 使用现有 project actor fixture
 - **WHEN** Phase 2.9 project scenario 通过 native class path 和 actor tag 声明 existing actor fixture
-- **THEN** fixture adapter 从 loaded map 解析 exactly one loaded actor；object reference、soft object path、Blueprint generated class path、short class name、subclass match、component tag、GameplayTag 和多策略 resolver 在 Phase 2.9 被拒绝
+- **THEN** fixture adapter 从当前 scenario world 解析 exactly one loaded、valid、non-pending-kill actor，并把它绑定为 per-run ref `fixture.actor`
+- **THEN** `actorClass` 只接受 `/Script/<Module>.<ClassName>` native class path，class lookup 不通过 load fallback 拉起资源
+- **THEN** valid-shaped native class path 如果不能解析为当前已加载 native class，必须在 `RuntimeStartup` 失败且不得进入 actor enumeration
+- **THEN** actor match 使用 exact class equality，而不是 subclass、`IsA`、`IsChildOf` 或 Blueprint generated class match
+- **THEN** object reference、soft object path、Blueprint generated class path、short class name、actor tag only、subclass match、component tag、GameplayTag、跨 map reference 和多策略 resolver 在 Phase 2.9 被拒绝
 
 ### Requirement: Character drivers 抽象项目 NPC classes
 Visual acceptance system MUST 通过 character driver interface 与 NPC character 交互，而不是要求每个项目 NPC 都继承插件 test character class。
@@ -55,6 +59,14 @@ Visual acceptance system MUST 通过 character driver interface 与 NPC characte
 
 ### Requirement: Project adapters 在 Phase 2.9 起注册时不修改 core runner
 Visual acceptance system MUST 在 Phase 2.9 起暴露最小 registry mechanism，供 project modules 注册当前已有示例和验证覆盖的 adapter category；Phase 2.9 只覆盖 fixture resolver、observation provider 和必要 action seam。event seam、character driver、其它 category 和 future domain adapter 不进入 Phase 2.9 public API。
+
+#### Scenario: Phase 2.9B public adapter categories 有窄行为 contract
+- **WHEN** project module 注册 Phase 2.9B `FixtureResolver`、`ActionAdapter` 或 `ObservationProvider`
+- **THEN** fixture resolver 实现 `FAINpcVisualFixtureResolveRequest` -> `FAINpcVisualFixtureResolveResult`，只解析当前 run/world 的 class+tag existing actor，并返回 per-run ref `fixture.actor`
+- **THEN** action adapter 实现 `FAINpcVisualActionExecuteRequest` -> `FAINpcVisualActionExecuteResult`，只使用 action name 和 resolved target actor，并返回 attempt/accepted/rejected diagnostic
+- **THEN** observation provider 实现 `FAINpcVisualObservationSampleRequest` -> `FAINpcVisualObservationSampleResult`，在 `FinalAssertion` 只使用当前 run 的 `fixture.actor` 作为 `SourceActor`，按 typed declaration 读取 runtime state，并返回 typed/sourced state-read observation
+- **THEN** exact method names, exact signatures, request/result fields and typed declaration fields follow `phase-2-9b-start-readiness.md` 的 `2.9B public API contract table`
+- **THEN** 这些接口不得暴露 result writer、mutable observation store、public character driver、Blueprint adapter type 或 UObject-owning adapter interface
 
 #### Scenario: Project adapter 被注册
 - **WHEN** project module 使用唯一 adapter id 和 category 注册 adapter
@@ -93,7 +105,32 @@ Adapters MUST 声明它们支持的 step types、action types、event payload fi
 #### Scenario: Scenario 引用 unsupported adapter capability
 - **WHEN** scenario 引用某 adapter id，但要求它执行 unsupported action type、event payload、fixture kind 或 observation name
 - **THEN** validation fail，并报告 adapter id、unsupported capability 和 test id
+- **THEN** Phase 2.9B fixture resolver validation requires descriptor capability `existingActor.classTag` for `kind: "existingActor"` during `ExtensionDeclaration`
+- **THEN** Phase 2.9B project action validation 不从 `actionName` 推导 capability，也不新增 scenario required-action-capability 字段；project observation required capability 来自 `FAINpcVisualObservationDeclaration.Capability`
 
 #### Scenario: Adapter capability 可用
 - **WHEN** scenario 引用 supported adapter capability
 - **THEN** validation 接受该 scenario 部分，且不需要为该具体行为新增 runner branch
+
+### Requirement: Phase 2.9B project action step 是固定窄入口
+Visual acceptance system MUST 支持固定 step type `project.action.execute`，用于调用 registered project action adapter；它不得扩展或复用 `action.executeLatestIntent` 的 latest-intent/SmartObject 语义。
+
+#### Scenario: Phase 2.9B project action payload
+- **WHEN** scenario step 声明 `type: "project.action.execute"`
+- **THEN** payload 只允许 `adapterId`、`actionName` 和 `targetRef: "fixture.actor"` fields；`adapterId` 由 registered descriptor category 验证，`actionName` 的业务支持由 action adapter 执行结果验证，不由 core schema hardcode
+- **THEN** runner 通过 `ActionAdapter` category 找到 adapter 并把 resolved target actor 传给 action adapter
+- **THEN** core validation 不实现 `actionName` 到 capability 的通用 matcher 或 door-specific matcher；unsupported action name 由 action adapter 在 step execution 诊断中报告
+- **THEN** action adapter success/accepted 只能记录 attempt diagnostic，不能写 final-success observation
+
+#### Scenario: Phase 2.9B door example action descriptor
+- **WHEN** Phase 2.9B test/example descriptor 声明 door action
+- **THEN** descriptor/scenario 可以使用 `adapterId: "project.door.action"`、capability `projectAction.doorInteract` 和 `actionName: "Interact"` 作为 test data
+- **THEN** `projectAction.doorInteract` 只作为 descriptor registration metadata；core parser/runner 不以这些具体字符串分支、特判或决定 schema validity
+
+#### Scenario: Phase 2.9B project action payload 使用旧 action fields
+- **WHEN** `project.action.execute` payload 包含 latest LLM intent、SmartObject rejection policy、`allowActionRejection`、`actorRef` 或其它未声明字段
+- **THEN** `SchemaParse` fail，并报告 test id、step index、adapter id 和 forbidden field
+
+#### Scenario: Phase 2.9B project action target ref 未解析
+- **WHEN** `project.action.execute.payload.targetRef` 不是 `fixture.actor`，或 fixture resolver 没有在当前 run 绑定该 ref
+- **THEN** validation/runtime fail，并报告 stage、test id、adapter id 和 target ref

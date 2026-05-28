@@ -1,9 +1,13 @@
 #include "Test/AINpcVisualTestExtension.h"
 
+#include "Test/AINpcDataDrivenVisualScenarioTest.h"
+#include "Test/AINpcTestSmartObjectActor.h"
 #include "Test/AINpcVisualTestExtensionInternal.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Engine/World.h"
+#include "EngineUtils.h"
+#include "GameFramework/Actor.h"
 #include "Misc/AutomationTest.h"
 
 namespace
@@ -24,10 +28,25 @@ namespace
 		}
 
 		int32* DestroyCount = nullptr;
+
+		FAINpcVisualActionExecuteResult ExecuteAction(const FAINpcVisualActionExecuteRequest&) override
+		{
+			FAINpcVisualActionExecuteResult Result;
+			Result.bAccepted = true;
+			Result.bSucceeded = true;
+			return Result;
+		}
 	};
 
 	struct FLifecycleFixtureAdapter : IAINpcVisualFixtureResolverAdapter
 	{
+		FAINpcVisualFixtureResolveResult ResolveFixture(const FAINpcVisualFixtureResolveRequest&) override
+		{
+			FAINpcVisualFixtureResolveResult Result;
+			Result.bSuccess = true;
+			Result.TargetRef = TEXT("fixture.actor");
+			return Result;
+		}
 	};
 
 	struct FLifecycleObservationAdapter : IAINpcVisualObservationProviderAdapter
@@ -46,6 +65,93 @@ namespace
 		}
 
 		int32* DestroyCount = nullptr;
+
+		FAINpcVisualObservationSampleResult SampleObservation(const FAINpcVisualObservationSampleRequest& Request) override
+		{
+			FAINpcVisualObservationSampleResult Result;
+			Result.bSuccess = true;
+			Result.Observation.Name = Request.ObservationName;
+			Result.Observation.ValueType = EAINpcVisualObservationValueType::Boolean;
+			Result.Observation.BoolValue = true;
+			Result.Observation.SourceKind = TEXT("observation-provider");
+			Result.Observation.SourceIdentity = TEXT("lifecycle.observation");
+			Result.Observation.SourceObjectPath = TEXT("/Temp/LifecycleActor");
+			Result.Observation.SourceClass = TEXT("AActor");
+			Result.Observation.SamplingMethod = TEXT("state-read");
+			Result.Observation.AdapterOrProviderId = Request.AdapterId.ToString();
+			return Result;
+		}
+	};
+
+	TWeakObjectPtr<AActor> GPhase29BFixtureActor;
+	TWeakObjectPtr<AActor> GPhase29BLastTarget;
+	TWeakObjectPtr<AActor> GPhase29BLastObservationSource;
+	FString GPhase29BLastActionName;
+	int32 GPhase29BActionCalls = 0;
+	int32 GPhase29BObservationCalls = 0;
+	bool GPhase29BDoorOpen = false;
+	bool GPhase29BFixtureReturnsWrongActor = false;
+	FString GPhase29BObservationSourceKind = TEXT("observation-provider");
+	FString GPhase29BObservationSamplingMethod = TEXT("state-read");
+	FString GPhase29BObservationProviderIdOverride;
+	bool GPhase29BObservationOmitsSourceObjectPath = false;
+	bool GPhase29BObservationOmitsSourceClass = false;
+	bool GPhase29BFixtureFactoryFails = false;
+	bool GPhase29BActionFactoryFails = false;
+	bool GPhase29BObservationFactoryFails = false;
+
+	struct FPhase29BFixtureAdapter : IAINpcVisualFixtureResolverAdapter
+	{
+		FAINpcVisualFixtureResolveResult ResolveFixture(const FAINpcVisualFixtureResolveRequest& Request) override
+		{
+			FAINpcVisualFixtureResolveResult Result;
+			Result.bSuccess = GPhase29BFixtureActor.IsValid() && Request.TargetRef == TEXT("fixture.actor");
+			Result.Actor = GPhase29BFixtureActor;
+			Result.TargetRef = Request.TargetRef;
+			if (GPhase29BFixtureReturnsWrongActor)
+			{
+				Result.Actor.Reset();
+			}
+			Result.Diagnostic = Result.bSuccess ? FString() : TEXT("phase29b fixture resolver rejected request");
+			return Result;
+		}
+	};
+
+	struct FPhase29BActionAdapter : IAINpcVisualActionAdapter
+	{
+		FAINpcVisualActionExecuteResult ExecuteAction(const FAINpcVisualActionExecuteRequest& Request) override
+		{
+			GPhase29BActionCalls++;
+			GPhase29BLastActionName = Request.ActionName;
+			GPhase29BLastTarget = Request.TargetActor;
+			FAINpcVisualActionExecuteResult Result;
+			Result.bAccepted = Request.ActionName == TEXT("Interact");
+			Result.bSucceeded = Result.bAccepted;
+			Result.FailureReason = Result.bAccepted ? FString() : TEXT("unsupported action");
+			return Result;
+		}
+	};
+
+	struct FPhase29BObservationAdapter : IAINpcVisualObservationProviderAdapter
+	{
+		FAINpcVisualObservationSampleResult SampleObservation(const FAINpcVisualObservationSampleRequest& Request) override
+		{
+			GPhase29BObservationCalls++;
+			GPhase29BLastObservationSource = Request.SourceActor;
+			FAINpcVisualObservationSampleResult Result;
+			Result.bSuccess = GPhase29BDoorOpen && Request.ObservationName == TEXT("project.door.isOpen") && Request.SourceActor.IsValid();
+			Result.FailureReason = Result.bSuccess ? FString() : TEXT("door observation unavailable");
+			Result.Observation.Name = Request.ObservationName;
+			Result.Observation.ValueType = EAINpcVisualObservationValueType::Boolean;
+			Result.Observation.BoolValue = GPhase29BDoorOpen;
+			Result.Observation.SourceKind = GPhase29BObservationSourceKind;
+			Result.Observation.SourceIdentity = TEXT("phase29b.observation");
+			Result.Observation.SourceObjectPath = !GPhase29BObservationOmitsSourceObjectPath && Request.SourceActor.IsValid() ? Request.SourceActor->GetPathName() : FString();
+			Result.Observation.SourceClass = !GPhase29BObservationOmitsSourceClass && Request.SourceActor.IsValid() ? Request.SourceActor->GetClass()->GetName() : FString();
+			Result.Observation.SamplingMethod = GPhase29BObservationSamplingMethod;
+			Result.Observation.AdapterOrProviderId = GPhase29BObservationProviderIdOverride.IsEmpty() ? Request.AdapterId.ToString() : GPhase29BObservationProviderIdOverride;
+			return Result;
+		}
 	};
 
 	int32 GLifecycleFactoryCalls = 0;
@@ -90,6 +196,39 @@ namespace
 		return Result;
 	}
 
+	FAINpcVisualAdapterFactoryResult MakePhase29BFixtureAdapter(const FAINpcVisualAdapterCreateContext&)
+	{
+		if (GPhase29BFixtureFactoryFails)
+		{
+			return FAINpcVisualAdapterFactoryResult::Failure(TEXT("stage=RuntimeStartup category=FixtureResolver adapter=phase29b.fixture reason=fixture factory failed"));
+		}
+		FAINpcVisualAdapterFactoryResult Result;
+		Result.Adapter = MakeShared<FPhase29BFixtureAdapter>();
+		return Result;
+	}
+
+	FAINpcVisualAdapterFactoryResult MakePhase29BActionAdapter(const FAINpcVisualAdapterCreateContext&)
+	{
+		if (GPhase29BActionFactoryFails)
+		{
+			return FAINpcVisualAdapterFactoryResult::Failure(TEXT("stage=RuntimeStartup category=ActionAdapter adapter=phase29b.action reason=action factory failed"));
+		}
+		FAINpcVisualAdapterFactoryResult Result;
+		Result.Adapter = MakeShared<FPhase29BActionAdapter>();
+		return Result;
+	}
+
+	FAINpcVisualAdapterFactoryResult MakePhase29BObservationAdapter(const FAINpcVisualAdapterCreateContext&)
+	{
+		if (GPhase29BObservationFactoryFails)
+		{
+			return FAINpcVisualAdapterFactoryResult::Failure(TEXT("stage=RuntimeStartup category=ObservationProvider adapter=phase29b.observation reason=observation factory failed"));
+		}
+		FAINpcVisualAdapterFactoryResult Result;
+		Result.Adapter = MakeShared<FPhase29BObservationAdapter>();
+		return Result;
+	}
+
 	FAINpcVisualAdapterDescriptor MakeActionDescriptor(const FName AdapterId, const FName Owner)
 	{
 		FAINpcVisualAdapterDescriptor Descriptor;
@@ -99,6 +238,19 @@ namespace
 		Descriptor.Capabilities = { TEXT("projectAction.doorInteract") };
 		Descriptor.CreateActionAdapter = &MakeLifecycleActionAdapter;
 		return Descriptor;
+	}
+
+	FAINpcVisualObservationDeclaration MakeDoorObservationDeclaration()
+	{
+		FAINpcVisualObservationDeclaration Declaration;
+		Declaration.ObservationName = TEXT("project.door.isOpen");
+		Declaration.ValueType = EAINpcVisualObservationValueType::Boolean;
+		Declaration.SourceKind = TEXT("observation-provider");
+		Declaration.SamplingMethod = TEXT("state-read");
+		Declaration.Capability = TEXT("observation.project.door.isOpen");
+		Declaration.bRequiresSourceObjectPath = true;
+		Declaration.bRequiresSourceClass = true;
+		return Declaration;
 	}
 
 	bool ContainsAll(const FString& Diagnostic, const TArray<FString>& Terms)
@@ -125,6 +277,145 @@ namespace
 		GLifecycleCapturedStoryIds.Reset();
 		GLifecycleCapturedPhaseIds.Reset();
 		GLifecycleCapturedDiagnosticSink = false;
+	}
+
+	void ResetPhase29BState()
+	{
+		GPhase29BFixtureActor.Reset();
+		GPhase29BLastTarget.Reset();
+		GPhase29BLastObservationSource.Reset();
+		GPhase29BLastActionName.Reset();
+		GPhase29BActionCalls = 0;
+		GPhase29BObservationCalls = 0;
+		GPhase29BDoorOpen = false;
+		GPhase29BFixtureReturnsWrongActor = false;
+		GPhase29BObservationSourceKind = TEXT("observation-provider");
+		GPhase29BObservationSamplingMethod = TEXT("state-read");
+		GPhase29BObservationProviderIdOverride.Reset();
+		GPhase29BObservationOmitsSourceObjectPath = false;
+		GPhase29BObservationOmitsSourceClass = false;
+		GPhase29BFixtureFactoryFails = false;
+		GPhase29BActionFactoryFails = false;
+		GPhase29BObservationFactoryFails = false;
+	}
+
+	FAINpcVisualScenarioConfig MakePhase29BScenario(const FString& ActorClassPath, const FString& ActorTag)
+	{
+		FAINpcVisualScenarioConfig Config;
+		Config.SchemaVersion = 2;
+		Config.TestId = TEXT("phase29b.runtime");
+		Config.Map = TEXT("/Game/Maps/AINpcTestMap");
+		Config.TimeoutSec = 1;
+		Config.StoryIds = { TEXT("TEST") };
+		Config.PhaseIds = { TEXT("phase2.9b") };
+		Config.Fixture.AdapterId = TEXT("phase29b.fixture");
+		Config.Fixture.Kind = TEXT("existingActor");
+		Config.Fixture.ActorClass = ActorClassPath;
+		Config.Fixture.ActorTag = ActorTag;
+		FAINpcVisualScenarioStep Step;
+		Step.Type = TEXT("project.action.execute");
+		Step.Payload.AdapterId = TEXT("phase29b.action");
+		Step.Payload.ActionName = TEXT("Interact");
+		Step.Payload.TargetRef = TEXT("fixture.actor");
+		Config.Steps.Add(Step);
+		Config.Expect.Assertion.Operator = TEXT("equals");
+		Config.Expect.Assertion.Scope = EAINpcVisualObservationScope::ScenarioHistory;
+		Config.Expect.Assertion.Observation = TEXT("project.door.isOpen");
+		Config.Expect.Assertion.bHasEqualsBool = true;
+		Config.Expect.Assertion.EqualsBool = true;
+		return Config;
+	}
+
+	void RegisterPhase29BDescriptors(FAutomationTestBase& Test, const FName Owner, const FName FixtureId, const FName ActionId, const FName ObservationId)
+	{
+		FAINpcVisualAdapterDescriptor FixtureDescriptor;
+		FixtureDescriptor.Category = EAINpcVisualAdapterCategory::FixtureResolver;
+		FixtureDescriptor.AdapterId = FixtureId;
+		FixtureDescriptor.OwnerModuleName = Owner;
+		FixtureDescriptor.Capabilities = { TEXT("existingActor.classTag") };
+		FixtureDescriptor.CreateFixtureResolver = &MakePhase29BFixtureAdapter;
+		FAINpcVisualAdapterDescriptor ActionDescriptor;
+		ActionDescriptor.Category = EAINpcVisualAdapterCategory::ActionAdapter;
+		ActionDescriptor.AdapterId = ActionId;
+		ActionDescriptor.OwnerModuleName = Owner;
+		ActionDescriptor.Capabilities = { TEXT("projectAction.doorInteract") };
+		ActionDescriptor.CreateActionAdapter = &MakePhase29BActionAdapter;
+		FAINpcVisualAdapterDescriptor ObservationDescriptor;
+		ObservationDescriptor.Category = EAINpcVisualAdapterCategory::ObservationProvider;
+		ObservationDescriptor.AdapterId = ObservationId;
+		ObservationDescriptor.OwnerModuleName = Owner;
+		ObservationDescriptor.Capabilities = { TEXT("observation.project.door.isOpen") };
+		ObservationDescriptor.ObservationDeclarations = { MakeDoorObservationDeclaration() };
+		ObservationDescriptor.CreateObservationProvider = &MakePhase29BObservationAdapter;
+		Test.TestTrue(TEXT("Phase 2.9B fixture descriptor registers."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(FixtureDescriptor).IsSuccess());
+		Test.TestTrue(TEXT("Phase 2.9B action descriptor registers."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(ActionDescriptor).IsSuccess());
+		Test.TestTrue(TEXT("Phase 2.9B observation descriptor registers."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(ObservationDescriptor).IsSuccess());
+	}
+
+	void CleanupPhase29BDescriptors(const FName Owner, const FName FixtureId, const FName ActionId, const FName ObservationId)
+	{
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::FixtureResolver, FixtureId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ActionAdapter, ActionId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ObservationProvider, ObservationId, Owner);
+	}
+
+	struct FPhase29BRunResult
+	{
+		bool bStarted = false;
+		bool bComplete = false;
+		bool bFailed = false;
+		FString StartFailure;
+		FString FailureReason;
+		TArray<FAINpcVisualTestStepDiagnostic> Diagnostics;
+	};
+
+	FString DescribeDiagnostic(const FAINpcVisualTestStepDiagnostic& Diagnostic)
+	{
+		return FString::Printf(TEXT("stage=%s category=%s adapter=%s testId=%s actorClass=%s actorTag=%s targetRef=%s actionName=%s field=%s capability=%s observation=%s sourceKind=%s sourceId=%s reason=%s"),
+			*Diagnostic.Stage,
+			*Diagnostic.AdapterCategory,
+			*Diagnostic.AdapterId,
+			*Diagnostic.TestId,
+			*Diagnostic.ActorClass,
+			*Diagnostic.ActorTag,
+			*Diagnostic.TargetRef,
+			*Diagnostic.ActionName,
+			*Diagnostic.FieldName,
+			*Diagnostic.Capability,
+			*Diagnostic.ObservationName,
+			*Diagnostic.SourceKind,
+			*Diagnostic.SourceId,
+			*Diagnostic.FailureReason);
+	}
+
+	bool HasDiagnostic(const TArray<FAINpcVisualTestStepDiagnostic>& Diagnostics, const TArray<FString>& Terms)
+	{
+		for (const FAINpcVisualTestStepDiagnostic& Diagnostic : Diagnostics)
+		{
+			if (ContainsAll(DescribeDiagnostic(Diagnostic), Terms))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	FPhase29BRunResult RunPhase29BScenario(UWorld& World, const FAINpcVisualScenarioConfig& Config)
+	{
+		FAINpcVisualTestFixture Fixture;
+		FAINpcVisualTestContext Context{ Fixture, &World, Config.TestId, TEXT("phase29b.run") };
+		FAINpcDataDrivenVisualScenarioTest Test(Context, Config);
+		FPhase29BRunResult Result;
+		Result.bStarted = Test.Start(Result.StartFailure);
+		World.GetTimerManager().Tick(3.0f);
+		Test.Poll();
+		World.GetTimerManager().Tick(0.1f);
+		Test.Poll();
+		Result.bComplete = Test.IsComplete();
+		Result.bFailed = Test.HasFailed();
+		Result.FailureReason = Test.GetFailureReason();
+		Result.Diagnostics = Test.BuildStepDiagnostics();
+		return Result;
 	}
 }
 
@@ -208,7 +499,7 @@ bool FAINpcVisualExtensionRegistryBoundaryTest::RunTest(const FString& Parameter
 	ObservationDuplicateAcrossCategory.AdapterId = DifferentCategorySameId;
 	ObservationDuplicateAcrossCategory.OwnerModuleName = OwnerA;
 	ObservationDuplicateAcrossCategory.Capabilities = { TEXT("observation.project.door.isOpen") };
-	ObservationDuplicateAcrossCategory.ObservationDeclarations = { TEXT("project.door.isOpen") };
+	ObservationDuplicateAcrossCategory.ObservationDeclarations = { MakeDoorObservationDeclaration() };
 	ObservationDuplicateAcrossCategory.CreateObservationProvider = [](const FAINpcVisualAdapterCreateContext&) { return FAINpcVisualAdapterFactoryResult::Failure(TEXT("no runtime instance in registry boundary test")); };
 	TestTrue(TEXT("Registry accepts first descriptor for cross-category duplicate check."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(FixtureDuplicateAcrossCategory).IsSuccess());
 	TestFalse(TEXT("Registry rejects same id even when category differs."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(ObservationDuplicateAcrossCategory).IsSuccess());
@@ -351,7 +642,7 @@ bool FAINpcVisualLifecycleModuleShutdownLifecycleTest::RunTest(const FString& Pa
 	ObservationDescriptor.AdapterId = ObservationId;
 	ObservationDescriptor.OwnerModuleName = Owner;
 	ObservationDescriptor.Capabilities = { TEXT("observation.project.door.isOpen") };
-	ObservationDescriptor.ObservationDeclarations = { TEXT("project.door.isOpen") };
+	ObservationDescriptor.ObservationDeclarations = { MakeDoorObservationDeclaration() };
 	ObservationDescriptor.CreateObservationProvider = &MakeLifecycleObservationAdapter;
 
 	FAINpcVisualAdapterDescriptor ActionDescriptor = MakeActionDescriptor(ActionId, Owner);
@@ -429,6 +720,165 @@ bool FAINpcVisualLifecycleModuleShutdownLifecycleTest::RunTest(const FString& Pa
 	TestTrue(TEXT("Missing action lookup diagnostic carries owner, category, adapter, test, and stage."), ContainsAll(MissingActionLookup.Diagnostic, { TEXT("stage=StepExecution"), TEXT("owner=LifecycleOwnerAllCategories"), TEXT("category=ActionAdapter"), TEXT("adapter=lifecycle.action.lifecycle"), TEXT("testId=PostShutdownRun") }));
 	View.Reset();
 	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAINpcVisualPhase29BProjectAdapterRuntimeTest,
+	"AINpc.Visual.Phase29B.ProjectAdapterRuntime",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcVisualPhase29BProjectAdapterRuntimeTest::RunTest(const FString& Parameters)
+{
+	const FName Owner(TEXT("Phase29BOwner"));
+	const FName FixtureId(TEXT("phase29b.fixture"));
+	const FName ActionId(TEXT("phase29b.action"));
+	const FName ObservationId(TEXT("phase29b.observation"));
+	CleanupPhase29BDescriptors(Owner, FixtureId, ActionId, ObservationId);
+	ResetPhase29BState();
+
+	RegisterPhase29BDescriptors(*this, Owner, FixtureId, ActionId, ObservationId);
+
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, TEXT("Phase29BProjectAdapterWorld"));
+	AActor* DoorActor = World->SpawnActor<AActor>(AActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator);
+	TestNotNull(TEXT("Focused test owns a runtime source actor."), DoorActor);
+	DoorActor->Tags.Add(FName(TEXT("Phase29BDoor")));
+	GPhase29BFixtureActor = DoorActor;
+	GPhase29BDoorOpen = true;
+
+	FAINpcVisualTestFixture Fixture;
+	FAINpcVisualTestContext Context{ Fixture, World, TEXT("phase29b.runtime"), TEXT("phase29b.run") };
+	FAINpcDataDrivenVisualScenarioTest Test(Context, MakePhase29BScenario(TEXT("/Script/Engine.Actor"), TEXT("Phase29BDoor")));
+	FString FailureReason;
+	TestTrue(TEXT("Phase 2.9B project scenario starts with exact class/tag fixture."), Test.Start(FailureReason));
+	TestTrue(TEXT("No startup failure is reported."), FailureReason.IsEmpty());
+	World->GetTimerManager().Tick(3.0f);
+	Test.Poll();
+	TestTrue(TEXT("Project action adapter is invoked exactly once."), GPhase29BActionCalls == 1);
+	TestEqual(TEXT("Action request carries actionName without core capability matching."), GPhase29BLastActionName, FString(TEXT("Interact")));
+	TestEqual(TEXT("Action request receives fixture.actor target."), GPhase29BLastTarget.Get(), DoorActor);
+	Test.Poll();
+	TestTrue(TEXT("Final assertion completes after provider state-read observation."), Test.IsComplete());
+	TestFalse(TEXT("Project scenario does not fail after state-read observation."), Test.HasFailed());
+	TestEqual(TEXT("Observation provider is sampled once."), GPhase29BObservationCalls, 1);
+	TestEqual(TEXT("Observation provider receives fixture.actor as source."), GPhase29BLastObservationSource.Get(), DoorActor);
+	const FAINpcVisualTestObservations Observations = Test.BuildObservations();
+	TestEqual(TEXT("Project observation is recorded as boolean true."), Observations.BooleanFields.FindRef(TEXT("project.door.isOpen")), true);
+
+	World->DestroyWorld(false);
+	CleanupPhase29BDescriptors(Owner, FixtureId, ActionId, ObservationId);
+	ResetPhase29BState();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAINpcVisualPhase29BRuntimeNegativeMatrixTest,
+	"AINpc.Visual.Phase29B.RuntimeNegativeMatrix",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcVisualPhase29BRuntimeNegativeMatrixTest::RunTest(const FString& Parameters)
+{
+	const FName Owner(TEXT("Phase29BNegativeOwner"));
+	const FName FixtureId(TEXT("phase29b.fixture"));
+	const FName ActionId(TEXT("phase29b.action"));
+	const FName ObservationId(TEXT("phase29b.observation"));
+	CleanupPhase29BDescriptors(Owner, FixtureId, ActionId, ObservationId);
+	RegisterPhase29BDescriptors(*this, Owner, FixtureId, ActionId, ObservationId);
+
+	auto RunCase = [this](const TCHAR* CaseName, TFunction<void(UWorld&, FAINpcVisualScenarioConfig&)> Mutate, const TArray<FString>& ExpectedTerms)
+	{
+		ResetPhase29BState();
+		UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, CaseName);
+		AActor* DoorActor = World->SpawnActor<AActor>(AActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator);
+		DoorActor->Tags.Add(FName(TEXT("Phase29BDoor")));
+		GPhase29BFixtureActor = DoorActor;
+		GPhase29BDoorOpen = true;
+		FAINpcVisualScenarioConfig Config = MakePhase29BScenario(TEXT("/Script/Engine.Actor"), TEXT("Phase29BDoor"));
+		Config.TestId = CaseName;
+		Mutate(*World, Config);
+		const FPhase29BRunResult Result = RunPhase29BScenario(*World, Config);
+		TestTrue(FString(CaseName) + TEXT(" fails as a negative row."), !Result.bStarted || Result.bFailed);
+		TestTrue(FString(CaseName) + TEXT(" carries expected stage diagnostics."), HasDiagnostic(Result.Diagnostics, ExpectedTerms) || ContainsAll(Result.StartFailure + Result.FailureReason, ExpectedTerms));
+		World->DestroyWorld(false);
+		ResetPhase29BState();
+	};
+	auto RunCaseWithDescriptorSetup = [this, Owner, FixtureId, ActionId, ObservationId, &RunCase](const TCHAR* CaseName, TFunction<void(UWorld&, FAINpcVisualScenarioConfig&)> Mutate, const TArray<FString>& ExpectedTerms)
+	{
+		CleanupPhase29BDescriptors(Owner, FixtureId, ActionId, ObservationId);
+		RegisterPhase29BDescriptors(*this, Owner, FixtureId, ActionId, ObservationId);
+		RunCase(CaseName, MoveTemp(Mutate), ExpectedTerms);
+	};
+
+	RunCase(TEXT("P29B-FIXTURE-004"),
+		[](UWorld&, FAINpcVisualScenarioConfig& Config) { Config.Fixture.ActorTag = TEXT("MissingDoor"); },
+		{ TEXT("stage=RuntimeStartup"), TEXT("category=FixtureResolver"), TEXT("actorClass=/Script/Engine.Actor"), TEXT("actorTag=MissingDoor") });
+	RunCase(TEXT("P29B-FIXTURE-005"),
+		[](UWorld& World, FAINpcVisualScenarioConfig&) { AActor* Duplicate = World.SpawnActor<AActor>(AActor::StaticClass(), FVector(10, 0, 0), FRotator::ZeroRotator); Duplicate->Tags.Add(FName(TEXT("Phase29BDoor"))); },
+		{ TEXT("stage=RuntimeStartup"), TEXT("expected exactly one matching actor but found 2") });
+	RunCase(TEXT("P29B-FIXTURE-006"),
+		[](UWorld& World, FAINpcVisualScenarioConfig& Config)
+		{
+			for (TActorIterator<AActor> It(&World); It; ++It) { It->Tags.Reset(); }
+			AActor* SubclassActor = World.SpawnActor<AAINpcTestSmartObjectActor>(AAINpcTestSmartObjectActor::StaticClass(), FVector(20, 0, 0), FRotator::ZeroRotator);
+			check(SubclassActor);
+			SubclassActor->Tags.Add(FName(TEXT("Phase29BDoor")));
+			Config.Fixture.ActorClass = TEXT("/Script/Engine.Actor");
+		},
+		{ TEXT("stage=RuntimeStartup"), TEXT("expected exactly one matching actor but found 0") });
+	RunCase(TEXT("P29B-FIXTURE-009"),
+		[](UWorld& World, FAINpcVisualScenarioConfig&)
+		{
+			for (TActorIterator<AActor> It(&World); It; ++It) { It->Destroy(); }
+		},
+		{ TEXT("stage=RuntimeStartup"), TEXT("actorClass=/Script/Engine.Actor"), TEXT("actorTag=Phase29BDoor"), TEXT("expected exactly one matching actor but found 0") });
+	RunCase(TEXT("P29B-FIXTURE-010"),
+		[](UWorld&, FAINpcVisualScenarioConfig& Config) { Config.Fixture.ActorClass = TEXT("/Script/Engine.AINpcMissingNativeClass"); },
+		{ TEXT("stage=RuntimeStartup"), TEXT("actorClass=/Script/Engine.AINpcMissingNativeClass"), TEXT("native class is not loaded") });
+	RunCase(TEXT("P29B-FIXTURE-001-wrong-adapter-return"),
+		[](UWorld&, FAINpcVisualScenarioConfig&) { GPhase29BFixtureReturnsWrongActor = true; },
+		{ TEXT("stage=RuntimeStartup"), TEXT("field=targetRef"), TEXT("targetRef=fixture.actor") });
+	RunCaseWithDescriptorSetup(TEXT("P29B-LIFECYCLE-001-fixture-factory"),
+		[](UWorld&, FAINpcVisualScenarioConfig&) { GPhase29BFixtureFactoryFails = true; },
+		{ TEXT("stage=RuntimeStartup"), TEXT("category=FixtureResolver"), TEXT("adapter=phase29b.fixture"), TEXT("fixture factory failed") });
+	RunCaseWithDescriptorSetup(TEXT("P29B-LIFECYCLE-001-fixture-owner"),
+		[Owner, FixtureId](UWorld&, FAINpcVisualScenarioConfig&) { FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::FixtureResolver, FixtureId, Owner); },
+		{ TEXT("stage=RuntimeStartup"), TEXT("category=FixtureResolver"), TEXT("adapter=phase29b.fixture") });
+	RunCaseWithDescriptorSetup(TEXT("P29B-LIFECYCLE-002-action-factory"),
+		[](UWorld&, FAINpcVisualScenarioConfig&) { GPhase29BActionFactoryFails = true; },
+		{ TEXT("stage=RuntimeStartup"), TEXT("category=ActionAdapter"), TEXT("adapter=phase29b.action"), TEXT("action factory failed") });
+	RunCaseWithDescriptorSetup(TEXT("P29B-LIFECYCLE-002-action-owner"),
+		[Owner, ActionId](UWorld&, FAINpcVisualScenarioConfig&) { FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ActionAdapter, ActionId, Owner); },
+		{ TEXT("stage=StepExecution"), TEXT("category=ActionAdapter"), TEXT("adapter=phase29b.action") });
+	RunCaseWithDescriptorSetup(TEXT("P29B-LIFECYCLE-003-observation-factory"),
+		[](UWorld&, FAINpcVisualScenarioConfig&) { GPhase29BObservationFactoryFails = true; },
+		{ TEXT("stage=RuntimeStartup"), TEXT("category=ObservationProvider"), TEXT("adapter=phase29b.observation"), TEXT("observation factory failed") });
+	RunCaseWithDescriptorSetup(TEXT("P29B-LIFECYCLE-003-observation-owner"),
+		[this, Owner, ObservationId](UWorld&, FAINpcVisualScenarioConfig&)
+		{
+			TestTrue(TEXT("P29B-LIFECYCLE-003 can mark observation owner unavailable before startup."),
+				AINpc::Visual::TestInternal::SetRegisteredAdapterOwnerAvailabilityForTest(EAINpcVisualAdapterCategory::ObservationProvider, ObservationId, Owner, false));
+		},
+		{ TEXT("stage=RuntimeStartup"), TEXT("category=ObservationProvider"), TEXT("adapter=phase29b.observation"), TEXT("owner unavailable") });
+	CleanupPhase29BDescriptors(Owner, FixtureId, ActionId, ObservationId);
+	RegisterPhase29BDescriptors(*this, Owner, FixtureId, ActionId, ObservationId);
+	RunCase(TEXT("P29B-ACTION-007"),
+		[](UWorld&, FAINpcVisualScenarioConfig& Config) { Config.Steps[0].Payload.ActionName = TEXT("Kick"); },
+		{ TEXT("stage=StepExecution"), TEXT("adapter=phase29b.action"), TEXT("actionName=Kick"), TEXT("targetRef=fixture.actor") });
+	RunCase(TEXT("P29B-ACTION-004"),
+		[](UWorld&, FAINpcVisualScenarioConfig&) { GPhase29BDoorOpen = false; },
+		{ TEXT("stage=FinalAssertion"), TEXT("FailureCategory=project-observation-sample"), TEXT("Observation=project.door.isOpen") });
+	for (const TPair<FString, TFunction<void()>> MetadataCase : {
+		TPair<FString, TFunction<void()>>(TEXT("source-kind"), []() { GPhase29BObservationSourceKind = TEXT("action-adapter"); }),
+		TPair<FString, TFunction<void()>>(TEXT("sampling"), []() { GPhase29BObservationSamplingMethod = TEXT("action-execution"); }),
+		TPair<FString, TFunction<void()>>(TEXT("provider-id"), []() { GPhase29BObservationProviderIdOverride = TEXT("wrong.provider"); }),
+		TPair<FString, TFunction<void()>>(TEXT("source-object"), []() { GPhase29BObservationOmitsSourceObjectPath = true; }),
+		TPair<FString, TFunction<void()>>(TEXT("source-class"), []() { GPhase29BObservationOmitsSourceClass = true; })
+	})
+	{
+		RunCase(*FString::Printf(TEXT("P29B-OBS-008-%s"), *MetadataCase.Key),
+			[&MetadataCase](UWorld&, FAINpcVisualScenarioConfig&) { MetadataCase.Value(); },
+			{ TEXT("stage=FinalAssertion"), TEXT("FailureCategory=project-observation-metadata"), TEXT("Observation=project.door.isOpen") });
+	}
+
+	CleanupPhase29BDescriptors(Owner, FixtureId, ActionId, ObservationId);
 	return true;
 }
 

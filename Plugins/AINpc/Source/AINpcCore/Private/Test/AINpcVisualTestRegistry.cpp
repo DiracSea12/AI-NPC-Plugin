@@ -10,6 +10,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Test/AINpcDataDrivenVisualScenarioTest.h"
 #include "AINpcVisualInternalAdapters.h"
+#include "Test/AINpcVisualTestExtensionInternal.h"
 #include "Test/AINpcTestCharacter.h"
 #include "Test/AINpcTestSmartObjectActor.h"
 
@@ -26,8 +27,11 @@ namespace
 		TEXT("requiredObservations"), TEXT("allowedTerminalOutcomes"), TEXT("script")
 	};
 	const TSet<FString> GSupportedStepTypes = {
-		TEXT("dialogue.start"), TEXT("world.event"), TEXT("wait.until"), TEXT("action.executeLatestIntent"), TEXT("observe.hold")
+		TEXT("dialogue.start"), TEXT("world.event"), TEXT("wait.until"), TEXT("action.executeLatestIntent"), TEXT("project.action.execute"), TEXT("observe.hold")
 	};
+	const TCHAR* ProjectFixtureKind = TEXT("existingActor");
+	const TCHAR* ExistingActorCapability = TEXT("existingActor.classTag");
+	const TCHAR* FixtureActorRef = TEXT("fixture.actor");
 
 	bool IsKnownVisualObservationName(const FString& Name)
 	{
@@ -42,6 +46,48 @@ namespace
 		};
 		return KnownNames.Contains(Name);
 	}
+
+	bool IsProjectObservationNameShape(const FString& Name)
+	{
+		TArray<FString> Parts;
+		Name.ParseIntoArray(Parts, TEXT("."), false);
+		return Parts.Num() >= 3 && Parts[0] == TEXT("project") && !Parts[1].IsEmpty() && !Parts[2].IsEmpty();
+	}
+
+	bool IsRecognizedObservationReference(const FString& Name)
+	{
+		return IsKnownVisualObservationName(Name) || IsProjectObservationNameShape(Name);
+	}
+
+	bool IsNativeClassPathShape(const FString& Value)
+	{
+		if (!Value.StartsWith(TEXT("/Script/")) || Value.Contains(TEXT("'")) || Value.Contains(TEXT("_C")) || Value.Contains(TEXT(":")) || Value.Contains(TEXT("/Game/")))
+		{
+			return false;
+		}
+		const FString Remainder = Value.RightChop(8);
+		FString ModuleName;
+		FString ClassName;
+		if (!Remainder.Split(TEXT("."), &ModuleName, &ClassName))
+		{
+			return false;
+		}
+		return !ModuleName.IsEmpty() && !ClassName.IsEmpty() && !ClassName.Contains(TEXT("."));
+	}
+
+#if WITH_DEV_AUTOMATION_TESTS
+	bool ContainsAll(const FString& Diagnostic, const TArray<FString>& Terms)
+	{
+		for (const FString& Term : Terms)
+		{
+			if (!Diagnostic.Contains(Term))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+#endif
 
 	bool SupportsNotExistsWindowAbsenceProof(const FString& Name)
 	{
@@ -207,7 +253,7 @@ namespace
 				OutError = FString::Printf(TEXT("scenario '%s' %s exists assertion has empty observation"), *ScenarioName(TestId), *Context);
 				return false;
 			}
-			if (!IsKnownVisualObservationName(ExistsObservation))
+			if (!IsRecognizedObservationReference(ExistsObservation))
 			{
 				OutError = FString::Printf(TEXT("scenario '%s' %s exists assertion references unknown observation '%s'"), *ScenarioName(TestId), *Context, *ExistsObservation);
 				return false;
@@ -226,7 +272,7 @@ namespace
 				OutError = FString::Printf(TEXT("scenario '%s' %s notExists assertion has empty observation"), *ScenarioName(TestId), *Context);
 				return false;
 			}
-			if (!IsKnownVisualObservationName(NotExistsObservation))
+			if (!IsRecognizedObservationReference(NotExistsObservation))
 			{
 				OutError = FString::Printf(TEXT("scenario '%s' %s notExists assertion references unknown observation '%s'"), *ScenarioName(TestId), *Context, *NotExistsObservation);
 				return false;
@@ -248,7 +294,7 @@ namespace
 			if (!RejectUnknownFields(**EqualsObject, TestId, EqualsFields, Context + TEXT(".equals"), OutError)) { return false; }
 			if (!RequireStringField(**EqualsObject, TestId, TEXT("observation"), OutAssertion.Observation, OutError)) { return false; }
 				if (!ParseAssertionScope(**EqualsObject, TestId, Context + TEXT(".equals"), OutAssertion, OutError)) { return false; }
-			if (!IsKnownVisualObservationName(OutAssertion.Observation))
+			if (!IsRecognizedObservationReference(OutAssertion.Observation))
 			{
 				OutError = FString::Printf(TEXT("scenario '%s' %s equals assertion references unknown observation '%s'"), *ScenarioName(TestId), *Context, *OutAssertion.Observation);
 				return false;
@@ -302,6 +348,103 @@ namespace
 			}
 		}
 		return true;
+	}
+
+	bool ForEachProjectObservation(const FAINpcVisualScenarioAssertion& Assertion, TFunctionRef<bool(const FString&)> Visit)
+	{
+		if (!Assertion.Observation.IsEmpty() && IsProjectObservationNameShape(Assertion.Observation))
+		{
+			if (!Visit(Assertion.Observation))
+			{
+				return false;
+			}
+		}
+		for (const FAINpcVisualScenarioAssertion& Child : Assertion.Children)
+		{
+			if (!ForEachProjectObservation(Child, Visit))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool ValidateExtensionDeclarations(const FAINpcVisualScenarioConfig& Config, FString& OutError)
+	{
+		using namespace AINpc::Visual::TestInternal;
+		if (Config.Fixture.Kind == ProjectFixtureKind)
+		{
+			const FVisualAdapterDescriptorValidationResult FixtureDescriptor = FindRegisteredAdapterDescriptor(EAINpcVisualAdapterCategory::FixtureResolver, FName(*Config.Fixture.AdapterId), TEXT("ExtensionDeclaration"), Config.TestId);
+			if (!FixtureDescriptor.IsSuccess())
+			{
+				OutError = FixtureDescriptor.Diagnostic;
+				return false;
+			}
+			if (!FixtureDescriptor.Descriptor.Capabilities.Contains(ExistingActorCapability))
+			{
+				OutError = FString::Printf(TEXT("stage=ExtensionDeclaration testId=%s category=%s adapter=%s field=fixture.kind capability=%s reason=fixture resolver descriptor lacks existing actor capability"),
+					*Config.TestId,
+					*LexToString(EAINpcVisualAdapterCategory::FixtureResolver),
+					*Config.Fixture.AdapterId,
+					ExistingActorCapability);
+				return false;
+			}
+		}
+
+		for (const FAINpcVisualScenarioStep& Step : Config.Steps)
+		{
+			if (Step.Type != TEXT("project.action.execute"))
+			{
+				continue;
+			}
+			const FVisualAdapterDescriptorValidationResult ActionDescriptor = FindRegisteredAdapterDescriptor(EAINpcVisualAdapterCategory::ActionAdapter, FName(*Step.Payload.AdapterId), TEXT("ExtensionDeclaration"), Config.TestId);
+			if (!ActionDescriptor.IsSuccess())
+			{
+				OutError = ActionDescriptor.Diagnostic;
+				return false;
+			}
+		}
+
+		return ForEachProjectObservation(Config.Expect.Assertion, [&OutError, &Config](const FString& ObservationName)
+		{
+			using namespace AINpc::Visual::TestInternal;
+			FAINpcVisualObservationDeclaration Declaration;
+			const FVisualAdapterDescriptorValidationResult ProviderDescriptor = FindObservationProviderDeclaration(ObservationName, Declaration, TEXT("ExtensionDeclaration"), Config.TestId);
+			if (!ProviderDescriptor.IsSuccess())
+			{
+				OutError = ProviderDescriptor.Diagnostic;
+				return false;
+			}
+			if (Declaration.Capability.IsEmpty() || !ProviderDescriptor.Descriptor.Capabilities.Contains(Declaration.Capability))
+			{
+				OutError = FString::Printf(TEXT("stage=ExtensionDeclaration testId=%s category=%s adapter=%s observation=%s capability=%s reason=observation declaration capability is missing from descriptor capabilities"),
+					*Config.TestId,
+					*LexToString(EAINpcVisualAdapterCategory::ObservationProvider),
+					*ProviderDescriptor.Descriptor.AdapterId.ToString(),
+					*ObservationName,
+					*Declaration.Capability);
+				return false;
+			}
+			if (Declaration.ValueType != EAINpcVisualObservationValueType::Boolean)
+			{
+				OutError = FString::Printf(TEXT("stage=ExtensionDeclaration testId=%s category=%s adapter=%s observation=%s reason=project observation declaration requires boolean value type"),
+					*Config.TestId,
+					*LexToString(EAINpcVisualAdapterCategory::ObservationProvider),
+					*ProviderDescriptor.Descriptor.AdapterId.ToString(),
+					*ObservationName);
+				return false;
+			}
+			if (Declaration.SourceKind != TEXT("observation-provider") || Declaration.SamplingMethod != TEXT("state-read") || !Declaration.bRequiresSourceObjectPath || !Declaration.bRequiresSourceClass)
+			{
+				OutError = FString::Printf(TEXT("stage=ExtensionDeclaration testId=%s category=%s adapter=%s observation=%s reason=observation declaration lacks required state-read source metadata"),
+					*Config.TestId,
+					*LexToString(EAINpcVisualAdapterCategory::ObservationProvider),
+					*ProviderDescriptor.Descriptor.AdapterId.ToString(),
+					*ObservationName);
+				return false;
+			}
+			return true;
+		});
 	}
 
 	bool ValidatePromptVariables(const FAINpcVisualScenarioConfig& Config, FString& OutError)
@@ -367,11 +510,21 @@ namespace
 		const TSharedPtr<FJsonObject>* FixtureObject = nullptr;
 		if (!JsonObject.TryGetObjectField(TEXT("fixture"), FixtureObject) || !FixtureObject || !FixtureObject->IsValid()) { OutError = FString::Printf(TEXT("scenario '%s' field 'fixture' must be an object"), *OutConfig.TestId); return false; }
 			if ((*FixtureObject)->HasField(TEXT("type"))) { OutError = FString::Printf(TEXT("scenario '%s' field 'fixture.type' is rejected; use fixture.adapterId and fixture.kind"), *OutConfig.TestId); return false; }
-			if (!RejectUnknownFields(**FixtureObject, OutConfig.TestId, { TEXT("adapterId"), TEXT("kind") }, TEXT("fixture"), OutError)) { return false; }
+			if (!RejectUnknownFields(**FixtureObject, OutConfig.TestId, { TEXT("adapterId"), TEXT("kind"), TEXT("actorClass"), TEXT("actorTag") }, TEXT("fixture"), OutError)) { return false; }
 			if (!RequireStringField(**FixtureObject, OutConfig.TestId, TEXT("adapterId"), OutConfig.Fixture.AdapterId, OutError)) { return false; }
 			if (!RequireStringField(**FixtureObject, OutConfig.TestId, TEXT("kind"), OutConfig.Fixture.Kind, OutError)) { return false; }
-			if (OutConfig.Fixture.AdapterId != AINpcVisualInternalAdapters::CharacterFixtureAdapterId()) { OutError = FString::Printf(TEXT("scenario '%s' field 'fixture.adapterId' has unsupported value '%s'"), *OutConfig.TestId, *OutConfig.Fixture.AdapterId); return false; }
-			if (OutConfig.Fixture.Kind != TEXT("character") && OutConfig.Fixture.Kind != TEXT("characterWithSmartObject")) { OutError = FString::Printf(TEXT("scenario '%s' field 'fixture.kind' has unsupported value '%s'"), *OutConfig.TestId, *OutConfig.Fixture.Kind); return false; }
+			if (OutConfig.Fixture.Kind == ProjectFixtureKind)
+			{
+				if (!RequireStringField(**FixtureObject, OutConfig.TestId, TEXT("actorClass"), OutConfig.Fixture.ActorClass, OutError)) { return false; }
+				if (!RequireStringField(**FixtureObject, OutConfig.TestId, TEXT("actorTag"), OutConfig.Fixture.ActorTag, OutError)) { return false; }
+				if (!IsNativeClassPathShape(OutConfig.Fixture.ActorClass)) { OutError = FString::Printf(TEXT("scenario '%s' field 'fixture.actorClass' must be a native class path like /Script/Module.ClassName"), *OutConfig.TestId); return false; }
+			}
+			else
+			{
+				if (OutConfig.Fixture.AdapterId != AINpcVisualInternalAdapters::CharacterFixtureAdapterId()) { OutError = FString::Printf(TEXT("scenario '%s' field 'fixture.adapterId' has unsupported value '%s'"), *OutConfig.TestId, *OutConfig.Fixture.AdapterId); return false; }
+				if (OutConfig.Fixture.Kind != TEXT("character") && OutConfig.Fixture.Kind != TEXT("characterWithSmartObject")) { OutError = FString::Printf(TEXT("scenario '%s' field 'fixture.kind' has unsupported value '%s'"), *OutConfig.TestId, *OutConfig.Fixture.Kind); return false; }
+				if ((*FixtureObject)->HasField(TEXT("actorClass")) || (*FixtureObject)->HasField(TEXT("actorTag"))) { OutError = FString::Printf(TEXT("scenario '%s' fixture actorClass/actorTag only apply to existingActor fixtures"), *OutConfig.TestId); return false; }
+			}
 
 		const TSharedPtr<FJsonObject>* PersonaObject = nullptr;
 		if (!JsonObject.TryGetObjectField(TEXT("persona"), PersonaObject) || !PersonaObject || !PersonaObject->IsValid()) { OutError = FString::Printf(TEXT("scenario '%s' field 'persona' must be an object"), *OutConfig.TestId); return false; }
@@ -456,6 +609,18 @@ namespace
 					if (Step.Payload.ActorRef != TEXT("fixture.npc")) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.actorRef has unsupported value '%s'"), *OutConfig.TestId, StepIndex, *Step.Payload.ActorRef); return false; }
 					if (!(*PayloadObject)->TryGetBoolField(TEXT("allowActionRejection"), Step.Payload.bAllowActionRejection)) { OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.allowActionRejection must be boolean"), *OutConfig.TestId, StepIndex); return false; }
 				}
+			else if (Step.Type == TEXT("project.action.execute"))
+			{
+				if (!RejectUnknownFields(**PayloadObject, OutConfig.TestId, { TEXT("adapterId"), TEXT("actionName"), TEXT("targetRef") }, FString::Printf(TEXT("step[%d].payload"), StepIndex), OutError)) { return false; }
+				if (!RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("adapterId"), Step.Payload.AdapterId, OutError)) { return false; }
+				if (!RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("actionName"), Step.Payload.ActionName, OutError)) { return false; }
+				if (!RequireStringField(**PayloadObject, OutConfig.TestId, TEXT("targetRef"), Step.Payload.TargetRef, OutError)) { return false; }
+				if (Step.Payload.TargetRef != FixtureActorRef)
+				{
+					OutError = FString::Printf(TEXT("scenario '%s' step[%d].payload.targetRef must be fixture.actor"), *OutConfig.TestId, StepIndex);
+					return false;
+				}
+			}
 			else if (Step.Type == TEXT("observe.hold"))
 			{
 				if (!RejectUnknownFields(**PayloadObject, OutConfig.TestId, { TEXT("observation"), TEXT("durationSec") }, FString::Printf(TEXT("step[%d].payload"), StepIndex), OutError)) { return false; }
@@ -473,12 +638,12 @@ namespace
 		if (!JsonObject.TryGetObjectField(TEXT("expect"), ExpectObject) || !ExpectObject || !ExpectObject->IsValid()) { OutError = FString::Printf(TEXT("scenario '%s' field 'expect' must be an object"), *OutConfig.TestId); return false; }
 		if (!ParseAssertion(*ExpectObject, OutConfig.TestId, TEXT("expect"), OutConfig.Expect.Assertion, OutError)) { return false; }
 		if (!ValidateFinalExpectDoesNotUseActionAdapterFacts(OutConfig.Expect.Assertion, OutConfig.TestId, OutError)) { return false; }
+		if (!ValidateExtensionDeclarations(OutConfig, OutError)) { return false; }
 		return true;
 	}
 
 	TUniquePtr<IAINpcVisualTest> CreateDataDrivenScenarioTest(FAINpcVisualTestContext& Context)
 	{
-		if (!Context.Fixture.Npc) { return nullptr; }
 		for (const FAINpcVisualTestDescriptor& Descriptor : FAINpcVisualTestRegistry::GetDescriptors())
 		{
 			if (Descriptor.TestId == Context.TestId && Descriptor.ScenarioConfig.IsSet())
@@ -658,6 +823,237 @@ bool FAINpcVisualScenarioParserBoundaryTest::RunTest(const FString& Parameters)
 		TEXT("legacy top-level event field"), TEXT("legacy field 'eventTriggerId'"));
 	ExpectScenarioFailure(BaseScenario.Replace(TEXT("\"testId\": \"phase28c.parser-boundary\""), TEXT("\"testId\": \"phase28c.parser-boundary\", \"allowActionRejection\": true")),
 		TEXT("legacy top-level action field"), TEXT("legacy field 'allowActionRejection'"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAINpcVisualPhase29BParserDeclarationMatrixTest,
+	"AINpc.Visual.Phase29B.ParserDeclarationMatrix",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAINpcVisualPhase29BParserDeclarationMatrixTest::RunTest(const FString& Parameters)
+{
+	const FName Owner(TEXT("Phase29BParserOwner"));
+	const FName FixtureId(TEXT("phase29b.parser.fixture"));
+	const FName FixtureNoCapId(TEXT("phase29b.parser.fixtureNoCap"));
+	const FName ActionId(TEXT("phase29b.parser.action"));
+	const FName ObservationId(TEXT("phase29b.parser.observation"));
+	const FName BadObservationId(TEXT("phase29b.parser.badObservation"));
+	const FName CapabilityNameObservationId(TEXT("phase29b.parser.capabilityNameObservation"));
+	const FName WrongCategoryObservationId(TEXT("phase29b.parser.wrongCategoryObservation"));
+	const FName EmptyObservationNameId(TEXT("phase29b.parser.emptyObservationName"));
+	const FName EmptySourceKindId(TEXT("phase29b.parser.emptySourceKind"));
+	const FName EmptySamplingMethodId(TEXT("phase29b.parser.emptySamplingMethod"));
+	const FName EmptyObservationCapabilityId(TEXT("phase29b.parser.emptyObservationCapability"));
+	const FName BadValueTypeId(TEXT("phase29b.parser.badValueType"));
+	const FName BadSourceKindId(TEXT("phase29b.parser.badSourceKind"));
+	const FName BadSamplingMethodId(TEXT("phase29b.parser.badSamplingMethod"));
+	const FName MissingSourceObjectId(TEXT("phase29b.parser.missingSourceObject"));
+	const FName MissingSourceClassId(TEXT("phase29b.parser.missingSourceClass"));
+	auto Cleanup = [&]()
+	{
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::FixtureResolver, FixtureId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::FixtureResolver, FixtureNoCapId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ActionAdapter, ActionId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ActionAdapter, WrongCategoryObservationId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ObservationProvider, ObservationId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ObservationProvider, BadObservationId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ObservationProvider, CapabilityNameObservationId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ObservationProvider, EmptyObservationNameId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ObservationProvider, EmptySourceKindId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ObservationProvider, EmptySamplingMethodId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ObservationProvider, EmptyObservationCapabilityId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ObservationProvider, BadValueTypeId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ObservationProvider, BadSourceKindId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ObservationProvider, BadSamplingMethodId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ObservationProvider, MissingSourceObjectId, Owner);
+		FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ObservationProvider, MissingSourceClassId, Owner);
+	};
+	Cleanup();
+
+	FAINpcVisualAdapterDescriptor FixtureDescriptor;
+	FixtureDescriptor.Category = EAINpcVisualAdapterCategory::FixtureResolver;
+	FixtureDescriptor.AdapterId = FixtureId;
+	FixtureDescriptor.OwnerModuleName = Owner;
+	FixtureDescriptor.Capabilities = { TEXT("existingActor.classTag") };
+	FixtureDescriptor.CreateFixtureResolver = [](const FAINpcVisualAdapterCreateContext&) { return FAINpcVisualAdapterFactoryResult::Failure(TEXT("parser-only fixture")); };
+	FAINpcVisualAdapterDescriptor FixtureNoCapDescriptor = FixtureDescriptor;
+	FixtureNoCapDescriptor.AdapterId = FixtureNoCapId;
+	FixtureNoCapDescriptor.Capabilities = { TEXT("unrelated.fixture") };
+	FAINpcVisualAdapterDescriptor ActionDescriptor;
+	ActionDescriptor.Category = EAINpcVisualAdapterCategory::ActionAdapter;
+	ActionDescriptor.AdapterId = ActionId;
+	ActionDescriptor.OwnerModuleName = Owner;
+	ActionDescriptor.Capabilities = { TEXT("projectAction.doorInteract") };
+	ActionDescriptor.CreateActionAdapter = [](const FAINpcVisualAdapterCreateContext&) { return FAINpcVisualAdapterFactoryResult::Failure(TEXT("parser-only action")); };
+	FAINpcVisualObservationDeclaration Declaration;
+	Declaration.ObservationName = TEXT("project.door.isOpen");
+	Declaration.ValueType = EAINpcVisualObservationValueType::Boolean;
+	Declaration.SourceKind = TEXT("observation-provider");
+	Declaration.SamplingMethod = TEXT("state-read");
+	Declaration.Capability = TEXT("observation.project.door.isOpen");
+	Declaration.bRequiresSourceObjectPath = true;
+	Declaration.bRequiresSourceClass = true;
+	FAINpcVisualAdapterDescriptor ObservationDescriptor;
+	ObservationDescriptor.Category = EAINpcVisualAdapterCategory::ObservationProvider;
+	ObservationDescriptor.AdapterId = ObservationId;
+	ObservationDescriptor.OwnerModuleName = Owner;
+	ObservationDescriptor.Capabilities = { TEXT("observation.project.door.isOpen") };
+	ObservationDescriptor.ObservationDeclarations = { Declaration };
+	ObservationDescriptor.CreateObservationProvider = [](const FAINpcVisualAdapterCreateContext&) { return FAINpcVisualAdapterFactoryResult::Failure(TEXT("parser-only observation")); };
+	TestTrue(TEXT("Phase 2.9B parser fixture descriptor registers."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(FixtureDescriptor).IsSuccess());
+	TestTrue(TEXT("Phase 2.9B parser fixture missing-capability descriptor registers."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(FixtureNoCapDescriptor).IsSuccess());
+	TestTrue(TEXT("Phase 2.9B parser action descriptor registers."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(ActionDescriptor).IsSuccess());
+	TestTrue(TEXT("Phase 2.9B parser observation descriptor registers."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(ObservationDescriptor).IsSuccess());
+
+	const FString BaseScenario = TEXT(R"JSON({
+		"schemaVersion": 2,
+		"testId": "phase29b.parser",
+		"map": "/Game/Maps/AINpcTestMap",
+		"timeoutSec": 1,
+		"storyIds": ["TEST"],
+		"phaseIds": ["phase2.9b"],
+		"fixture": { "adapterId": "phase29b.parser.fixture", "kind": "existingActor", "actorClass": "/Script/Engine.Actor", "actorTag": "Phase29BDoor" },
+		"persona": { "file": "AINpcVisualHarnessPhase27Persona.txt", "delayFillerFile": "AINpcVisualHarnessDelayFiller.txt", "delayFillerThreshold": 0.0 },
+		"prompt": { "file": "AINpcVisualHarnessPhase27Prompt.txt", "variables": { "SmartObjectTargetId": "runtime.smartObjectTargetId" } },
+		"steps": [{ "type": "project.action.execute", "payload": { "adapterId": "phase29b.parser.action", "actionName": "Interact", "targetRef": "fixture.actor" } }],
+		"expect": { "equals": { "observation": "project.door.isOpen", "value": true } }
+	})JSON");
+
+	auto ParseScenarioText = [](const FString& ScenarioText, FAINpcVisualScenarioConfig& OutConfig, FString& OutError)
+	{
+		TSharedPtr<FJsonObject> JsonObject;
+		const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ScenarioText);
+		if (!FJsonSerializer::Deserialize(Reader, JsonObject) || !JsonObject.IsValid())
+		{
+			OutError = TEXT("scenario text did not parse as a JSON object");
+			return false;
+		}
+		return ParseScenarioConfig(*JsonObject, OutConfig, OutError);
+	};
+	auto ExpectFailure = [this, &BaseScenario, &ParseScenarioText](const FString& Search, const FString& Replacement, const TCHAR* CaseName, const TArray<FString>& Fragments)
+	{
+		FAINpcVisualScenarioConfig Config;
+		FString Error;
+		TestFalse(FString(CaseName) + TEXT(" is rejected."), ParseScenarioText(BaseScenario.Replace(*Search, *Replacement), Config, Error));
+		TestTrue(FString(CaseName) + TEXT(" reports expected diagnostic."), ContainsAll(Error, Fragments));
+	};
+
+	FAINpcVisualScenarioConfig ValidConfig;
+	FString ParseError;
+	TestTrue(TEXT("Phase 2.9B project parser accepts the valid shape."), ParseScenarioText(BaseScenario, ValidConfig, ParseError));
+	for (const FString& InvalidClass : { TEXT("Blueprint'/Game/Door.Door_C'"), TEXT("Actor"), TEXT("/Game/Door.Door"), TEXT("/Script/Engine.Actor_C") })
+	{
+		ExpectFailure(TEXT("\"actorClass\": \"/Script/Engine.Actor\""), FString::Printf(TEXT("\"actorClass\": \"%s\""), *InvalidClass), TEXT("P29B-FIXTURE-002 invalid actorClass"), { TEXT("fixture.actorClass") });
+	}
+	ExpectFailure(TEXT(", \"actorTag\": \"Phase29BDoor\""), TEXT(""), TEXT("P29B-FIXTURE-003 missing actorTag"), { TEXT("actorTag"), TEXT("missing or empty") });
+	ExpectFailure(TEXT("\"actorTag\": \"Phase29BDoor\""), TEXT("\"actorTag\": \"\""), TEXT("P29B-FIXTURE-003 empty actorTag"), { TEXT("actorTag"), TEXT("missing or empty") });
+	ExpectFailure(TEXT("\"adapterId\": \"phase29b.parser.fixture\", "), TEXT(""), TEXT("P29B-FIXTURE-007 missing fixture adapterId"), { TEXT("adapterId"), TEXT("missing or empty") });
+	ExpectFailure(TEXT("\"adapterId\": \"phase29b.parser.fixture\""), TEXT("\"adapterId\": \"\""), TEXT("P29B-FIXTURE-007 empty fixture adapterId"), { TEXT("adapterId"), TEXT("missing or empty") });
+	ExpectFailure(TEXT("\"kind\": \"existingActor\", "), TEXT(""), TEXT("P29B-FIXTURE-007 missing fixture kind"), { TEXT("kind"), TEXT("missing or empty") });
+	ExpectFailure(TEXT("\"kind\": \"existingActor\""), TEXT("\"kind\": \"actorTagOnly\""), TEXT("P29B-FIXTURE-007 unsupported fixture kind"), { TEXT("fixture.adapterId"), TEXT("unsupported value") });
+	ExpectFailure(TEXT(", \"actorClass\": \"/Script/Engine.Actor\""), TEXT(""), TEXT("P29B-FIXTURE-007 missing actorClass"), { TEXT("actorClass"), TEXT("missing or empty") });
+	ExpectFailure(TEXT("\"actorTag\": \"Phase29BDoor\""), TEXT("\"actorTag\": \"Phase29BDoor\", \"objectRef\": \"DoorA\""), TEXT("P29B-FIXTURE-008 forbidden objectRef"), { TEXT("unknown field 'objectRef'") });
+	ExpectFailure(TEXT("\"actorTag\": \"Phase29BDoor\""), TEXT("\"actorTag\": \"Phase29BDoor\", \"componentTag\": \"Door\""), TEXT("P29B-FIXTURE-008 forbidden componentTag"), { TEXT("unknown field 'componentTag'") });
+	ExpectFailure(TEXT("\"actorTag\": \"Phase29BDoor\""), TEXT("\"actorTag\": \"Phase29BDoor\", \"softObjectPath\": \"/Game/Door.Door\""), TEXT("P29B-FIXTURE-008 forbidden softObjectPath"), { TEXT("unknown field 'softObjectPath'") });
+	ExpectFailure(TEXT("\"actorTag\": \"Phase29BDoor\""), TEXT("\"actorTag\": \"Phase29BDoor\", \"blueprintGeneratedClass\": \"/Game/Door.Door_C\""), TEXT("P29B-FIXTURE-008 forbidden Blueprint class field"), { TEXT("unknown field 'blueprintGeneratedClass'") });
+	ExpectFailure(TEXT("\"actorTag\": \"Phase29BDoor\""), TEXT("\"actorTag\": \"Phase29BDoor\", \"gameplayTag\": \"Door.Main\""), TEXT("P29B-FIXTURE-008 forbidden GameplayTag field"), { TEXT("unknown field 'gameplayTag'") });
+	ExpectFailure(TEXT("\"actorTag\": \"Phase29BDoor\""), TEXT("\"actorTag\": \"Phase29BDoor\", \"actorTagOnly\": true"), TEXT("P29B-FIXTURE-008 forbidden actor-tag-only resolver"), { TEXT("unknown field 'actorTagOnly'") });
+	ExpectFailure(TEXT("\"actorTag\": \"Phase29BDoor\""), TEXT("\"actorTag\": \"Phase29BDoor\", \"crossMapReference\": \"/Game/Maps/Other.Other:Door\""), TEXT("P29B-FIXTURE-008 forbidden cross-map reference"), { TEXT("unknown field 'crossMapReference'") });
+	ExpectFailure(TEXT("\"actorTag\": \"Phase29BDoor\""), TEXT("\"actorTag\": \"Phase29BDoor\", \"resolverStrategies\": [\"classTag\", \"softPath\"]"), TEXT("P29B-FIXTURE-008 forbidden resolver strategy list"), { TEXT("unknown field 'resolverStrategies'") });
+	ExpectFailure(TEXT("\"actorTag\": \"Phase29BDoor\""), TEXT("\"actorTag\": \"Phase29BDoor\", \"fallbackResolvers\": [\"actorTag\"]"), TEXT("P29B-FIXTURE-008 forbidden multi-strategy fallback"), { TEXT("unknown field 'fallbackResolvers'") });
+	ExpectFailure(TEXT("\"targetRef\": \"fixture.actor\""), TEXT("\"targetRef\": \"fixture.door\""), TEXT("P29B-ACTION-003 invalid targetRef"), { TEXT("targetRef"), TEXT("fixture.actor") });
+	ExpectFailure(TEXT("\"targetRef\": \"fixture.actor\""), TEXT("\"targetRef\": \"fixture.actor\", \"allowActionRejection\": true"), TEXT("P29B-ACTION-002 forbidden action field"), { TEXT("unknown field 'allowActionRejection'") });
+	ExpectFailure(TEXT("\"targetRef\": \"fixture.actor\""), TEXT("\"targetRef\": \"fixture.actor\", \"actorRef\": \"fixture.npc\""), TEXT("P29B-ACTION-002 forbidden actorRef"), { TEXT("unknown field 'actorRef'") });
+	ExpectFailure(TEXT("\"targetRef\": \"fixture.actor\""), TEXT("\"targetRef\": \"fixture.actor\", \"latestIntent\": \"Interact\""), TEXT("P29B-ACTION-002 forbidden latest-intent field"), { TEXT("unknown field 'latestIntent'") });
+	ExpectFailure(TEXT("\"targetRef\": \"fixture.actor\""), TEXT("\"targetRef\": \"fixture.actor\", \"smartObjectTargetId\": \"Door\""), TEXT("P29B-ACTION-002 forbidden SmartObject field"), { TEXT("unknown field 'smartObjectTargetId'") });
+	ExpectFailure(TEXT("\"targetRef\": \"fixture.actor\""), TEXT("\"targetRef\": \"fixture.actor\", \"unknownActionField\": true"), TEXT("P29B-ACTION-002 forbidden unknown action field"), { TEXT("unknown field 'unknownActionField'") });
+	ExpectFailure(TEXT("\"adapterId\": \"phase29b.parser.action\", "), TEXT(""), TEXT("P29B-ACTION-005 missing action adapterId"), { TEXT("adapterId"), TEXT("missing or empty") });
+	ExpectFailure(TEXT("\"adapterId\": \"phase29b.parser.action\""), TEXT("\"adapterId\": \"\""), TEXT("P29B-ACTION-005 empty action adapterId"), { TEXT("adapterId"), TEXT("missing or empty") });
+	ExpectFailure(TEXT("\"actionName\": \"Interact\", "), TEXT(""), TEXT("P29B-ACTION-005 missing actionName"), { TEXT("actionName"), TEXT("missing or empty") });
+	ExpectFailure(TEXT("\"actionName\": \"Interact\""), TEXT("\"actionName\": \"\""), TEXT("P29B-ACTION-005 empty actionName"), { TEXT("actionName"), TEXT("missing or empty") });
+	ExpectFailure(TEXT(", \"targetRef\": \"fixture.actor\""), TEXT(""), TEXT("P29B-ACTION-005 missing targetRef"), { TEXT("targetRef"), TEXT("missing or empty") });
+	for (const FString& MalformedObservation : { TEXT("project"), TEXT("project."), TEXT("project.door"), TEXT("project..isOpen"), TEXT(".project.door.isOpen"), TEXT("project.door.") })
+	{
+		ExpectFailure(TEXT("\"observation\": \"project.door.isOpen\""), FString::Printf(TEXT("\"observation\": \"%s\""), *MalformedObservation), TEXT("P29B-OBS-003 malformed project observation"), { TEXT("unknown observation") });
+	}
+	ExpectFailure(TEXT("\"observation\": \"project.door.isOpen\""), TEXT("\"observation\": \"\""), TEXT("P29B-OBS-003 empty project observation"), { TEXT("observation"), TEXT("missing or empty") });
+	ExpectFailure(TEXT("\"adapterId\": \"phase29b.parser.fixture\""), TEXT("\"adapterId\": \"phase29b.missing.fixture\""), TEXT("P29B-FIXTURE-011 unregistered fixture adapter"), { TEXT("stage=ExtensionDeclaration"), TEXT("category=FixtureResolver"), TEXT("adapter=phase29b.missing.fixture") });
+	ExpectFailure(TEXT("\"adapterId\": \"phase29b.parser.fixture\""), TEXT("\"adapterId\": \"phase29b.parser.action\""), TEXT("P29B-FIXTURE-011 wrong fixture category"), { TEXT("stage=ExtensionDeclaration"), TEXT("category=FixtureResolver"), TEXT("adapter=phase29b.parser.action") });
+	ExpectFailure(TEXT("\"adapterId\": \"phase29b.parser.fixture\""), TEXT("\"adapterId\": \"phase29b.parser.fixtureNoCap\""), TEXT("P29B-FIXTURE-011 missing fixture capability"), { TEXT("stage=ExtensionDeclaration"), TEXT("capability=existingActor.classTag") });
+	ExpectFailure(TEXT("\"adapterId\": \"phase29b.parser.action\""), TEXT("\"adapterId\": \"phase29b.parser.fixture\""), TEXT("P29B-ACTION-006 wrong action category"), { TEXT("stage=ExtensionDeclaration"), TEXT("category=ActionAdapter"), TEXT("adapter=phase29b.parser.fixture") });
+	ExpectFailure(TEXT("\"observation\": \"project.door.isOpen\""), TEXT("\"observation\": \"project.window.isOpen\""), TEXT("P29B-OBS-002 undeclared observation"), { TEXT("stage=ExtensionDeclaration"), TEXT("observation=project.window.isOpen") });
+
+	FAINpcVisualAdapterDescriptor EmptyObservationNameDescriptor = ObservationDescriptor;
+	EmptyObservationNameDescriptor.AdapterId = EmptyObservationNameId;
+	EmptyObservationNameDescriptor.ObservationDeclarations[0].ObservationName.Reset();
+	TestFalse(TEXT("P29B-OBS-006 rejects empty declaration observation name."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(EmptyObservationNameDescriptor).IsSuccess());
+	FAINpcVisualAdapterDescriptor EmptySourceKindDescriptor = ObservationDescriptor;
+	EmptySourceKindDescriptor.AdapterId = EmptySourceKindId;
+	EmptySourceKindDescriptor.ObservationDeclarations[0].SourceKind.Reset();
+	TestFalse(TEXT("P29B-OBS-006 rejects missing declaration source kind."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(EmptySourceKindDescriptor).IsSuccess());
+	FAINpcVisualAdapterDescriptor EmptySamplingMethodDescriptor = ObservationDescriptor;
+	EmptySamplingMethodDescriptor.AdapterId = EmptySamplingMethodId;
+	EmptySamplingMethodDescriptor.ObservationDeclarations[0].SamplingMethod.Reset();
+	TestFalse(TEXT("P29B-OBS-006 rejects missing declaration sampling method."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(EmptySamplingMethodDescriptor).IsSuccess());
+	FAINpcVisualAdapterDescriptor EmptyObservationCapabilityDescriptor = ObservationDescriptor;
+	EmptyObservationCapabilityDescriptor.AdapterId = EmptyObservationCapabilityId;
+	EmptyObservationCapabilityDescriptor.ObservationDeclarations[0].Capability.Reset();
+	TestFalse(TEXT("P29B-OBS-006 rejects missing declaration capability."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(EmptyObservationCapabilityDescriptor).IsSuccess());
+	FAINpcVisualAdapterDescriptor BadValueTypeDescriptor = ObservationDescriptor;
+	BadValueTypeDescriptor.AdapterId = BadValueTypeId;
+	BadValueTypeDescriptor.ObservationDeclarations[0].ObservationName = TEXT("project.badValueType.isOpen");
+	BadValueTypeDescriptor.ObservationDeclarations[0].ValueType = EAINpcVisualObservationValueType::String;
+	TestTrue(TEXT("P29B-OBS-006 bad value-type descriptor registers for declaration validation."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(BadValueTypeDescriptor).IsSuccess());
+	ExpectFailure(TEXT("\"observation\": \"project.door.isOpen\""), TEXT("\"observation\": \"project.badValueType.isOpen\""), TEXT("P29B-OBS-006 wrong declaration value type"), { TEXT("stage=ExtensionDeclaration"), TEXT("observation=project.badValueType.isOpen"), TEXT("boolean value type") });
+	FAINpcVisualAdapterDescriptor BadSourceKindDescriptor = ObservationDescriptor;
+	BadSourceKindDescriptor.AdapterId = BadSourceKindId;
+	BadSourceKindDescriptor.ObservationDeclarations[0].ObservationName = TEXT("project.badSourceKind.isOpen");
+	BadSourceKindDescriptor.ObservationDeclarations[0].SourceKind = TEXT("action-adapter");
+	TestTrue(TEXT("P29B-OBS-006 bad source-kind descriptor registers for declaration validation."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(BadSourceKindDescriptor).IsSuccess());
+	ExpectFailure(TEXT("\"observation\": \"project.door.isOpen\""), TEXT("\"observation\": \"project.badSourceKind.isOpen\""), TEXT("P29B-OBS-006 wrong declaration source kind"), { TEXT("stage=ExtensionDeclaration"), TEXT("observation=project.badSourceKind.isOpen"), TEXT("state-read source metadata") });
+	FAINpcVisualAdapterDescriptor BadSamplingMethodDescriptor = ObservationDescriptor;
+	BadSamplingMethodDescriptor.AdapterId = BadSamplingMethodId;
+	BadSamplingMethodDescriptor.ObservationDeclarations[0].ObservationName = TEXT("project.badSampling.isOpen");
+	BadSamplingMethodDescriptor.ObservationDeclarations[0].SamplingMethod = TEXT("poll");
+	TestTrue(TEXT("P29B-OBS-006 bad sampling descriptor registers for declaration validation."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(BadSamplingMethodDescriptor).IsSuccess());
+	ExpectFailure(TEXT("\"observation\": \"project.door.isOpen\""), TEXT("\"observation\": \"project.badSampling.isOpen\""), TEXT("P29B-OBS-006 wrong declaration sampling method"), { TEXT("stage=ExtensionDeclaration"), TEXT("observation=project.badSampling.isOpen"), TEXT("state-read source metadata") });
+	FAINpcVisualAdapterDescriptor MissingSourceObjectDescriptor = ObservationDescriptor;
+	MissingSourceObjectDescriptor.AdapterId = MissingSourceObjectId;
+	MissingSourceObjectDescriptor.ObservationDeclarations[0].ObservationName = TEXT("project.missingSourceObject.isOpen");
+	MissingSourceObjectDescriptor.ObservationDeclarations[0].bRequiresSourceObjectPath = false;
+	TestTrue(TEXT("P29B-OBS-006 missing source-object metadata descriptor registers for declaration validation."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(MissingSourceObjectDescriptor).IsSuccess());
+	ExpectFailure(TEXT("\"observation\": \"project.door.isOpen\""), TEXT("\"observation\": \"project.missingSourceObject.isOpen\""), TEXT("P29B-OBS-006 missing declaration source object metadata"), { TEXT("stage=ExtensionDeclaration"), TEXT("observation=project.missingSourceObject.isOpen"), TEXT("state-read source metadata") });
+	FAINpcVisualAdapterDescriptor MissingSourceClassDescriptor = ObservationDescriptor;
+	MissingSourceClassDescriptor.AdapterId = MissingSourceClassId;
+	MissingSourceClassDescriptor.ObservationDeclarations[0].ObservationName = TEXT("project.missingSourceClass.isOpen");
+	MissingSourceClassDescriptor.ObservationDeclarations[0].bRequiresSourceClass = false;
+	TestTrue(TEXT("P29B-OBS-006 missing source-class metadata descriptor registers for declaration validation."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(MissingSourceClassDescriptor).IsSuccess());
+	ExpectFailure(TEXT("\"observation\": \"project.door.isOpen\""), TEXT("\"observation\": \"project.missingSourceClass.isOpen\""), TEXT("P29B-OBS-006 missing declaration source class metadata"), { TEXT("stage=ExtensionDeclaration"), TEXT("observation=project.missingSourceClass.isOpen"), TEXT("state-read source metadata") });
+
+	FAINpcVisualAdapterDescriptor BadObservationDescriptor = ObservationDescriptor;
+	BadObservationDescriptor.AdapterId = BadObservationId;
+	BadObservationDescriptor.ObservationDeclarations[0].ObservationName = TEXT("project.window.isOpen");
+	BadObservationDescriptor.ObservationDeclarations[0].SamplingMethod = TEXT("poll");
+	TestTrue(TEXT("Phase 2.9B bad observation descriptor registers for declaration validation."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(BadObservationDescriptor).IsSuccess());
+	ExpectFailure(TEXT("\"observation\": \"project.door.isOpen\""), TEXT("\"observation\": \"project.window.isOpen\""), TEXT("P29B-OBS-006 wrong declaration metadata"), { TEXT("stage=ExtensionDeclaration"), TEXT("observation=project.window.isOpen"), TEXT("state-read source metadata") });
+	FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ObservationProvider, ObservationId, Owner);
+	FAINpcVisualAdapterDescriptor WrongCategoryObservationDescriptor = ActionDescriptor;
+	WrongCategoryObservationDescriptor.AdapterId = WrongCategoryObservationId;
+	WrongCategoryObservationDescriptor.ObservationDeclarations = { Declaration };
+	TestTrue(TEXT("P29B-OBS-007 wrong-category observation descriptor registers for declaration validation."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(WrongCategoryObservationDescriptor).IsSuccess());
+	ExpectFailure(TEXT("\"observation\": \"project.door.isOpen\""), TEXT("\"observation\": \"project.door.isOpen\""), TEXT("P29B-OBS-007 rejects wrong observation provider category"), { TEXT("stage=ExtensionDeclaration"), TEXT("category=ObservationProvider"), TEXT("adapter=phase29b.parser.wrongCategoryObservation"), TEXT("actual=ActionAdapter"), TEXT("observation=project.door.isOpen") });
+	FAINpcVisualTestExtensionRegistry::UnregisterVisualTestAdapter(EAINpcVisualAdapterCategory::ActionAdapter, WrongCategoryObservationId, Owner);
+	FAINpcVisualAdapterDescriptor CapabilityNameObservationDescriptor = ObservationDescriptor;
+	CapabilityNameObservationDescriptor.AdapterId = CapabilityNameObservationId;
+	CapabilityNameObservationDescriptor.ObservationDeclarations[0].ObservationName = TEXT("observation.project.door.isOpen");
+	TestTrue(TEXT("P29B-OBS-004 capability-name observation descriptor registers for declaration validation."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(CapabilityNameObservationDescriptor).IsSuccess());
+	ExpectFailure(TEXT("\"observation\": \"project.door.isOpen\""), TEXT("\"observation\": \"project.door.isOpen\""), TEXT("P29B-OBS-004 capability is not the observation name"), { TEXT("stage=ExtensionDeclaration"), TEXT("observation=project.door.isOpen") });
+	FAINpcVisualAdapterDescriptor BadCapabilityDescriptor = ObservationDescriptor;
+	BadCapabilityDescriptor.AdapterId = FName(TEXT("phase29b.parser.badCapability"));
+	BadCapabilityDescriptor.ObservationDeclarations[0].Capability = TEXT("observation.project.missing");
+	TestFalse(TEXT("P29B-OBS-007 rejects declaration capability missing from descriptor capabilities."), FAINpcVisualTestExtensionRegistry::RegisterVisualTestAdapter(BadCapabilityDescriptor).IsSuccess());
+
+	Cleanup();
 	return true;
 }
 

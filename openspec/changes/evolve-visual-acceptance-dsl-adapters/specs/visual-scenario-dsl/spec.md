@@ -11,6 +11,13 @@
 - **WHEN** Phase 2.8 scenario 声明 `fixture`
 - **THEN** 它使用 `adapterId: "builtin.characterFixture"` 和 `kind: "character" | "characterWithSmartObject"`，旧 `fixture.type` 或其它未声明 fixture fields validation fail
 
+#### Scenario: Phase 2.9B 使用 project existing actor fixture schema
+- **WHEN** Phase 2.9B scenario 声明 `fixture`
+- **THEN** 它可以使用 `adapterId: "project.door.fixture"`、`kind: "existingActor"`、`actorClass` 和 `actorTag`
+- **THEN** `actorClass` 只接受 `/Script/<Module>.<ClassName>` native class path，`actorTag` 必须是非空 actor tag
+- **THEN** 该 fixture 在 runtime startup 只能绑定 per-run ref `fixture.actor`
+- **THEN** fixture object 中的 legacy `type`、object reference、soft object path、Blueprint class path、short class name、component tag、GameplayTag、actor tag only、cross-map reference 或多策略 resolver fields validation fail
+
 #### Scenario: 遇到不支持的 schema version
 - **WHEN** visual scenario 声明不支持的 `schemaVersion`
 - **THEN** 在最终验收开始前 validation fail，并报告 unsupported version 和 test id
@@ -50,6 +57,17 @@ Visual scenario DSL MUST 只支持声明过的 step type，且每个 step type M
 - **WHEN** Phase 2.8 scenario 声明 `action.executeLatestIntent`
 - **THEN** payload 使用 `adapterId: "builtin.smartObjectAction"`、`actorRef`、`allowActionRejection`，且其它 action payload fields validation fail
 
+#### Scenario: Phase 2.9B 使用固定 project action step
+- **WHEN** Phase 2.9B scenario 声明 `type: "project.action.execute"`
+- **THEN** payload 只允许 `adapterId`、`actionName`、`targetRef: "fixture.actor"` fields
+- **THEN** `adapterId` 和 `actionName` 必须非空；具体 door/example 值只能由 extension descriptor category 和 action adapter execution 结果验证，不能由 core schema hardcode
+- **THEN** core schema 不从 `actionName` 推导 capability，也不实现 door-specific action matcher
+- **THEN** 它不使用 latest LLM intent、SmartObject rejection policy 或其它 action schema
+
+#### Scenario: Phase 2.9B project action payload malformed
+- **WHEN** `project.action.execute` payload 缺少 adapter id、action name 或 target ref，或包含 `allowActionRejection`、`actorRef`、SmartObject/latest-intent 字段或其它未知字段
+- **THEN** `SchemaParse` fail，并报告 field name、step index、step type、adapter id 和 test id 中可用字段
+
 #### Scenario: 使用 Observation hold step
 - **WHEN** step 声明 `type: "observe.hold"`
 - **THEN** 它声明正数 duration 和 condition observation，且 condition 必须在整个 hold window 内保持满足
@@ -68,7 +86,8 @@ Visual scenario DSL MUST 只支持声明过的 step type，且每个 step type M
 
 #### Scenario: Step timeout 超时
 - **WHEN** 带 timeout 的 step 在超时前无法满足条件
-- **THEN** visual run fail，并在 result diagnostics 中记录 step index、step type、timeout、wait condition、最后 observation 更新时间、provider state summary、NPC state summary 和 missing observations
+- **THEN** visual run fail，并在 Phase 2.9B 最小 diagnostics 中记录 stage、step index、step type、failure reason 和可用 observation/source fields
+- **THEN** Phase 2.95 may extend timeout diagnostics with timeout value, wait condition, last observation update time, provider state summary, NPC state summary and missing observations
 
 ### Requirement: Prompt-driven scenario 解析 runtime variables
 Visual scenario DSL MUST 允许 prompt 文件使用 scenario 声明的变量，并在 dialogue start 前从 fixture 或 runtime context 解析。

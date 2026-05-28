@@ -70,6 +70,20 @@ namespace AINpc::Visual::TestInternal
 		FString UnavailableDiagnostic;
 	};
 
+	struct FVisualAdapterDescriptorValidationResult
+	{
+		FAINpcVisualAdapterDescriptor Descriptor;
+		FString Diagnostic;
+
+		bool IsSuccess() const { return Diagnostic.IsEmpty(); }
+	};
+
+	FString LexToString(EAINpcVisualAdapterCategory Category);
+	FVisualAdapterDescriptorValidationResult FindRegisteredAdapterDescriptor(FName AdapterId, const TCHAR* Stage, const FString& TestId);
+	FVisualAdapterDescriptorValidationResult FindRegisteredAdapterDescriptor(EAINpcVisualAdapterCategory Category, FName AdapterId, const TCHAR* Stage, const FString& TestId);
+	FVisualAdapterDescriptorValidationResult FindObservationProviderDeclaration(const FString& ObservationName, FAINpcVisualObservationDeclaration& OutDeclaration, const TCHAR* Stage, const FString& TestId);
+	bool SetRegisteredAdapterOwnerAvailabilityForTest(EAINpcVisualAdapterCategory Category, FName AdapterId, FName OwnerModuleName, bool bAvailable);
+
 	class FAdapterRunView
 	{
 	public:

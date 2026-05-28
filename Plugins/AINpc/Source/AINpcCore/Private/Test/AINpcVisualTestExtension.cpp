@@ -24,27 +24,12 @@ namespace
 		return OwnerHistory;
 	}
 
-	FString LexToString(const EAINpcVisualAdapterCategory Category)
-	{
-		switch (Category)
-		{
-		case EAINpcVisualAdapterCategory::FixtureResolver:
-			return TEXT("FixtureResolver");
-		case EAINpcVisualAdapterCategory::ObservationProvider:
-			return TEXT("ObservationProvider");
-		case EAINpcVisualAdapterCategory::ActionAdapter:
-			return TEXT("ActionAdapter");
-		default:
-			return TEXT("Unknown");
-		}
-	}
-
 	FString MakeLifecycleDiagnostic(const TCHAR* Stage, const FName OwnerModuleName, const EAINpcVisualAdapterCategory Category, const FName AdapterId, const FString& TestId, const TCHAR* Reason)
 	{
 		return FString::Printf(TEXT("visual adapter lifecycle failure stage=%s owner=%s category=%s adapter=%s testId=%s reason=%s"),
 			Stage ? Stage : TEXT("Unknown"),
 			*OwnerModuleName.ToString(),
-			*LexToString(Category),
+			*AINpc::Visual::TestInternal::LexToString(Category),
 			*AdapterId.ToString(),
 			TestId.IsEmpty() ? TEXT("<none>") : *TestId,
 			Reason ? Reason : TEXT("unknown"));
@@ -91,6 +76,34 @@ namespace
 		return FAINpcVisualAdapterRegistrationResult::Success();
 	}
 
+	FAINpcVisualAdapterRegistrationResult ValidateObservationDeclarations(const FAINpcVisualAdapterDescriptor& Descriptor)
+	{
+		if (Descriptor.Category != EAINpcVisualAdapterCategory::ObservationProvider)
+		{
+			return FAINpcVisualAdapterRegistrationResult::Success();
+		}
+		for (const FAINpcVisualObservationDeclaration& Declaration : Descriptor.ObservationDeclarations)
+		{
+			if (Declaration.ObservationName.IsEmpty())
+			{
+				return FAINpcVisualAdapterRegistrationResult::Failure(FString::Printf(TEXT("visual observation provider '%s' declaration requires a non-empty observation name"), *Descriptor.AdapterId.ToString()));
+			}
+			if (Declaration.SourceKind.IsEmpty())
+			{
+				return FAINpcVisualAdapterRegistrationResult::Failure(FString::Printf(TEXT("visual observation provider '%s' declaration '%s' requires a source kind"), *Descriptor.AdapterId.ToString(), *Declaration.ObservationName));
+			}
+			if (Declaration.SamplingMethod.IsEmpty())
+			{
+				return FAINpcVisualAdapterRegistrationResult::Failure(FString::Printf(TEXT("visual observation provider '%s' declaration '%s' requires a sampling method"), *Descriptor.AdapterId.ToString(), *Declaration.ObservationName));
+			}
+			if (Declaration.Capability.IsEmpty() || !Descriptor.Capabilities.Contains(Declaration.Capability))
+			{
+				return FAINpcVisualAdapterRegistrationResult::Failure(FString::Printf(TEXT("visual observation provider '%s' declaration '%s' capability '%s' must be present in descriptor capabilities"), *Descriptor.AdapterId.ToString(), *Declaration.ObservationName, *Declaration.Capability));
+			}
+		}
+		return FAINpcVisualAdapterRegistrationResult::Success();
+	}
+
 	FAINpcVisualAdapterFactoryResult CreateAdapterInstance(const FAINpcVisualAdapterDescriptor& Descriptor, const FAINpcVisualAdapterCreateContext& Context)
 	{
 		switch (Descriptor.Category)
@@ -109,6 +122,105 @@ namespace
 
 namespace AINpc::Visual::TestInternal
 {
+	FString LexToString(const EAINpcVisualAdapterCategory Category)
+	{
+		switch (Category)
+		{
+		case EAINpcVisualAdapterCategory::FixtureResolver:
+			return TEXT("FixtureResolver");
+		case EAINpcVisualAdapterCategory::ObservationProvider:
+			return TEXT("ObservationProvider");
+		case EAINpcVisualAdapterCategory::ActionAdapter:
+			return TEXT("ActionAdapter");
+		default:
+			return TEXT("Unknown");
+		}
+	}
+
+	FVisualAdapterDescriptorValidationResult FindRegisteredAdapterDescriptor(const FName AdapterId, const TCHAR* Stage, const FString& TestId)
+	{
+		check(IsInGameThread());
+		for (const FVisualAdapterRegistryEntry& Entry : GetVisualAdapterDescriptors())
+		{
+			if (Entry.Descriptor.AdapterId == AdapterId)
+			{
+				FVisualAdapterDescriptorValidationResult Result;
+				Result.Descriptor = Entry.Descriptor;
+				return Result;
+			}
+		}
+
+		const FName* OwnerModuleName = GetVisualAdapterOwnerHistory().Find(AdapterId);
+		return { {}, MakeLifecycleDiagnostic(Stage, OwnerModuleName ? *OwnerModuleName : NAME_None, EAINpcVisualAdapterCategory::FixtureResolver, AdapterId, TestId, TEXT("adapter not registered")) };
+	}
+
+	FVisualAdapterDescriptorValidationResult FindRegisteredAdapterDescriptor(const EAINpcVisualAdapterCategory Category, const FName AdapterId, const TCHAR* Stage, const FString& TestId)
+	{
+		check(IsInGameThread());
+		for (const FVisualAdapterRegistryEntry& Entry : GetVisualAdapterDescriptors())
+		{
+			if (Entry.Descriptor.AdapterId != AdapterId)
+			{
+				continue;
+			}
+			if (Entry.Descriptor.Category != Category)
+			{
+				return { {}, MakeLifecycleDiagnostic(Stage, Entry.Descriptor.OwnerModuleName, Category, AdapterId, TestId, *FString::Printf(TEXT("adapter category mismatch actual=%s"), *LexToString(Entry.Descriptor.Category))) };
+			}
+			FVisualAdapterDescriptorValidationResult Result;
+			Result.Descriptor = Entry.Descriptor;
+			return Result;
+		}
+
+		const FName* OwnerModuleName = GetVisualAdapterOwnerHistory().Find(AdapterId);
+		return { {}, MakeLifecycleDiagnostic(Stage, OwnerModuleName ? *OwnerModuleName : NAME_None, Category, AdapterId, TestId, TEXT("adapter not registered")) };
+	}
+
+	FVisualAdapterDescriptorValidationResult FindObservationProviderDeclaration(const FString& ObservationName, FAINpcVisualObservationDeclaration& OutDeclaration, const TCHAR* Stage, const FString& TestId)
+	{
+		check(IsInGameThread());
+		for (const FVisualAdapterRegistryEntry& Entry : GetVisualAdapterDescriptors())
+		{
+			for (const FAINpcVisualObservationDeclaration& Declaration : Entry.Descriptor.ObservationDeclarations)
+			{
+				if (Declaration.ObservationName == ObservationName)
+				{
+					if (Entry.Descriptor.Category != EAINpcVisualAdapterCategory::ObservationProvider)
+					{
+						return { {}, MakeLifecycleDiagnostic(Stage, Entry.Descriptor.OwnerModuleName, EAINpcVisualAdapterCategory::ObservationProvider, Entry.Descriptor.AdapterId, TestId, *FString::Printf(TEXT("adapter category mismatch actual=%s observation=%s"), *LexToString(Entry.Descriptor.Category), *ObservationName)) };
+					}
+					OutDeclaration = Declaration;
+					FVisualAdapterDescriptorValidationResult Result;
+					Result.Descriptor = Entry.Descriptor;
+					return Result;
+				}
+			}
+		}
+
+		return { {}, FString::Printf(TEXT("visual adapter declaration failure stage=%s category=%s observation=%s testId=%s reason=project observation is not declared by a registered observation provider"),
+			Stage ? Stage : TEXT("Unknown"),
+			*LexToString(EAINpcVisualAdapterCategory::ObservationProvider),
+			*ObservationName,
+			TestId.IsEmpty() ? TEXT("<none>") : *TestId) };
+	}
+
+	bool SetRegisteredAdapterOwnerAvailabilityForTest(const EAINpcVisualAdapterCategory Category, const FName AdapterId, const FName OwnerModuleName, const bool bAvailable)
+	{
+		check(IsInGameThread());
+		for (FVisualAdapterRegistryEntry& Entry : GetVisualAdapterDescriptors())
+		{
+			if (Entry.Descriptor.Category == Category
+				&& Entry.Descriptor.AdapterId == AdapterId
+				&& Entry.Descriptor.OwnerModuleName == OwnerModuleName
+				&& Entry.OwnerState.IsValid())
+			{
+				Entry.OwnerState->bAvailable = bAvailable;
+				return true;
+			}
+		}
+		return false;
+	}
+
 	struct FAdapterRunView::FEntry
 	{
 		EAINpcVisualAdapterCategory Category = EAINpcVisualAdapterCategory::FixtureResolver;
@@ -234,13 +346,18 @@ FAINpcVisualAdapterRegistrationResult FAINpcVisualTestExtensionRegistry::Registe
 	}
 	if (!HasOnlyFactoryForCategory(Descriptor))
 	{
-		return FAINpcVisualAdapterRegistrationResult::Failure(FString::Printf(TEXT("visual adapter '%s' category '%s' requires exactly one matching category-specific factory"), *Descriptor.AdapterId.ToString(), *LexToString(Descriptor.Category)));
+		return FAINpcVisualAdapterRegistrationResult::Failure(FString::Printf(TEXT("visual adapter '%s' category '%s' requires exactly one matching category-specific factory"), *Descriptor.AdapterId.ToString(), *AINpc::Visual::TestInternal::LexToString(Descriptor.Category)));
 	}
 
 	const FAINpcVisualAdapterRegistrationResult CapabilityValidation = ValidateCapabilities(Descriptor);
 	if (!CapabilityValidation.IsSuccess())
 	{
 		return CapabilityValidation;
+	}
+	const FAINpcVisualAdapterRegistrationResult ObservationValidation = ValidateObservationDeclarations(Descriptor);
+	if (!ObservationValidation.IsSuccess())
+	{
+		return ObservationValidation;
 	}
 
 	for (const FVisualAdapterRegistryEntry& Existing : GetVisualAdapterDescriptors())

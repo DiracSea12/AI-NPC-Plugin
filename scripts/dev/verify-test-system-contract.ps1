@@ -357,7 +357,7 @@ foreach ($entry in $scenarios) {
     if (-not $mapAssetPath) { Add-Failure "$context map must be a /Game asset path, got '$($entry.map)'." }
     elseif (-not (Test-Path $mapAssetPath)) { Add-Failure "$context map does not resolve to an existing .umap: $(Get-RelativePath $mapAssetPath)" }
     foreach ($step in @($entry.steps)) {
-        if (@("dialogue.start", "world.event", "wait.until", "action.executeLatestIntent", "observe.hold") -notcontains [string]$step.type) { Add-Failure "$context has unknown step type '$($step.type)'." }
+        if (@("dialogue.start", "world.event", "wait.until", "action.executeLatestIntent", "project.action.execute", "observe.hold") -notcontains [string]$step.type) { Add-Failure "$context has unknown step type '$($step.type)'." }
         if (-not $step.payload) { Add-Failure "$context step '$($step.type)' missing payload." }
         if ([string]$step.type -ne "wait.until" -and ($step.PSObject.Properties.Name -contains "condition")) { Add-Failure "$context condition is only supported by wait.until." }
         switch ([string]$step.type) {
@@ -370,6 +370,12 @@ foreach ($entry in $scenarios) {
             "action.executeLatestIntent" {
                 if ([string]$step.payload.adapterId -ne "builtin.smartObjectAction") { Add-Failure "$context action.executeLatestIntent step must use builtin.smartObjectAction adapterId from the C++ schema descriptor." }
             }
+            "project.action.execute" {
+                foreach ($unknown in @($step.payload.PSObject.Properties.Name | Where-Object { @("adapterId", "actionName", "targetRef") -notcontains $_ })) { Add-Failure "$context project.action.execute payload has unknown field $unknown." }
+                if ([string]::IsNullOrWhiteSpace([string]$step.payload.adapterId)) { Add-Failure "$context project.action.execute payload.adapterId must not be empty." }
+                if ([string]::IsNullOrWhiteSpace([string]$step.payload.actionName)) { Add-Failure "$context project.action.execute payload.actionName must not be empty." }
+                if ([string]$step.payload.targetRef -ne "fixture.actor") { Add-Failure "$context project.action.execute payload.targetRef must be fixture.actor." }
+            }
             "observe.hold" { foreach ($unknown in @($step.payload.PSObject.Properties.Name | Where-Object { @("observation", "durationSec") -notcontains $_ })) { Add-Failure "$context observe.hold payload has unknown field $unknown." }; if ([string]::IsNullOrWhiteSpace([string]$step.payload.observation)) { Add-Failure "$context observe.hold payload.observation must not be empty." }; if ([double]$step.payload.durationSec -le 0) { Add-Failure "$context observe.hold payload.durationSec must be positive." }; foreach ($failure in @(Test-KnownVisualObservation ([string]$step.payload.observation) "$context observe.hold")) { Add-Failure $failure } }
         }
     }
@@ -379,6 +385,7 @@ foreach ($entry in $scenarios) {
 
 $registryText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcVisualTestRegistry.cpp") -Raw
 $visualTestHeaderText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Public/Test/AINpcVisualTest.h") -Raw
+$visualExtensionHeaderText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Public/Test/AINpcVisualTestExtension.h") -Raw
 $runnerText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Test/AINpcDataDrivenVisualScenarioTest.cpp") -Raw
 $observationContractText = Get-Content -Path (Join-Path $repoRoot "Plugins/AINpc/Source/AINpcCore/Private/Tests/AINpcVisualObservationContractTests.cpp") -Raw
 if ($registryText -notmatch 'builtin\.npcEvent' -or $registryText -notmatch 'builtin\.smartObjectAction' -or $registryText -notmatch 'eventId' -or $registryText -notmatch 'actorRef') {
@@ -390,8 +397,17 @@ if ($registryText -notmatch 'notExists') {
 if ($registryText -notmatch 'fixture\.type' -or $registryText -notmatch 'fixture\.adapterId' -or $registryText -notmatch 'fixture\.kind' -or $registryText -notmatch 'builtin\.characterFixture' -or $registryText -notmatch 'characterWithSmartObject') {
     Add-Failure "C++ visual scenario schema descriptor must reject fixture.type and validate fixture.adapterId/fixture.kind."
 }
+if ($registryText -notmatch 'project\.action\.execute' -or $registryText -notmatch 'existingActor' -or $registryText -notmatch 'IsProjectObservationNameShape' -or $registryText -notmatch 'FindObservationProviderDeclaration') {
+    Add-Failure "C++ visual scenario schema descriptor must own Phase 2.9B project action, existingActor fixture, and project observation declaration validation."
+}
+if ($registryText -match 'project\.door\.isOpen[\s\S]{0,120}KnownNames' -or $registryText -match 'KnownNames[\s\S]{0,500}project\.door\.isOpen') {
+    Add-Failure "C++ built-in observation whitelist must not hardcode project.door.isOpen."
+}
 if ($visualTestHeaderText -notmatch 'AdapterId' -or $visualTestHeaderText -notmatch 'Kind' -or $visualTestHeaderText -match 'struct\s+FAINpcVisualScenarioFixtureSpec[^}]*FString\s+Type\s*;') {
     Add-Failure "C++ visual fixture spec must expose adapterId/kind storage only, not legacy type."
+}
+if ($visualExtensionHeaderText -notmatch 'FAINpcVisualObservationDeclaration' -or $visualExtensionHeaderText -notmatch 'ResolveFixture' -or $visualExtensionHeaderText -notmatch 'ExecuteAction' -or $visualExtensionHeaderText -notmatch 'SampleObservation') {
+    Add-Failure "C++ public visual extension API must expose the Phase 2.9B typed declaration and narrow adapter behavior methods."
 }
 if ($visualTestHeaderText -notmatch 'struct\s+FAINpcVisualObservationRecord' -or $visualTestHeaderText -notmatch 'SourceKind' -or $visualTestHeaderText -notmatch 'AdapterOrProviderId' -or $visualTestHeaderText -notmatch 'StepIndex' -or $visualTestHeaderText -notmatch 'TimestampSeconds') {
     Add-Failure "C++ visual test contract must expose typed/sourced observation record metadata for Phase 2.8c."

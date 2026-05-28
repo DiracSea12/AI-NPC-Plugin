@@ -4,8 +4,11 @@
 #include "Containers/UnrealString.h"
 #include "CoreTypes.h"
 #include "Templates/SharedPointer.h"
+#include "Test/AINpcVisualTest.h"
 #include "UObject/NameTypes.h"
+#include "UObject/WeakObjectPtrTemplates.h"
 
+class AActor;
 class UWorld;
 
 struct FAINpcVisualAdapterRegistrationResult
@@ -65,22 +68,92 @@ public:
 	virtual ~IAINpcVisualAdapterInstance() = default;
 };
 
+struct FAINpcVisualFixtureResolveRequest
+{
+	UWorld* World = nullptr;
+	FString TestId;
+	FString RunId;
+	FName AdapterId;
+	FString FixtureKind;
+	FString ActorClass;
+	FString ActorTag;
+	FString TargetRef;
+};
+
+struct FAINpcVisualFixtureResolveResult
+{
+	bool bSuccess = false;
+	TWeakObjectPtr<AActor> Actor;
+	FString TargetRef;
+	FString Diagnostic;
+};
+
+struct FAINpcVisualActionExecuteRequest
+{
+	FString TestId;
+	FString RunId;
+	int32 StepIndex = INDEX_NONE;
+	FName AdapterId;
+	FString ActionName;
+	FString TargetRef;
+	TWeakObjectPtr<AActor> TargetActor;
+};
+
+struct FAINpcVisualActionExecuteResult
+{
+	bool bAccepted = false;
+	bool bSucceeded = false;
+	FString Diagnostic;
+	FString FailureReason;
+};
+
+struct FAINpcVisualObservationSampleRequest
+{
+	FString TestId;
+	FString RunId;
+	FName AdapterId;
+	FString ObservationName;
+	TWeakObjectPtr<AActor> SourceActor;
+};
+
+struct FAINpcVisualObservationSampleResult
+{
+	bool bSuccess = false;
+	FAINpcVisualObservationRecord Observation;
+	FString Diagnostic;
+	FString FailureReason;
+};
+
+struct FAINpcVisualObservationDeclaration
+{
+	FString ObservationName;
+	EAINpcVisualObservationValueType ValueType = EAINpcVisualObservationValueType::Boolean;
+	FString SourceKind;
+	FString SamplingMethod;
+	FString Capability;
+	bool bRequiresSourceObjectPath = false;
+	bool bRequiresSourceClass = false;
+};
+
 class IAINpcVisualFixtureResolverAdapter : public IAINpcVisualAdapterInstance
 {
 public:
 	~IAINpcVisualFixtureResolverAdapter() override = default;
+	virtual FAINpcVisualFixtureResolveResult ResolveFixture(const FAINpcVisualFixtureResolveRequest& Request) = 0;
 };
 
 class IAINpcVisualObservationProviderAdapter : public IAINpcVisualAdapterInstance
 {
 public:
 	~IAINpcVisualObservationProviderAdapter() override = default;
+	virtual FAINpcVisualObservationSampleResult SampleObservation(const FAINpcVisualObservationSampleRequest& Request) = 0;
 };
 
 class IAINpcVisualActionAdapter : public IAINpcVisualAdapterInstance
 {
 public:
 	~IAINpcVisualActionAdapter() override = default;
+	virtual FAINpcVisualActionExecuteResult ExecuteAction(const FAINpcVisualActionExecuteRequest& Request) = 0;
 };
 
 struct FAINpcVisualAdapterFactoryResult
@@ -115,7 +188,7 @@ struct FAINpcVisualAdapterDescriptor
 	FName AdapterId;
 	FName OwnerModuleName;
 	TArray<FString> Capabilities;
-	TArray<FString> ObservationDeclarations;
+	TArray<FAINpcVisualObservationDeclaration> ObservationDeclarations;
 	FAINpcVisualFixtureResolverFactory CreateFixtureResolver = nullptr;
 	FAINpcVisualObservationProviderFactory CreateObservationProvider = nullptr;
 	FAINpcVisualActionAdapterFactory CreateActionAdapter = nullptr;

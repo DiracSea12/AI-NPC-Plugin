@@ -7,6 +7,7 @@
 #include "Data/NpcPersonaDataAsset.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
+#include "EngineUtils.h"
 #include "Engine/World.h"
 #include "Events/NpcEventPayloadBlueprintLibrary.h"
 #include "Events/NpcEventSubsystem.h"
@@ -16,6 +17,7 @@
 #include "Test/AINpcSmartObjectActionTestSupport.h"
 #include "Test/AINpcTestCharacter.h"
 #include "Test/AINpcTestSmartObjectActor.h"
+#include "Test/AINpcVisualTestExtensionInternal.h"
 #include "TimerManager.h"
 
 namespace
@@ -23,6 +25,9 @@ namespace
 	const float InitialDialogueDelaySeconds = 3.0f;
 	const TCHAR* SmartObjectTargetIdVariable = TEXT("SmartObjectTargetId");
 	const TCHAR* FixtureNpcRef = TEXT("fixture.npc");
+	const TCHAR* FixtureActorRef = TEXT("fixture.actor");
+	const TCHAR* ProjectFixtureKind = TEXT("existingActor");
+	const TCHAR* ExistingActorCapability = TEXT("existingActor.classTag");
 	const float SmartObjectSearchRadius = 1200.0f;
 	const int32 SmartObjectClaimPriority = 2;
 
@@ -182,11 +187,14 @@ struct FAINpcVisualScenarioRuntimeView
 	AAINpcTestSmartObjectActor* SmartObject = nullptr;
 	TUniquePtr<FAINpcBuiltInCharacterDriver> CharacterDriver;
 	TUniquePtr<FAINpcInternalDialogueObservationProvider> DialogueObservationProvider;
+	TSharedPtr<AINpc::Visual::TestInternal::FAdapterRunView> AdapterRunView;
+	TWeakObjectPtr<AActor> ProjectFixtureActor;
 
 	UWorld* GetWorld() const { return CharacterDriver ? CharacterDriver->GetWorld() : World; }
 	double GetTimeSeconds(const double FallbackSeconds) const { const UWorld* RunWorld = GetWorld(); return RunWorld ? RunWorld->GetTimeSeconds() : FallbackSeconds; }
 	UAINpcComponent* GetNpcComponent() const { return CharacterDriver ? CharacterDriver->GetNpcComponent() : nullptr; }
 	AActor* GetNpcActor() const { return CharacterDriver ? CharacterDriver->GetActor() : nullptr; }
+	AActor* GetProjectFixtureActor() const { return ProjectFixtureActor.Get(); }
 	UObject* CreatePersonaOuter() const { return CharacterDriver ? CharacterDriver->CreatePersonaOuter() : GetWorld(); }
 	bool HasSmartObjectFixture() const { return SmartObject != nullptr; }
 	void SetSmartObjectInteractionState(const bool bEnabled) const { if (SmartObject) { SmartObject->SetInteractionState(bEnabled); } }
@@ -216,15 +224,21 @@ struct FAINpcDataDrivenVisualScenarioTest::FImplementation
 	TArray<FAINpcVisualTestStepDiagnostic> BuildStepDiagnostics() const;
 
 private:
+	bool RequiresBuiltInNpcRuntime() const;
 	bool StartDialogueObservation(FString& OutFailureReason);
+	bool StartProjectAdapters(FString& OutFailureReason);
+	bool ResolveProjectFixture(FString& OutFailureReason);
 	void StartNextStep();
 	void PollActiveStep();
 	bool RunStep(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason);
 	bool RunDialogueStart(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason);
 	bool RunWorldEvent(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason);
 	bool RunActionExecuteLatestIntent(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason);
+	bool RunProjectActionExecute(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason);
 	bool RunObserveHold(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason);
 	bool EvaluateAssertion(const FAINpcVisualScenarioAssertion& Assertion, const FAINpcVisualObservationWindow& Window, FAINpcVisualAssertionFailureDetail* OutFailure) const;
+	bool EvaluateFinalAssertion(FAINpcVisualAssertionFailureDetail* OutFailure);
+	bool SampleProjectObservationForFinalAssertion(const FAINpcVisualScenarioAssertion& Assertion, FAINpcVisualAssertionFailureDetail* OutFailure);
 	void RecordWindowReadinessForAssertion(const FAINpcVisualScenarioAssertion& Assertion, const FAINpcVisualObservationWindow& Window);
 	bool IsWindowSampledObservation(const FString& Name) const;
 	FAINpcVisualObservationSourceInfo MakeWindowSampledSource(const FString& Name) const;
@@ -235,6 +249,7 @@ private:
 	void UpdateDialogueStateEvidence();
 	bool ConfigurePersona(FString& OutFailureReason);
 	void Fail(const FString& Reason);
+	void AddStartupDiagnostic(const FString& Stage, const FString& Reason, const FString& AdapterCategory = FString(), const FString& AdapterId = FString(), const FString& ActorClass = FString(), const FString& ActorTag = FString(), const FString& TargetRef = FString(), const FString& FieldName = FString(), const FString& Capability = FString(), const FString& ObservationName = FString(), const FString& OwnerModuleName = FString());
 	void FailWithAssertion(const FString& Prefix, const FAINpcVisualAssertionFailureDetail& Failure);
 	void ShowStatus(const FString& Message, const FColor& Color, float DurationSeconds) const;
 	void RecordBoolObservation(const FString& Name, bool bValue, const FAINpcVisualObservationSourceInfo& SourceInfo, bool bRequiresAllowedFinalSource = false);
@@ -386,28 +401,161 @@ FAINpcDataDrivenVisualScenarioTest::FImplementation::~FImplementation()
 
 bool FAINpcDataDrivenVisualScenarioTest::FImplementation::Start(FString& OutFailureReason)
 {
-	if (!Runtime->GetNpcComponent())
-	{
-		OutFailureReason = FString::Printf(TEXT("Visual scenario '%s' cannot start because NPC component is null."), *Config.TestId);
-		return false;
-	}
 	if (!AINpcVisualInternalAdapters::ValidateBuiltInCatalog(OutFailureReason))
 	{
 		return false;
 	}
-	if (!ConfigurePersona(OutFailureReason)) { return false; }
-	if (!AINpcDialogueVisualTestSupport::ValidateProviderConfiguration(Runtime->GetNpcComponent(), OutFailureReason)) { return false; }
-	if (!StartDialogueObservation(OutFailureReason)) { return false; }
+	if (!StartProjectAdapters(OutFailureReason)) { return false; }
+	if (!ResolveProjectFixture(OutFailureReason)) { return false; }
+	const bool bRequiresBuiltInNpcRuntime = RequiresBuiltInNpcRuntime();
+	if (bRequiresBuiltInNpcRuntime)
+	{
+		if (!Runtime->GetNpcComponent())
+		{
+			OutFailureReason = FString::Printf(TEXT("Visual scenario '%s' cannot start because NPC component is null."), *Config.TestId);
+			return false;
+		}
+		if (!ConfigurePersona(OutFailureReason)) { return false; }
+		if (!AINpcDialogueVisualTestSupport::ValidateProviderConfiguration(Runtime->GetNpcComponent(), OutFailureReason)) { return false; }
+		if (!StartDialogueObservation(OutFailureReason)) { return false; }
+	}
 	bStarted = true;
-	ShowStatus(FString::Printf(TEXT("Visual scenario '%s' ready. Starting DSL steps in %.0fs."), *Config.TestId, InitialDialogueDelaySeconds), FColor::Green, 15.0f);
 	if (UWorld* World = Runtime->GetWorld())
 	{
+		const float StepStartDelaySeconds = bRequiresBuiltInNpcRuntime ? InitialDialogueDelaySeconds : 0.0f;
+		ShowStatus(FString::Printf(TEXT("Visual scenario '%s' ready. Starting DSL steps in %.0fs."), *Config.TestId, StepStartDelaySeconds), FColor::Green, 15.0f);
 		World->GetTimerManager().SetTimer(TimeoutTimerHandle, FTimerDelegate::CreateRaw(this, &FAINpcDataDrivenVisualScenarioTest::FImplementation::HandleTimeout), static_cast<float>(Config.TimeoutSec), false);
-		World->GetTimerManager().SetTimer(StepTimerHandle, FTimerDelegate::CreateRaw(this, &FAINpcDataDrivenVisualScenarioTest::FImplementation::StartNextStep), InitialDialogueDelaySeconds, false);
+		if (bRequiresBuiltInNpcRuntime)
+		{
+			World->GetTimerManager().SetTimer(StepTimerHandle, FTimerDelegate::CreateRaw(this, &FAINpcDataDrivenVisualScenarioTest::FImplementation::StartNextStep), StepStartDelaySeconds, false);
+		}
+		else
+		{
+			StartNextStep();
+		}
 		return true;
 	}
 	OutFailureReason = FString::Printf(TEXT("Visual scenario '%s' cannot start because World is null."), *Config.TestId);
 	return false;
+}
+
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::RequiresBuiltInNpcRuntime() const
+{
+	if (Config.Fixture.Kind != ProjectFixtureKind)
+	{
+		return true;
+	}
+	for (const FAINpcVisualScenarioStep& Step : Config.Steps)
+	{
+		if (Step.Type == TEXT("dialogue.start")
+			|| Step.Type == TEXT("world.event")
+			|| Step.Type == TEXT("action.executeLatestIntent")
+			|| Step.Type == TEXT("observe.hold"))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::StartProjectAdapters(FString& OutFailureReason)
+{
+	using namespace AINpc::Visual::TestInternal;
+
+	FAINpcVisualAdapterCreateContext AdapterContext;
+	AdapterContext.World = Runtime->World;
+	AdapterContext.TestId = Config.TestId;
+	AdapterContext.RunId = Runtime->RunId;
+	AdapterContext.StoryIds = Config.StoryIds;
+	AdapterContext.PhaseIds = Config.PhaseIds;
+	FAINpcVisualAdapterDiagnosticSink DiagnosticSink;
+	AdapterContext.DiagnosticSink = &DiagnosticSink;
+	const FAdapterRunViewCreateResult CreateResult = FAdapterRunView::Create(AdapterContext, Runtime->AdapterRunView);
+	if (!CreateResult.IsSuccess())
+	{
+		AddStartupDiagnostic(TEXT("RuntimeStartup"), CreateResult.Diagnostic);
+		OutFailureReason = CreateResult.Diagnostic;
+		return false;
+	}
+	return true;
+}
+
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::ResolveProjectFixture(FString& OutFailureReason)
+{
+	if (Config.Fixture.Kind != ProjectFixtureKind)
+	{
+		return true;
+	}
+	if (!Runtime->AdapterRunView.IsValid())
+	{
+		OutFailureReason = FString::Printf(TEXT("stage=RuntimeStartup testId=%s adapter=%s reason=adapter run view unavailable before fixture resolution"), *Config.TestId, *Config.Fixture.AdapterId);
+		AddStartupDiagnostic(TEXT("RuntimeStartup"), OutFailureReason, TEXT("FixtureResolver"), Config.Fixture.AdapterId, Config.Fixture.ActorClass, Config.Fixture.ActorTag, FixtureActorRef, TEXT("adapterId"), ExistingActorCapability);
+		return false;
+	}
+
+	UClass* ResolvedClass = FindObject<UClass>(nullptr, *Config.Fixture.ActorClass);
+	if (ResolvedClass == nullptr)
+	{
+		OutFailureReason = FString::Printf(TEXT("stage=RuntimeStartup testId=%s adapter=%s actorClass=%s actorTag=%s reason=native class is not loaded"),
+			*Config.TestId, *Config.Fixture.AdapterId, *Config.Fixture.ActorClass, *Config.Fixture.ActorTag);
+		AddStartupDiagnostic(TEXT("RuntimeStartup"), OutFailureReason, TEXT("FixtureResolver"), Config.Fixture.AdapterId, Config.Fixture.ActorClass, Config.Fixture.ActorTag, FixtureActorRef, TEXT("actorClass"), ExistingActorCapability);
+		return false;
+	}
+
+	TArray<AActor*> Matches;
+	for (TActorIterator<AActor> It(Runtime->World); It; ++It)
+	{
+		AActor* Actor = *It;
+		if (IsValid(Actor) && Actor->GetClass() == ResolvedClass && Actor->ActorHasTag(FName(*Config.Fixture.ActorTag)))
+		{
+			Matches.Add(Actor);
+		}
+	}
+	if (Matches.Num() != 1)
+	{
+		OutFailureReason = FString::Printf(TEXT("stage=RuntimeStartup testId=%s adapter=%s actorClass=%s actorTag=%s reason=expected exactly one matching actor but found %d"),
+			*Config.TestId, *Config.Fixture.AdapterId, *Config.Fixture.ActorClass, *Config.Fixture.ActorTag, Matches.Num());
+		AddStartupDiagnostic(TEXT("RuntimeStartup"), OutFailureReason, TEXT("FixtureResolver"), Config.Fixture.AdapterId, Config.Fixture.ActorClass, Config.Fixture.ActorTag, FixtureActorRef, TEXT("actorTag"), ExistingActorCapability);
+		return false;
+	}
+
+	using namespace AINpc::Visual::TestInternal;
+	const FAdapterViewLookupResult Lookup = Runtime->AdapterRunView->FindAdapter(EAINpcVisualAdapterCategory::FixtureResolver, FName(*Config.Fixture.AdapterId), TEXT("RuntimeStartup"));
+	FString LookupDiagnostic;
+	FAINpcVisualFixtureResolveResult ResolveResult;
+	const bool bUsedAdapter = Lookup.UseAdapter([this, &Matches, &ResolveResult](IAINpcVisualAdapterInstance& Instance)
+	{
+		FAINpcVisualFixtureResolveRequest Request;
+		Request.World = Runtime->World;
+		Request.TestId = Config.TestId;
+		Request.RunId = Runtime->RunId;
+		Request.AdapterId = FName(*Config.Fixture.AdapterId);
+		Request.FixtureKind = Config.Fixture.Kind;
+		Request.ActorClass = Config.Fixture.ActorClass;
+		Request.ActorTag = Config.Fixture.ActorTag;
+		Request.TargetRef = FixtureActorRef;
+		ResolveResult = static_cast<IAINpcVisualFixtureResolverAdapter&>(Instance).ResolveFixture(Request);
+		if (ResolveResult.TargetRef.IsEmpty())
+		{
+			ResolveResult.TargetRef = FixtureActorRef;
+		}
+	}, &LookupDiagnostic);
+	if (!bUsedAdapter)
+	{
+		OutFailureReason = LookupDiagnostic;
+		AddStartupDiagnostic(TEXT("RuntimeStartup"), OutFailureReason, TEXT("FixtureResolver"), Config.Fixture.AdapterId, Config.Fixture.ActorClass, Config.Fixture.ActorTag, FixtureActorRef, TEXT("adapterId"), ExistingActorCapability);
+		return false;
+	}
+	if (!ResolveResult.bSuccess || ResolveResult.TargetRef != FixtureActorRef || !ResolveResult.Actor.IsValid() || ResolveResult.Actor.Get() != Matches[0])
+	{
+		OutFailureReason = ResolveResult.Diagnostic.IsEmpty()
+			? FString::Printf(TEXT("stage=RuntimeStartup testId=%s adapter=%s targetRef=%s reason=fixture resolver did not return the exact class/tag actor"), *Config.TestId, *Config.Fixture.AdapterId, *ResolveResult.TargetRef)
+			: ResolveResult.Diagnostic;
+		AddStartupDiagnostic(TEXT("RuntimeStartup"), OutFailureReason, TEXT("FixtureResolver"), Config.Fixture.AdapterId, Config.Fixture.ActorClass, Config.Fixture.ActorTag, FixtureActorRef, TEXT("targetRef"), ExistingActorCapability);
+		return false;
+	}
+	Runtime->ProjectFixtureActor = ResolveResult.Actor;
+	return true;
 }
 
 bool FAINpcDataDrivenVisualScenarioTest::FImplementation::StartDialogueObservation(FString& OutFailureReason)
@@ -447,7 +595,7 @@ const FString& FAINpcDataDrivenVisualScenarioTest::FImplementation::GetFailureRe
 FString FAINpcDataDrivenVisualScenarioTest::FImplementation::BuildSummary() const
 {
 	FAINpcVisualAssertionFailureDetail Failure;
-	const bool bExpectSatisfied = EvaluateAssertion(Config.Expect.Assertion, GetScenarioHistoryWindow(), &Failure);
+	const bool bExpectSatisfied = Observations->EvaluateAssertion(Config.Expect.Assertion, GetScenarioHistoryWindow(), &Failure);
 	return FString::Printf(TEXT("TestId=%s Step=%d/%d Expect=%s"), *Config.TestId, ActiveStepIndex + 1, Config.Steps.Num(), bExpectSatisfied ? TEXT("true") : TEXT("false"));
 }
 
@@ -555,7 +703,7 @@ void FAINpcDataDrivenVisualScenarioTest::FImplementation::StartNextStep()
 	if (!Config.Steps.IsValidIndex(ActiveStepIndex))
 	{
 		FAINpcVisualAssertionFailureDetail Failure;
-		if (EvaluateAssertion(Config.Expect.Assertion, GetScenarioHistoryWindow(), &Failure))
+		if (EvaluateFinalAssertion(&Failure))
 		{
 			bComplete = true;
 		}
@@ -571,6 +719,14 @@ void FAINpcDataDrivenVisualScenarioTest::FImplementation::StartNextStep()
 	Diagnostic.StepIndex = ActiveStepIndex;
 	Diagnostic.StepType = Config.Steps[ActiveStepIndex].Type;
 	Diagnostic.Status = TEXT("running");
+	if (Diagnostic.StepType == TEXT("project.action.execute"))
+	{
+		Diagnostic.Stage = TEXT("StepExecution");
+		Diagnostic.AdapterCategory = TEXT("ActionAdapter");
+		Diagnostic.AdapterId = Config.Steps[ActiveStepIndex].Payload.AdapterId;
+		Diagnostic.TargetRef = Config.Steps[ActiveStepIndex].Payload.TargetRef;
+		Diagnostic.ActionName = Config.Steps[ActiveStepIndex].Payload.ActionName;
+	}
 	StepDiagnostics.Add(MoveTemp(Diagnostic));
 	FString StepFailureReason;
 	if (!RunStep(Config.Steps[ActiveStepIndex], StepFailureReason))
@@ -633,10 +789,59 @@ bool FAINpcDataDrivenVisualScenarioTest::FImplementation::RunStep(const FAINpcVi
 	if (Step.Type == TEXT("dialogue.start")) { return RunDialogueStart(Step, OutFailureReason); }
 	if (Step.Type == TEXT("world.event")) { return RunWorldEvent(Step, OutFailureReason); }
 	if (Step.Type == TEXT("action.executeLatestIntent")) { return RunActionExecuteLatestIntent(Step, OutFailureReason); }
+	if (Step.Type == TEXT("project.action.execute")) { return RunProjectActionExecute(Step, OutFailureReason); }
 	if (Step.Type == TEXT("observe.hold")) { return RunObserveHold(Step, OutFailureReason); }
 	if (Step.Type == TEXT("wait.until")) { return true; }
 	OutFailureReason = FString::Printf(TEXT("Scenario '%s' step[%d] has unsupported type '%s'."), *Config.TestId, ActiveStepIndex, *Step.Type);
 	return false;
+}
+
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::RunProjectActionExecute(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason)
+{
+	if (!Runtime->AdapterRunView.IsValid())
+	{
+		OutFailureReason = FString::Printf(TEXT("stage=StepExecution testId=%s stepIndex=%d adapter=%s actionName=%s targetRef=%s reason=adapter run view unavailable"), *Config.TestId, ActiveStepIndex, *Step.Payload.AdapterId, *Step.Payload.ActionName, *Step.Payload.TargetRef);
+		return false;
+	}
+	AActor* TargetActor = Runtime->GetProjectFixtureActor();
+	if (Step.Payload.TargetRef != FixtureActorRef || !IsValid(TargetActor))
+	{
+		OutFailureReason = FString::Printf(TEXT("stage=StepExecution testId=%s stepIndex=%d adapter=%s actionName=%s targetRef=%s reason=fixture.actor is not bound"), *Config.TestId, ActiveStepIndex, *Step.Payload.AdapterId, *Step.Payload.ActionName, *Step.Payload.TargetRef);
+		return false;
+	}
+
+	using namespace AINpc::Visual::TestInternal;
+	const FAdapterViewLookupResult Lookup = Runtime->AdapterRunView->FindAdapter(EAINpcVisualAdapterCategory::ActionAdapter, FName(*Step.Payload.AdapterId), TEXT("StepExecution"));
+	FString LookupDiagnostic;
+	FAINpcVisualActionExecuteResult ExecuteResult;
+	const bool bUsedAdapter = Lookup.UseAdapter([this, &Step, TargetActor, &ExecuteResult](IAINpcVisualAdapterInstance& Instance)
+	{
+		FAINpcVisualActionExecuteRequest Request;
+		Request.TestId = Config.TestId;
+		Request.RunId = Runtime->RunId;
+		Request.StepIndex = ActiveStepIndex;
+		Request.AdapterId = FName(*Step.Payload.AdapterId);
+		Request.ActionName = Step.Payload.ActionName;
+		Request.TargetRef = Step.Payload.TargetRef;
+		Request.TargetActor = TargetActor;
+		ExecuteResult = static_cast<IAINpcVisualActionAdapter&>(Instance).ExecuteAction(Request);
+	}, &LookupDiagnostic);
+	if (!bUsedAdapter)
+	{
+		OutFailureReason = LookupDiagnostic;
+		return false;
+	}
+	if (!ExecuteResult.bAccepted || !ExecuteResult.bSucceeded)
+	{
+		OutFailureReason = !ExecuteResult.FailureReason.IsEmpty() ? ExecuteResult.FailureReason : ExecuteResult.Diagnostic;
+		if (OutFailureReason.IsEmpty())
+		{
+			OutFailureReason = FString::Printf(TEXT("stage=StepExecution testId=%s stepIndex=%d adapter=%s actionName=%s targetRef=%s reason=project action adapter rejected action"), *Config.TestId, ActiveStepIndex, *Step.Payload.AdapterId, *Step.Payload.ActionName, *Step.Payload.TargetRef);
+		}
+		return false;
+	}
+	CompleteCurrentStep();
+	return true;
 }
 
 bool FAINpcDataDrivenVisualScenarioTest::FImplementation::RunDialogueStart(const FAINpcVisualScenarioStep& Step, FString& OutFailureReason)
@@ -739,6 +944,139 @@ FAINpcVisualObservationSourceInfo FAINpcDataDrivenVisualScenarioTest::FImplement
 bool FAINpcDataDrivenVisualScenarioTest::FImplementation::EvaluateAssertion(const FAINpcVisualScenarioAssertion& Assertion, const FAINpcVisualObservationWindow& Window, FAINpcVisualAssertionFailureDetail* OutFailure) const
 {
 	return Observations->EvaluateAssertion(Assertion, Window, OutFailure);
+}
+
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::EvaluateFinalAssertion(FAINpcVisualAssertionFailureDetail* OutFailure)
+{
+	if (!SampleProjectObservationForFinalAssertion(Config.Expect.Assertion, OutFailure))
+	{
+		return false;
+	}
+	return EvaluateAssertion(Config.Expect.Assertion, GetScenarioHistoryWindow(), OutFailure);
+}
+
+bool FAINpcDataDrivenVisualScenarioTest::FImplementation::SampleProjectObservationForFinalAssertion(const FAINpcVisualScenarioAssertion& Assertion, FAINpcVisualAssertionFailureDetail* OutFailure)
+{
+	if (Assertion.Operator == TEXT("all") || Assertion.Operator == TEXT("any") || Assertion.Operator == TEXT("anyOf"))
+	{
+		for (const FAINpcVisualScenarioAssertion& Child : Assertion.Children)
+		{
+			if (!SampleProjectObservationForFinalAssertion(Child, OutFailure))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+	if (!Assertion.Observation.StartsWith(TEXT("project.")))
+	{
+		return true;
+	}
+	if (!Runtime->AdapterRunView.IsValid() || !Runtime->ProjectFixtureActor.IsValid())
+	{
+		if (OutFailure)
+		{
+			OutFailure->Category = TEXT("final-project-source");
+			OutFailure->ObservationName = Assertion.Observation;
+			OutFailure->Message = FString::Printf(TEXT("stage=FinalAssertion testId=%s observation=%s targetRef=%s reason=fixture.actor is unavailable for project observation sampling"), *Config.TestId, *Assertion.Observation, FixtureActorRef);
+		}
+		return false;
+	}
+
+	using namespace AINpc::Visual::TestInternal;
+	FAINpcVisualObservationDeclaration Declaration;
+	const FVisualAdapterDescriptorValidationResult ProviderDescriptor = FindObservationProviderDeclaration(Assertion.Observation, Declaration, TEXT("FinalAssertion"), Config.TestId);
+	if (!ProviderDescriptor.IsSuccess())
+	{
+		if (OutFailure)
+		{
+			OutFailure->Category = TEXT("undeclared-project-observation");
+			OutFailure->ObservationName = Assertion.Observation;
+			OutFailure->Message = ProviderDescriptor.Diagnostic;
+		}
+		return false;
+	}
+	const FAdapterViewLookupResult Lookup = Runtime->AdapterRunView->FindAdapter(EAINpcVisualAdapterCategory::ObservationProvider, ProviderDescriptor.Descriptor.AdapterId, TEXT("FinalAssertion"));
+	FString LookupDiagnostic;
+	FAINpcVisualObservationSampleResult SampleResult;
+	const bool bUsedAdapter = Lookup.UseAdapter([this, &Assertion, &ProviderDescriptor, &SampleResult](IAINpcVisualAdapterInstance& Instance)
+	{
+		FAINpcVisualObservationSampleRequest Request;
+		Request.TestId = Config.TestId;
+		Request.RunId = Runtime->RunId;
+		Request.AdapterId = ProviderDescriptor.Descriptor.AdapterId;
+		Request.ObservationName = Assertion.Observation;
+		Request.SourceActor = Runtime->ProjectFixtureActor;
+		SampleResult = static_cast<IAINpcVisualObservationProviderAdapter&>(Instance).SampleObservation(Request);
+	}, &LookupDiagnostic);
+	if (!bUsedAdapter)
+	{
+		if (OutFailure)
+		{
+			OutFailure->Category = TEXT("project-observation-provider");
+			OutFailure->ObservationName = Assertion.Observation;
+			OutFailure->Message = LookupDiagnostic;
+		}
+		return false;
+	}
+	if (!SampleResult.bSuccess)
+	{
+		if (OutFailure)
+		{
+			OutFailure->Category = TEXT("project-observation-sample");
+			OutFailure->ObservationName = Assertion.Observation;
+			OutFailure->Message = !SampleResult.FailureReason.IsEmpty() ? SampleResult.FailureReason : SampleResult.Diagnostic;
+		}
+		return false;
+	}
+	const FString ObservationName = SampleResult.Observation.Name;
+	const EAINpcVisualObservationValueType ObservationValueType = SampleResult.Observation.ValueType;
+	const bool bBoolValue = SampleResult.Observation.BoolValue;
+	const int32 IntegerValue = SampleResult.Observation.IntegerValue;
+	const double NumberValue = SampleResult.Observation.NumberValue;
+	const FString StringValue = SampleResult.Observation.StringValue;
+	SampleResult.Observation.StepIndex = ActiveStepIndex;
+	SampleResult.Observation.TimestampSeconds = Runtime->GetTimeSeconds(0.0);
+	SampleResult.Observation.ElapsedSeconds = SampleResult.Observation.TimestampSeconds - ActiveStepStartSeconds;
+	if (SampleResult.Observation.Name != Assertion.Observation
+		|| SampleResult.Observation.ValueType != Declaration.ValueType
+		|| SampleResult.Observation.SourceKind != Declaration.SourceKind
+		|| SampleResult.Observation.SamplingMethod != Declaration.SamplingMethod
+		|| SampleResult.Observation.AdapterOrProviderId != ProviderDescriptor.Descriptor.AdapterId.ToString()
+		|| (Declaration.bRequiresSourceObjectPath && SampleResult.Observation.SourceObjectPath.IsEmpty())
+		|| (Declaration.bRequiresSourceClass && SampleResult.Observation.SourceClass.IsEmpty()))
+	{
+		if (OutFailure)
+		{
+			OutFailure->Category = TEXT("project-observation-metadata");
+			OutFailure->ObservationName = Assertion.Observation;
+			OutFailure->SourceKind = SampleResult.Observation.SourceKind;
+			OutFailure->SourceId = SampleResult.Observation.AdapterOrProviderId;
+			OutFailure->Message = FString::Printf(TEXT("stage=FinalAssertion testId=%s observation=%s adapter=%s reason=sampled project observation metadata does not match declaration"), *Config.TestId, *Assertion.Observation, *ProviderDescriptor.Descriptor.AdapterId.ToString());
+		}
+		return false;
+	}
+	if (!RecordObservation(MoveTemp(SampleResult.Observation), true))
+	{
+		return false;
+	}
+	if (ObservationValueType == EAINpcVisualObservationValueType::Boolean)
+	{
+		Observations->RecordBoolSummary(ObservationName, bBoolValue);
+	}
+	else if (ObservationValueType == EAINpcVisualObservationValueType::Integer)
+	{
+		Observations->RecordIntegerSummary(ObservationName, IntegerValue);
+	}
+	else if (ObservationValueType == EAINpcVisualObservationValueType::Number)
+	{
+		Observations->RecordNumberSummary(ObservationName, NumberValue);
+	}
+	else if (ObservationValueType == EAINpcVisualObservationValueType::String)
+	{
+		Observations->RecordStringSummary(ObservationName, StringValue);
+	}
+	return true;
 }
 
 FAINpcVisualObservationWindow FAINpcDataDrivenVisualScenarioTest::FImplementation::GetCurrentStepWindow() const
@@ -864,13 +1202,52 @@ void FAINpcDataDrivenVisualScenarioTest::FImplementation::Fail(const FString& Re
 	}
 }
 
+void FAINpcDataDrivenVisualScenarioTest::FImplementation::AddStartupDiagnostic(const FString& Stage, const FString& Reason, const FString& AdapterCategory, const FString& AdapterId, const FString& ActorClass, const FString& ActorTag, const FString& TargetRef, const FString& FieldName, const FString& Capability, const FString& ObservationName, const FString& OwnerModuleName)
+{
+	FAINpcVisualTestStepDiagnostic Diagnostic;
+	Diagnostic.TestId = Config.TestId;
+	Diagnostic.StepIndex = INDEX_NONE;
+	Diagnostic.Status = TEXT("FAIL");
+	Diagnostic.Stage = Stage;
+	Diagnostic.FailureReason = Reason;
+	Diagnostic.AdapterCategory = AdapterCategory;
+	Diagnostic.AdapterId = AdapterId;
+	Diagnostic.OwnerModuleName = OwnerModuleName;
+	Diagnostic.ActorClass = ActorClass;
+	Diagnostic.ActorTag = ActorTag;
+	Diagnostic.TargetRef = TargetRef;
+	Diagnostic.FieldName = FieldName;
+	Diagnostic.Capability = Capability;
+	Diagnostic.ObservationName = ObservationName;
+	StepDiagnostics.Add(MoveTemp(Diagnostic));
+}
+
 void FAINpcDataDrivenVisualScenarioTest::FImplementation::FailWithAssertion(const FString& Prefix, const FAINpcVisualAssertionFailureDetail& Failure)
 {
 	const FString Reason = FString::Printf(TEXT("%s FailureCategory=%s TestId=%s StepIndex=%d Observation=%s SourceKind=%s SourceId=%s Detail=%s"), *Prefix, *Failure.Category, *Config.TestId, ActiveStepIndex, *Failure.ObservationName, *Failure.SourceKind, *Failure.SourceId, *Failure.Message);
 	if (bComplete || bFailed) { return; }
 	bFailed = true;
 	FailureReason = Reason;
-	FinalizeActiveStepDiagnostic(TEXT("FAIL"), Reason, Failure.Category, Failure.ObservationName, Failure.SourceKind, Failure.SourceId);
+	if (StepDiagnostics.IsValidIndex(StepDiagnostics.Num() - 1)
+		&& StepDiagnostics.Last().StepIndex == ActiveStepIndex
+		&& StepDiagnostics.Last().Status == TEXT("running"))
+	{
+		FinalizeActiveStepDiagnostic(TEXT("FAIL"), Reason, Failure.Category, Failure.ObservationName, Failure.SourceKind, Failure.SourceId);
+	}
+	else
+	{
+		FAINpcVisualTestStepDiagnostic Diagnostic;
+		Diagnostic.TestId = Config.TestId;
+		Diagnostic.StepIndex = ActiveStepIndex;
+		Diagnostic.Status = TEXT("FAIL");
+		Diagnostic.Stage = TEXT("FinalAssertion");
+		Diagnostic.FailureReason = Reason;
+		Diagnostic.FailureCategory = Failure.Category;
+		Diagnostic.ObservationName = Failure.ObservationName;
+		Diagnostic.SourceKind = Failure.SourceKind;
+		Diagnostic.SourceId = Failure.SourceId;
+		StepDiagnostics.Add(MoveTemp(Diagnostic));
+	}
 	if (UWorld* World = Runtime->GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(StepTimerHandle);
