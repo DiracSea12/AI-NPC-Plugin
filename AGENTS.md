@@ -15,6 +15,7 @@
 - **实现后四门必须由独立零上下文子代理给结论。** QA Execution、complexity-gate、architecture-health-gate、code-quality-gate 的正式 PASS/FAIL/REVIEW 结论必须来自独立零上下文子代理；主代理不能自封通过，也不能用自己的判断替代 gate 结论。
 - **OpenSpec 审查必须同时过复杂度、架构和冷水审查。** 审 OpenSpec proposal/design/spec/tasks、开发计划、阶段可开工性或任务拆分时，必须先做 Complexity Contract/复杂度门，再做 architecture-health-gate，再做 cold-water-review；这些结论也必须由独立零上下文子代理输出。主代理可以整理证据，但不能自己给“可开发/可开工/可通过”的最终结论。
 - **零上下文不是空上下文。** 子代理必须拿到 bundle/manifest SHA、worktree、base commit、OpenSpec change、精确任务范围、相关 spec/design/tasks/case/diff/evidence artifact、禁止改文件/禁止扩张项和输出模板；prompt 禁止塞主代理结论、怀疑点、期望答案、上一轮 findings 或“刚修了什么”。
+- **开工审查看能不能开发，不追求逐句完美。** OpenSpec/开发计划审到“开发完成后基本不会出现方向性错误、阻塞性问题，需求能正常完成”的程度即可。会让开发代理猜主方向、猜架构边界、猜验收口径，或可能导致需求无法完成的问题必须拦；不影响开工和主方向的措辞、细枝末节、可在开发/后续 gate 中处理的注意项，只记录为风险或后续检查，不得用来无限打回。禁止把冷水 review 变成文案打磨、句子洁癖或复杂度膨胀机器。
 - **违反即停。** 发现主代理直接写代码、OpenSpec 审查未走独立零上下文复杂度/架构/冷水、或四门结论由主代理自判时，必须立刻停止，声明 `PROCESS_VIOLATION`，列出已污染的改动/结论，并回滚到合规流程；不得继续把错流程产物包装成进度。
 
 实现前：
