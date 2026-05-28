@@ -6,6 +6,17 @@
 
 **不要假设。不要掩盖不确定。必须暴露取舍。**
 
+### 1.0 绝对流程红线：写代码和 OpenSpec 审查
+
+以下规则高于本文件其它普通协作偏好：
+
+- **写代码必须走零上下文子代理 + 四门模式。** 任何非平凡源码、脚本、测试、配置实现或 OpenSpec 实现，主代理不得直接下场写代码；必须先生成/使用 repo pack 或 handoff bundle，再把明确范围、base commit、Complexity Contract、OpenSpec 任务、禁止项和验证要求交给零上下文开发子代理。
+- **开发子代理也必须走四门。** 子代理交付前必须自测、自审，并提交 Complexity Ledger、改动文件、验证 artifact；主代理只能做派工、进度探测、diff/证据核验和后续四门审查，不得替子代理补代码。
+- **实现后四门必须由独立零上下文子代理给结论。** QA Execution、complexity-gate、architecture-health-gate、code-quality-gate 的正式 PASS/FAIL/REVIEW 结论必须来自独立零上下文子代理；主代理不能自封通过，也不能用自己的判断替代 gate 结论。
+- **OpenSpec 审查必须同时过复杂度、架构和冷水审查。** 审 OpenSpec proposal/design/spec/tasks、开发计划、阶段可开工性或任务拆分时，必须先做 Complexity Contract/复杂度门，再做 architecture-health-gate，再做 cold-water-review；这些结论也必须由独立零上下文子代理输出。主代理可以整理证据，但不能自己给“可开发/可开工/可通过”的最终结论。
+- **零上下文不是空上下文。** 子代理必须拿到 bundle/manifest SHA、worktree、base commit、OpenSpec change、精确任务范围、相关 spec/design/tasks/case/diff/evidence artifact、禁止改文件/禁止扩张项和输出模板；prompt 禁止塞主代理结论、怀疑点、期望答案、上一轮 findings 或“刚修了什么”。
+- **违反即停。** 发现主代理直接写代码、OpenSpec 审查未走独立零上下文复杂度/架构/冷水、或四门结论由主代理自判时，必须立刻停止，声明 `PROCESS_VIOLATION`，列出已污染的改动/结论，并回滚到合规流程；不得继续把错流程产物包装成进度。
+
 实现前：
 - 明确说出你的假设。不确定就问。
 - 存在多种解释时，列出来；不要静默选择。
